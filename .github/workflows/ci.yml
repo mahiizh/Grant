@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: ["main", "feature_*"]
+  pull_request:
+    branches: ["main"]
+
+jobs:
+  lint-and-typecheck:
+    name: Lint & Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install dependencies
+        run: uv sync --directory backend --group dev
+
+      - name: Ruff Check
+        run: uv run --directory backend ruff check app tests
+
+      - name: Ruff Format Check
+        run: uv run --directory backend ruff format --check app tests
+
+      - name: Mypy Typecheck
+        run: uv run --directory backend mypy app tests
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Run Unit Tests
+        run: uv run --directory backend pytest tests/unit -v
