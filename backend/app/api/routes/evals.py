@@ -1,0 +1,116 @@
+import json
+import logging
+import uuid
+from datetime import UTC, datetime
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException
+
+from app.api.schemas.evals import (
+    AddGoldenPairRequest,
+    GoldenDatasetResponse,
+    GoldenEvalRunRequest,
+    GoldenEvalRunResponse,
+    GoldenPair,
+)
+from app.evaluation.datasets import GoldenDataset
+from app.evaluation.runner import EvaluationRunner
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/evals", tags=["evals"])
+
+GOLDEN_PATH = Path(__file__).resolve().parent.parent.parent.parent.parent / "evals" / "golden" / "questions.jsonl"
+
+
+def _read_golden_questions() -> list[GoldenPair]:
+    if not GOLDEN_PATH.exists():
+        return []
+    pairs = []
+    with open(GOLDEN_PATH, encoding="utf-8") as f:
+        for line in f:
+            if not line.strip():
+                continue
+            item = json.loads(line)
+            pairs.append(
+                GoldenPair(
+                    id=item.get("id", f"pair_{uuid.uuid4().hex[:6]}"),
+                    question=item.get("query", ""),
+                    category=item.get("category", "fact"),
+                    expected_route=item.get("optimal_strategy", "vector"),
+                    expected_answer=item.get("expected_answer") or "",
+                    ground_truth_entities=item.get("expected_entities") or [],
+                    ground_truth_chunk_ids=item.get("expected_chunk_ids") or [],
+                    complexity="medium",
+                )
+            )
+    return pairs
+
+
+@router.get("/golden/dataset", response_model=GoldenDatasetResponse)
+async def get_golden_dataset() -> GoldenDatasetResponse:
+    """Fetch all test cases in the golden question benchmark."""
+    questions = _read_golden_questions()
+    return GoldenDatasetResponse(questions=questions, total=len(questions))
+
+
+@router.post("/golden/dataset", response_model=GoldenPair)
+async def add_golden_pair(
+    request: AddGoldenPairRequest,
+) -> GoldenPair:
+    """Add a new verified question-answer ground truth pair to the dataset."""
+    pair_id = f"eval_{request.category}_{uuid.uuid4().hex[:6]}"
+    pair_dict = {
+        "id": pair_id,
+        "category": request.category,
+        "query": request.question,
+        "expected_answer": request.expected_answer,
+        "expected_doc_ids": [],
+        "expected_chunk_ids": request.ground_truth_chunk_ids,
+        "expected_entities": request.ground_truth_entities,
+        "expected_path": None,
+        "optimal_strategy": request.expected_route,
+    }
+    GOLDEN_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(GOLDEN_PATH, "a", encoding="utf-8") as f:
+        f.write(json.dumps(pair_dict) + "\n")
+
+    return GoldenPair(
+        id=pair_id,
+        question=request.question,
+        category=request.category,
+        expected_route=request.expected_route,
+        expected_answer=request.expected_answer,
+        ground_truth_entities=request.ground_truth_entities,
+        ground_truth_chunk_ids=request.ground_truth_chunk_ids,
+        complexity=request.complexity,
+    )
+
+
+@router.post("/golden", response_model=GoldenEvalRunResponse)
+async def run_golden_evaluation(
+    request: GoldenEvalRunRequest,
+) -> GoldenEvalRunResponse:
+    """Trigger an automated evaluation run against the golden dataset."""
+    started_at = datetime.now(UTC).isoformat()
+    run_id = f"run_{uuid.uuid4().hex[:8]}"
+
+    if not GOLDEN_PATH.exists():
+        raise HTTPException(status_code=404, detail="Golden questions file not found.")
+
+    dataset = GoldenDataset.load_from_jsonl(GOLDEN_PATH)
+    if request.sample_size:
+        dataset = GoldenDataset(dataset.questions[: request.sample_size])
+
+    runner = EvaluationRunner()
+    report = await runner.run_benchmark(dataset)
+
+    completed_at = datetime.now(UTC).isoformat()
+    return GoldenEvalRunResponse(
+        run_id=run_id,
+        status="completed",
+        total_questions=report.total_questions,
+        accuracy=round(report.overall_router_accuracy, 4),
+        started_at=started_at,
+        completed_at=completed_at,
+    )

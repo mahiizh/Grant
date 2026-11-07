@@ -23,15 +23,25 @@ infra/volumes/
 
 # Frontend
 node_modules/
+frontend/dist/
+dist/
+build/
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+
+# Model / embedding caches
+.cache/
+fastembed_cache/
+hf_cache/
+*.onnx
+*.safetensors
 
 # OS / editor
 .DS_Store
 Thumbs.db
-
-#tests
-backend/tests
-
-#later 
-/docs
-/readme.md
 

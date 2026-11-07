@@ -1,16 +1,25 @@
-# RFC 001: Hybrid Storage & Ingestion Architecture
+---
+title: RFC-001 Storage Tiering & Hybrid Indexing Architecture
+doc_id: doc_rfc_001
+acl_scope: data-platform
+valid_from: 2026-01-15T00:00:00Z
+source_tier: 1
+---
 
-**Document ID**: `doc_rfc_storage_001`  
-**Author**: Data Platform Team (Lead: Alice Chen)  
-**Status**: Accepted  
-**Last Updated**: 2026-03-15  
+# RFC-001 Storage Tiering & Hybrid Indexing Architecture
+
+**Author**: Alice Chen (Data Platform Team)  
+**Status**: Approved  
+**Target Systems**: PostgreSQL, Qdrant, Neo4j, Redis  
 
 ## 1. Overview
-The intelligence platform utilizes a hybrid polyglot persistence architecture. To balance transactional integrity with high-dimensional search and relational reasoning, four dedicated storage engines are deployed:
-- **PostgreSQL 16**: Acts as the single source of truth for all ingested documents, chunk records, version metadata, and Access Control Lists (ACLs). Writes are staged via an transactional outbox pattern.
-- **Qdrant**: Acts as the high-performance vector search engine. It indexes dense semantic embeddings (using 768-dimensional vectors) alongside sparse BM25 vectors for keyword retrieval.
-- **Neo4j 5**: Houses the bi-temporal knowledge graph, maintaining entities, relationships, and validity timestamps (`valid_from`, `valid_to`).
-- **Redis 7**: Provides in-memory semantic caching using RedisVL to store previous query embeddings and pre-computed answers.
+This RFC specifies the storage tiering and hybrid retrieval topology for the GraphRAG Intelligence Lab. PostgreSQL acts as the single source of truth for canonical documents and transactional outbox events.
 
-## 2. Ingestion Outbox Mechanism
-Direct dual-writing from application workers to both Qdrant and Neo4j is strictly prohibited to prevent split-brain state. All document mutations write an outbox event into PostgreSQL within the same database transaction. The background outbox worker polls events and idempotently syncs downstream stores. A nightly reconciler runs at 02:00 UTC to detect and repair discrepancies between PostgreSQL and the search indices.
+## 2. Storage Tier Responsibilities
+- **PostgreSQL**: Primary transactional store. Stores raw documents, chunk records, and outbox mutation events.
+- **Qdrant**: Vector search engine. Stores 384-dimensional dense vectors (BAAI/bge-small-en-v1.5) and BM25 sparse vectors.
+- **Neo4j**: Graph store. Indexes entities, relationships, temporal validity intervals, and ACL scopes.
+- **Redis**: Low-latency cache. Caches exact prompt-answer pairs and semantic embeddings with entity validation guardrails.
+
+## 3. Consistency Model
+Dual-write synchronization is strictly prohibited. All asynchronous mutations must flow through PostgreSQL's transactional outbox table (`outbox_events`) to prevent partial failures and state drift.

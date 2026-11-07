@@ -1,7 +1,7 @@
 from functools import lru_cache
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import computed_field
+from pydantic import Field, computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,7 +13,8 @@ class Settings(BaseSettings):
     )
 
     # App
-    ENVIRONMENT: Literal["development", "staging", "production"] = "development"
+    ENVIRONMENT: Literal["development", "staging", "production", "test"] = "development"
+    APP_ENV: str = "development"
     DEBUG: bool = True
     PROJECT_NAME: str = "GraphRAG Intelligence Lab"
     VERSION: str = "0.1.0"
@@ -39,6 +40,7 @@ class Settings(BaseSettings):
     QDRANT_PORT: int = 6333
     QDRANT_GRPC_PORT: int = 6334
     QDRANT_API_KEY: str | None = None
+    QDRANT_COLLECTION: str = "grant_chunks"
 
     # Neo4j
     NEO4J_URI: str = "bolt://localhost:7687"
@@ -57,9 +59,14 @@ class Settings(BaseSettings):
             return f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}/0"
         return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/0"
 
-    # Model & Gateway
+    # Model Layer (LiteLLM + FastEmbed + CrossEncoder)
     LITELLM_API_BASE: str | None = None
     GEMINI_API_KEY: str | None = None
+    LLM_MODEL: str = "gemini/gemini-3.5-flash-lite"
+    EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
+    EMBEDDING_DIM: int = 384
+    SPARSE_MODEL: str = "Qdrant/bm25"
+    RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     ACQUISITION_ENABLED: bool = False
     MAX_ACQUISITION_CALLS: int = 3
     MIN_TRUST_TO_CITE: float = 0.7
@@ -69,6 +76,61 @@ class Settings(BaseSettings):
     LANGFUSE_PUBLIC_KEY: str | None = None
     LANGFUSE_SECRET_KEY: str | None = None
     LANGFUSE_HOST: str = "https://cloud.langfuse.com"
+
+    # Dev Users mapping for X-Dev-User header authentication
+    DEV_USERS: dict[str, dict[str, Any]] = Field(
+        default_factory=lambda: {
+            "alice": {
+                "user_id": "usr_alice_01",
+                "name": "Alice Chen",
+                "allowed_scopes": ["data-platform", "public"],
+                "roles": ["engineer", "data-lead"],
+                "groups": ["data-platform"],
+            },
+            "bob": {
+                "user_id": "usr_bob_02",
+                "name": "Bob Kumar",
+                "allowed_scopes": ["sre", "public"],
+                "roles": ["incident-commander", "sre-lead"],
+                "groups": ["sre"],
+            },
+            "elena": {
+                "user_id": "usr_elena_03",
+                "name": "Elena Rostova",
+                "allowed_scopes": ["payments", "public"],
+                "roles": ["payments-lead"],
+                "groups": ["payments"],
+            },
+            "dave": {
+                "user_id": "usr_dave_04",
+                "name": "Dave Miller",
+                "allowed_scopes": ["core-banking", "public"],
+                "roles": ["banking-lead"],
+                "groups": ["core-banking"],
+            },
+            "auditor": {
+                "user_id": "usr_auditor_05",
+                "name": "Executive Auditor",
+                "allowed_scopes": ["executive-audit", "public"],
+                "roles": ["auditor", "executive"],
+                "groups": ["audit-council"],
+            },
+            "admin": {
+                "user_id": "usr_admin_00",
+                "name": "Platform Admin",
+                "allowed_scopes": [
+                    "data-platform",
+                    "payments",
+                    "core-banking",
+                    "sre",
+                    "executive-audit",
+                    "public",
+                ],
+                "roles": ["admin"],
+                "groups": ["platform-admins"],
+            },
+        }
+    )
 
 
 @lru_cache

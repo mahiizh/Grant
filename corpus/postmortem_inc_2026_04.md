@@ -1,7 +1,13 @@
+---
+title: Incident Postmortem: INC-2026-04 Payment Degradation
+doc_id: doc_postmortem_inc_04
+acl_scope: sre
+valid_from: 2026-04-12T15:35:00Z
+source_tier: 1
+---
+
 # Incident Postmortem: INC-2026-04 Payment Degradation
 
-**Document ID**: `doc_postmortem_inc_04`  
-**Date of Incident**: 2026-04-12  
 **Incident Commander**: Bob Kumar (SRE Team)  
 **Severity**: Sev-1  
 **Impacted Service**: `PaymentGateway`  
@@ -16,4 +22,3 @@ During deployment v2.4.1 of `CoreBanking`, the database migration updated the ex
 1. Added dead-letter queue (DLQ) monitoring for outbox consumer failures (Assigned to: Data Platform Team / Alice Chen).
 2. Implemented mandatory cache invalidation verification checks prior to traffic shifting (Assigned to: Core Banking Team / Dave Miller).
 3. Updated automated failover thresholds in the payment proxy (Assigned to: SRE Team / Bob Kumar).
- 

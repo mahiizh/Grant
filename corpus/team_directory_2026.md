@@ -1,27 +1,30 @@
-# Engineering Team & Ownership Directory 2026
+---
+title: Engineering Team Directory and Ownership Matrix 2026
+doc_id: doc_team_directory_2026
+acl_scope: data-platform
+valid_from: 2026-01-01T00:00:00Z
+source_tier: 1
+---
 
-**Document ID**: `doc_team_directory_2026`  
-**Effective Date**: 2026-01-01  
-**Maintained by**: Engineering Operations  
+# Engineering Team Directory and Ownership Matrix 2026
 
-## 1. Teams and Leadership
+**Custodian**: Alice Chen  
+**Last Review**: 2026-01-01  
 
-### Data Platform Team
-- **Team Lead**: Alice Chen (`alice.chen@example.com`)
-- **Slack Channel**: `#data-platform`
-- **Owned Systems**: PostgreSQL Cluster, Qdrant Vector DB, Neo4j Cluster, Outbox Workers.
+## 1. Data Platform Team
+- **Team Lead**: Alice Chen (`alice@company.internal`)
+- **Key Responsibilities**: PostgreSQL schema, transactional outbox engine, Qdrant vector store management, bitemporal index reconciliation.
+- **On-call Rotation**: Primary weekly rotation starting Mondays 09:00 UTC.
 
-### SRE & Reliability Team
-- **Team Lead**: Bob Kumar (`bob.kumar@example.com`)
-- **Slack Channel**: `#sre-oncall`
-- **Owned Systems**: Observability pipelines, OpenTelemetry collectors, incident management, chaos drills.
+## 2. Site Reliability Engineering (SRE)
+- **Team Lead**: Bob Kumar (`bob@company.internal`)
+- **Key Responsibilities**: Kubernetes infrastructure, Redis Sentinel clustering, Neo4j high-availability clusters, incident command.
+- **Incident Channel**: `#incidents-sev1`
 
-### Core Banking Team
-- **Team Lead**: Dave Miller (`dave.miller@example.com`)
-- **Slack Channel**: `#core-banking`
-- **Owned Systems**: `CoreBanking` service, currency exchange rate engines, ledger services.
+## 3. Payments Service Team
+- **Team Lead**: Elena Rostova (`elena@company.internal`)
+- **Key Responsibilities**: `PaymentGateway`, transaction settlement, PCI compliance, payment partner routing.
 
-### Payments Team
-- **Team Lead**: Elena Rostova (`elena.rostova@example.com`)
-- **Slack Channel**: `#payments-dev`
-- **Owned Systems**: `PaymentGateway`, fraud scoring proxy, credit card checkout pipelines.
+## 4. Core Banking Team
+- **Team Lead**: Dave Miller (`dave@company.internal`)
+- **Key Responsibilities**: Ledger services, currency exchange rate microservice, customer balance verification.

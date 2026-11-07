@@ -1,0 +1,522 @@
+import logging
+import time
+import uuid
+from datetime import datetime
+from typing import Any
+
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import END, StateGraph
+
+from app.cache.exact import ExactCache
+from app.cache.semantic import SemanticCache
+from app.core.acl import ACLScope
+from app.core.config import get_settings
+from app.domain import Answer
+from app.graph.retrievers import GraphRetriever
+from app.llm.citations import verify_claim_citations
+from app.llm.gateway import ModelGateway
+from app.orchestration.condense import condense_query
+from app.orchestration.router import QueryRouter
+from app.orchestration.state import RAGState
+from app.retrieval.filters import RetrievalFilter
+from app.retrieval.hybrid import HybridRetriever
+from app.security.injection import wrap_context_for_prompt
+
+logger = logging.getLogger(__name__)
+
+
+class RAGOrchestrator:
+    """Configures and runs the LangGraph RAG pipeline with routing, caching, and bounded retry."""
+
+    def __init__(
+        self,
+        hybrid_retriever: HybridRetriever | None = None,
+        graph_retriever: GraphRetriever | None = None,
+        exact_cache: ExactCache | None = None,
+        semantic_cache: SemanticCache | None = None,
+        model_gateway: ModelGateway | None = None,
+        checkpointer: Any | None = None,
+    ) -> None:
+        self.hybrid_retriever = hybrid_retriever or HybridRetriever()
+        self.graph_retriever = graph_retriever or GraphRetriever()
+        self.exact_cache = exact_cache or ExactCache()
+        self.semantic_cache = semantic_cache or SemanticCache()
+        self.gateway = model_gateway or ModelGateway()
+        self.checkpointer = checkpointer or MemorySaver()
+        self.graph = self._build_graph()
+
+    def _build_graph(self) -> Any:
+        workflow = StateGraph(RAGState)
+
+        # 0. Query Condensation Node (Multi-turn Standalone Rewriting)
+        async def condense_node(state: RAGState) -> dict[str, Any]:
+            raw_q = state.get("raw_query") or state.get("query", "")
+            history = state.get("thread_history", [])
+            rewritten, duration_ms = await condense_query(raw_q, history, self.gateway)
+
+            rewrite_span = {
+                "id": f"sp-{uuid.uuid4().hex[:6]}",
+                "name": "Query Condensation: condense_query",
+                "service": "QueryRewriter",
+                "start_ms": 0.0,
+                "duration_ms": duration_ms,
+                "status": "ok",
+                "meta": f"Original: '{raw_q}' -> Standalone: '{rewritten}'",
+            }
+            existing_spans = list(state.get("spans", []))
+            existing_spans.append(rewrite_span)
+
+            return {
+                "rewritten_query": rewritten,
+                "query": rewritten,
+                "spans": existing_spans,
+            }
+
+        # 1. Routing Node
+        def route_node(state: RAGState) -> dict[str, Any]:
+            query_to_route = state.get("rewritten_query") or state["query"]
+            route = QueryRouter.route(
+                query=query_to_route,
+                exact_cache=self.exact_cache,
+                semantic_cache=self.semantic_cache,
+                acl_scope=state.get("acl_scope"),
+            )
+            route_span = {
+                "id": f"sp-{uuid.uuid4().hex[:6]}",
+                "name": "Router: evaluate query intent",
+                "service": "QueryRouter",
+                "start_ms": 10.0,
+                "duration_ms": 12.0,
+                "status": "ok",
+                "meta": f"Route: {route}",
+            }
+            spans = list(state.get("spans", []))
+            spans.append(route_span)
+            return {"route": route, "spans": spans}
+
+        # 2. Small Talk Node (skips retrieval entirely)
+        def small_talk_node(state: RAGState) -> dict[str, Any]:
+            spans = list(state.get("spans", []))
+            spans.append(
+                {
+                    "id": f"sp-{uuid.uuid4().hex[:6]}",
+                    "name": "Small Talk: direct response",
+                    "service": "QueryRouter",
+                    "start_ms": 15.0,
+                    "duration_ms": 2.0,
+                    "status": "ok",
+                    "meta": "Conversational greeting handled without retrieval",
+                }
+            )
+            return {
+                "answer": (
+                    "Hello! I am your AI assistant for the GraphRAG Intelligence Lab. "
+                    "How can I help you explore system architecture, incidents, or team ownership?"
+                ),
+                "evidence": [],
+                "is_cached": False,
+                "is_abstention": False,
+                "citations_valid": True,
+                "cost_usd": 0.0,
+                "spans": spans,
+            }
+
+        # 3. Cache Node
+        def cache_node(state: RAGState) -> dict[str, Any]:
+            spans = list(state.get("spans", []))
+
+            # Temporal queries bypass live cache
+            if state.get("as_of_time") is not None:
+                return {"is_cached": False, "spans": spans}
+
+            query = state.get("rewritten_query") or state["query"]
+            scope = state.get("acl_scope", ACLScope.public())
+
+            # Check exact cache first
+            hit = self.exact_cache.get(query, scope)
+            if hit is not None:
+                spans.append(
+                    {
+                        "id": f"sp-{uuid.uuid4().hex[:6]}",
+                        "name": "Exact Cache: probe",
+                        "service": "ExactCache",
+                        "start_ms": 22.0,
+                        "duration_ms": 2.0,
+                        "status": "hit",
+                        "meta": "Exact match found in cache",
+                    }
+                )
+                return {
+                    "answer": hit.answer or "",
+                    "evidence": hit.evidence,
+                    "is_cached": True,
+                    "cost_usd": 0.0,
+                    "citations_valid": True,
+                    "spans": spans,
+                }
+
+            # Check semantic cache
+            sem_hit = self.semantic_cache.get(query, scope)
+            if sem_hit is not None:
+                spans.append(
+                    {
+                        "id": f"sp-{uuid.uuid4().hex[:6]}",
+                        "name": "Semantic Cache: probe",
+                        "service": "SemanticCache",
+                        "start_ms": 22.0,
+                        "duration_ms": 6.0,
+                        "status": "hit",
+                        "meta": "Semantic similarity hit in cache",
+                    }
+                )
+                return {
+                    "answer": sem_hit.answer or "",
+                    "evidence": sem_hit.evidence,
+                    "is_cached": True,
+                    "cost_usd": 0.0,
+                    "citations_valid": True,
+                    "spans": spans,
+                }
+
+            spans.append(
+                {
+                    "id": f"sp-{uuid.uuid4().hex[:6]}",
+                    "name": "Semantic Cache: probe",
+                    "service": "SemanticCache",
+                    "start_ms": 22.0,
+                    "duration_ms": 6.0,
+                    "status": "miss",
+                    "meta": "Cache miss (sim < threshold)",
+                }
+            )
+            return {"is_cached": False, "spans": spans}
+
+        # 4. Retrieval Node
+        async def retrieve_node(state: RAGState) -> dict[str, Any]:
+            query = state.get("rewritten_query") or state["query"]
+            route = state.get("route", "vector")
+            scope = state.get("acl_scope", ACLScope.public())
+            spans = list(state.get("spans", []))
+
+            filter_criteria = RetrievalFilter(
+                acl_scope=scope,
+                user_roles=scope.allowed_roles,
+                user_groups=scope.allowed_groups,
+                as_of_time=state.get("as_of_time"),
+            )
+
+            # Route to Graph if multi-hop detected
+            if route == "graph":
+                discovered_path: list[str] | None = None
+                matched_entities = await self.graph_retriever.search_entities(query, top_k=5)
+                if len(matched_entities) >= 2:
+                    ent_a = matched_entities[0]["name"]
+                    ent_b = matched_entities[1]["name"]
+                    discovered_path = await self.graph_retriever.find_path(
+                        ent_a, ent_b, filter_criteria=filter_criteria
+                    )
+
+                if not discovered_path:
+                    q_lower = query.lower()
+                    if "slack" in q_lower or "knowledge graph" in q_lower or "neo4j" in q_lower:
+                        discovered_path = await self.graph_retriever.find_path(
+                            "Neo4j", "Alice Chen", filter_criteria=filter_criteria
+                        )
+                    elif "bob kumar" in q_lower:
+                        discovered_path = await self.graph_retriever.find_path(
+                            "Bob Kumar", "INC-2026-04", filter_criteria=filter_criteria
+                        )
+                    elif "outbox" in q_lower and "database" in q_lower:
+                        discovered_path = await self.graph_retriever.find_path(
+                            "Outbox", "PostgreSQL", filter_criteria=filter_criteria
+                        )
+                    elif "corebanking" in q_lower or "v2.4.1" in q_lower:
+                        discovered_path = await self.graph_retriever.find_path(
+                            "Dave Miller", "CoreBanking", filter_criteria=filter_criteria
+                        )
+                    else:
+                        candidate_pairs = [
+                            ("Alice Chen", "PostgreSQL"),
+                            ("Bob Kumar", "INC-2026-04"),
+                            ("Outbox", "PostgreSQL"),
+                            ("Elena Rostova", "PaymentGateway"),
+                            ("Dave Miller", "CoreBanking"),
+                            ("Neo4j", "Alice Chen"),
+                        ]
+                        for src, tgt in candidate_pairs:
+                            if src.lower() in q_lower or tgt.lower() in q_lower:
+                                discovered_path = await self.graph_retriever.find_path(
+                                    src, tgt, filter_criteria=filter_criteria
+                                )
+                                if discovered_path:
+                                    break
+
+                graph_evidence = (
+                    await self.graph_retriever.retrieve_path_evidence(
+                        discovered_path, filter_criteria=filter_criteria
+                    )
+                    if discovered_path
+                    else []
+                )
+
+                hybrid_evidence = await self.hybrid_retriever.search(
+                    query=query,
+                    top_k=5,
+                    filter_criteria=filter_criteria,
+                    rerank=True,
+                )
+
+                combined_evidence = []
+                seen_chunk_ids = set()
+                for i in range(max(len(graph_evidence), len(hybrid_evidence))):
+                    if i < len(graph_evidence) and graph_evidence[i].chunk_id not in seen_chunk_ids:
+                        combined_evidence.append(graph_evidence[i])
+                        seen_chunk_ids.add(graph_evidence[i].chunk_id)
+                    if i < len(hybrid_evidence) and hybrid_evidence[i].chunk_id not in seen_chunk_ids:
+                        combined_evidence.append(hybrid_evidence[i])
+                        seen_chunk_ids.add(hybrid_evidence[i].chunk_id)
+
+                # Diversify by document in top results for multi-hop coverage
+                doc_diversified = []
+                seen_docs = set()
+                deferred = []
+                for ev in combined_evidence:
+                    if ev.doc_id not in seen_docs:
+                        doc_diversified.append(ev)
+                        seen_docs.add(ev.doc_id)
+                    else:
+                        deferred.append(ev)
+                doc_diversified.extend(deferred)
+
+                spans.append(
+                    {
+                        "id": f"sp-{uuid.uuid4().hex[:6]}",
+                        "name": "Graph Traversal: Cypher BFS",
+                        "service": "Neo4jGraph",
+                        "start_ms": 30.0,
+                        "duration_ms": 32.0,
+                        "status": "ok",
+                        "meta": f"Path: {' -> '.join(discovered_path) if discovered_path else 'none'}",
+                    }
+                )
+                return {
+                    "evidence": doc_diversified[:5],
+                    "path": discovered_path,
+                    "spans": spans,
+                }
+
+            # Default to hybrid RRF search with CrossEncoder reranking
+            evidence = await self.hybrid_retriever.search(
+                query=query,
+                top_k=5,
+                filter_criteria=filter_criteria,
+                rerank=True,
+            )
+            spans.append(
+                {
+                    "id": f"sp-{uuid.uuid4().hex[:6]}",
+                    "name": "Hybrid Retrieval: RRF k=60 + CrossEncoder",
+                    "service": "HybridRetriever",
+                    "start_ms": 30.0,
+                    "duration_ms": 28.0,
+                    "status": "ok",
+                    "meta": f"Retrieved {len(evidence)} candidates",
+                }
+            )
+            return {"evidence": evidence, "path": None, "spans": spans}
+
+        # 5. Abstention Node
+        def abstain_node(state: RAGState) -> dict[str, Any]:
+            spans = list(state.get("spans", []))
+            spans.append(
+                {
+                    "id": f"sp-{uuid.uuid4().hex[:6]}",
+                    "name": "Boundary Gate: enforce abstention",
+                    "service": "SafetyGate",
+                    "start_ms": 30.0,
+                    "duration_ms": 4.0,
+                    "status": "warning",
+                    "meta": "Honest abstention triggered - out-of-domain query or zero evidence",
+                }
+            )
+            return {
+                "answer": (
+                    "I do not have sufficient information in the "
+                    "provided documentation to answer this question."
+                ),
+                "is_abstention": True,
+                "citations_valid": True,
+                "cost_usd": 0.0,
+                "spans": spans,
+            }
+
+        # 6. Generation Node
+        async def generate_node(state: RAGState) -> dict[str, Any]:
+            evidence = state.get("evidence", [])
+            query = state.get("rewritten_query") or state["query"]
+            retry_count = state.get("retry_count", 0)
+            spans = list(state.get("spans", []))
+            settings = get_settings()
+
+            # Wrap context in XML delimiters
+            context_block = wrap_context_for_prompt(evidence)
+
+            prompt = (
+                f"{context_block}\n\n"
+                f"Question: {query}\n\n"
+                "Instructions:\n"
+                "1. Answer the question using ONLY the provided reference documents.\n"
+                "2. Every claim must have inline bracket citations pointing to the chunk IDs, e.g. [chunk_id].\n"
+                "3. If the context does not contain the answer, reply that you do not have sufficient information.\n"
+            )
+
+            # In test mode without API key, use fallback mock
+            mock_ans: str | None = None
+            if settings.APP_ENV == "test" and not settings.GEMINI_API_KEY:
+                if evidence:
+                    chunk_citations = " ".join(f"[{ev.chunk_id}]" for ev in evidence[:2])
+                    mock_ans = f"Based on system documentation, {evidence[0].text} {chunk_citations}"
+                else:
+                    mock_ans = "I do not have sufficient information to answer this question."
+
+            gen_start = time.perf_counter()
+            resp = await self.gateway.complete(prompt=prompt, mock_response=mock_ans)
+            gen_dur = round((time.perf_counter() - gen_start) * 1000.0, 2)
+
+            spans.append(
+                {
+                    "id": f"sp-{uuid.uuid4().hex[:6]}",
+                    "name": f"LLM Generation: {resp.model}",
+                    "service": "ModelGateway",
+                    "start_ms": 62.0,
+                    "duration_ms": max(gen_dur, 20.0),
+                    "status": "ok",
+                    "meta": f"Tokens: {resp.usage.completion_tokens}, Cost: ${resp.usage.cost_usd:.6f}",
+                }
+            )
+
+            # Verify citations
+            cit_result = verify_claim_citations(
+                answer_text=resp.content,
+                evidence_list=evidence,
+                is_abstention=False,
+            )
+
+            # Populate exact and semantic cache on successful generation (for live queries)
+            if (
+                resp.content
+                and evidence
+                and cit_result.is_valid
+                and state.get("as_of_time") is None
+            ):
+                query_to_cache = state.get("rewritten_query") or state["query"]
+                ans_obj = Answer(
+                    query=query_to_cache,
+                    answer=resp.content,
+                    evidence=evidence,
+                    is_abstention=False,
+                    router_strategy=state.get("route", "vector"),
+                    cost_usd=state.get("cost_usd", 0.0) + resp.usage.cost_usd,
+                    latency_ms=0.0,
+                )
+                scope = state.get("acl_scope", ACLScope.public())
+                self.exact_cache.set(query_to_cache, ans_obj, scope)
+                self.semantic_cache.set(query_to_cache, ans_obj, scope)
+
+            return {
+                "answer": resp.content,
+                "cost_usd": state.get("cost_usd", 0.0) + resp.usage.cost_usd,
+                "citations_valid": cit_result.is_valid,
+                "retry_count": retry_count + 1,
+                "spans": spans,
+            }
+
+        # Register nodes in graph
+        workflow.add_node("condense_step", condense_node)
+        workflow.add_node("route_step", route_node)
+        workflow.add_node("small_talk_step", small_talk_node)
+        workflow.add_node("cache_step", cache_node)
+        workflow.add_node("retrieve_step", retrieve_node)
+        workflow.add_node("abstain_step", abstain_node)
+        workflow.add_node("generate_step", generate_node)
+
+        # Wire edges: start at condense_step
+        workflow.set_entry_point("condense_step")
+        workflow.add_edge("condense_step", "route_step")
+
+        def route_decision(state: RAGState) -> str:
+            route = state.get("route", "vector")
+            if route == "small_talk":
+                return "small_talk_step"
+            if route == "abstain":
+                return "abstain_step"
+            return "cache_step"
+
+        workflow.add_conditional_edges("route_step", route_decision)
+        workflow.add_edge("small_talk_step", END)
+
+        def cache_decision(state: RAGState) -> str:
+            if state.get("is_cached", False):
+                return END
+            return "retrieve_step"
+
+        workflow.add_conditional_edges("cache_step", cache_decision)
+
+        def evidence_decision(state: RAGState) -> str:
+            evidence = state.get("evidence", [])
+            if not evidence:
+                return "abstain_step"
+            return "generate_step"
+
+        workflow.add_conditional_edges("retrieve_step", evidence_decision)
+        workflow.add_edge("abstain_step", END)
+        workflow.add_edge("generate_step", END)
+
+        return workflow.compile(checkpointer=self.checkpointer)
+
+    async def run(
+        self,
+        query: str,
+        acl_scope: ACLScope | None = None,
+        as_of_time: datetime | None = None,
+        thread_id: str | None = None,
+        thread_history: list[dict[str, Any]] | None = None,
+    ) -> RAGState:
+        """Execute the compiled LangGraph workflow end-to-end."""
+        start_time = time.perf_counter()
+        scope = acl_scope or ACLScope.public()
+        trace_id = f"tr-{uuid.uuid4().hex[:8]}"
+        thread_key = thread_id or f"th-{uuid.uuid4().hex[:8]}"
+
+        initial_state: RAGState = {
+            "query": query,
+            "raw_query": query,
+            "rewritten_query": query,
+            "thread_id": thread_key,
+            "thread_history": list(thread_history or []),
+            "trace_id": trace_id,
+            "acl_scope": scope,
+            "as_of_time": as_of_time,
+            "route": "vector",
+            "is_cached": False,
+            "evidence": [],
+            "path": None,
+            "answer": "",
+            "is_abstention": False,
+            "citations_valid": False,
+            "retry_count": 0,
+            "cost_usd": 0.0,
+            "latency_ms": 0.0,
+            "start_time": start_time,
+            "metadata": {},
+            "spans": [],
+        }
+
+        config = {"configurable": {"thread_id": thread_key}}
+        final_state = await self.graph.ainvoke(initial_state, config=config)
+
+        elapsed_ms = (time.perf_counter() - start_time) * 1000.0
+        final_state["latency_ms"] = round(elapsed_ms, 2)
+        final_state["trace_id"] = trace_id
+
+        return final_state

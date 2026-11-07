@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-CategoryType = Literal["fact", "multi_hop", "global", "unanswerable", "paraphrase"]
+CategoryType = Literal["fact", "multi_hop", "global", "unanswerable", "paraphrase", "multi_turn"]
 OptimalStrategyType = Literal["vector", "graph", "hybrid", "abstain", "cache"]
 
 
@@ -22,6 +22,8 @@ class GoldenQuestion(BaseModel):
     expected_entities: list[str] = Field(default_factory=list)
     expected_path: list[str] | None = None
     optimal_strategy: OptimalStrategyType
+    thread_turns: list[dict[str, str]] = Field(default_factory=list)
+    expected_rewritten_query: str | None = None
 
 
 class GoldenDataset:

@@ -1,16 +1,39 @@
+import asyncio
+import sys
+
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import health
+from app.api.routes import (
+    cache,
+    documents,
+    evals,
+    experiments,
+    graph,
+    health,
+    metrics,
+    query,
+    retrieval,
+    threads,
+    traces,
+)
+from app.api.routes import (
+    settings as settings_routes,
+)
 from app.core.config import get_settings
+from app.core.lifecycle import verify_infrastructure_live
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    # Lifespan startup
+    # Lifespan startup: verify real infrastructure & keys in live mode, init DB schema
+    await verify_infrastructure_live()
     yield
     # Lifespan shutdown
 
@@ -33,9 +56,24 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Register Routers
-    app.include_router(health.router, prefix=settings.API_V1_PREFIX)
-    app.include_router(health.router)  # Also expose /health at root level for orchestrators
+    # Register Routers under single API prefix (/api/v1)
+    api_routers = [
+        health.router,
+        query.router,
+        graph.router,
+        documents.router,
+        traces.router,
+        retrieval.router,
+        cache.router,
+        evals.router,
+        experiments.router,
+        metrics.router,
+        settings_routes.router,
+        threads.router,
+    ]
+
+    for router in api_routers:
+        app.include_router(router, prefix=settings.API_V1_PREFIX)
 
     @app.get("/", include_in_schema=False)
     def root() -> dict[str, str]:
