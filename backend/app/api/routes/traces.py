@@ -33,11 +33,7 @@ async def list_traces(
         messages = list(msg_result.scalars().all())
 
         # Also query spans table directly
-        spans_stmt = (
-            select(DBSpanRecord)
-            .order_by(DBSpanRecord.created_at.desc())
-            .limit(100)
-        )
+        spans_stmt = select(DBSpanRecord).order_by(DBSpanRecord.created_at.desc()).limit(100)
         spans_res = await session.execute(spans_stmt)
         all_spans = list(spans_res.scalars().all())
 
@@ -135,9 +131,15 @@ async def get_trace(trace_id: str) -> TraceDetail:
             )
         )
 
-    query = (msg.raw_query if msg else None) or (db_spans[0].attributes.get("query") if db_spans else "Query")
-    route = (msg.route if msg else None) or (db_spans[0].attributes.get("route") if db_spans else "vector")
-    latency = int(msg.latency_ms if msg and msg.latency_ms else sum(s.duration_ms for s in db_spans))
+    query = (msg.raw_query if msg else None) or (
+        db_spans[0].attributes.get("query") if db_spans else "Query"
+    )
+    route = (msg.route if msg else None) or (
+        db_spans[0].attributes.get("route") if db_spans else "vector"
+    )
+    latency = int(
+        msg.latency_ms if msg and msg.latency_ms else sum(s.duration_ms for s in db_spans)
+    )
     timestamp = (msg.created_at if msg else db_spans[0].created_at).isoformat()
     answer = msg.content if msg else ""
     tokens = msg.tokens if msg and msg.tokens else 100

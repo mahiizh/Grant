@@ -107,7 +107,8 @@ class FakeBM25Retriever:
         scores: dict[str, float] = {}
         doc_count = len(self._chunks)
         candidates = [
-            cid for cid, chunk in self._chunks.items()
+            cid
+            for cid, chunk in self._chunks.items()
             if filter_criteria is None or filter_criteria.permits_chunk(chunk)
         ]
         for token in query_tokens:
@@ -195,7 +196,9 @@ class FakeGraphRetriever:
         self._name_to_id = {normalize_entity_name(e.name): e.entity_id for e in entities}
         self._adjacency.clear()
         for r in relations:
-            self._adjacency.setdefault(r.source_entity_id, []).append((r.relation_type, r.target_entity_id))
+            self._adjacency.setdefault(r.source_entity_id, []).append(
+                (r.relation_type, r.target_entity_id)
+            )
         if chunks:
             self._chunks = {c.chunk_id: c for c in chunks}
 

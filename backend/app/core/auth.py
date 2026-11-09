@@ -29,7 +29,9 @@ class AuthenticatedUser:
     def to_acl_scope(self, requested_scope: str | None = None) -> ACLScope:
         """Resolve ACLScope domain model enforced against identity credentials."""
         scope = requested_scope or (
-            "data-platform" if "data-platform" in self.allowed_scopes else list(self.allowed_scopes)[0]
+            "data-platform"
+            if "data-platform" in self.allowed_scopes
+            else list(self.allowed_scopes)[0]
         )
         self.check_scope(scope)
         if scope == "public":

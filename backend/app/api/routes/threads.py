@@ -28,6 +28,7 @@ from app.api.schemas.threads import (
 )
 from app.core.acl import ACLScope
 from app.core.auth import AuthenticatedUser, get_current_user
+from app.core.config import get_settings
 from app.db.models import MessageRecord, ThreadRecord
 from app.db.postgres import get_db_session, get_session
 from app.observability.tracer import export_spans_to_db
@@ -333,6 +334,7 @@ async def send_message(
     )
 
     if wants_sse:
+
         async def event_generator():
             # 1. Yield condense stage
             yield f"event: stage\ndata: {json.dumps({'id': 'condense', 'label': 'Condensing query', 'status': 'in_progress'})}\n\n"
@@ -645,16 +647,25 @@ async def add_to_golden_dataset(
         "category": req.category,
         "query": user_query,
         "expected_answer": req.expected_answer or asst_msg.content,
-        "expected_doc_ids": list({c.get("doc_id") for c in (asst_msg.citations or []) if c.get("doc_id")}),
-        "expected_chunk_ids": [c.get("chunk_id") for c in (asst_msg.citations or []) if c.get("chunk_id")],
+        "expected_doc_ids": list(
+            {c.get("doc_id") for c in (asst_msg.citations or []) if c.get("doc_id")}
+        ),
+        "expected_chunk_ids": [
+            c.get("chunk_id") for c in (asst_msg.citations or []) if c.get("chunk_id")
+        ],
         "expected_rewritten_query": asst_msg.rewritten_query,
         "thread_turns": prior_turns,
         "optimal_strategy": asst_msg.route or "vector",
         "created_at": datetime.now(UTC).isoformat(),
     }
 
-    # Append to candidate eval dataset file
-    evals_dir = Path(__file__).resolve().parents[4] / "evals" / "candidates"
+    # Append to candidate eval dataset file. Tests override this directory so
+    # runs never mutate the tracked file under evals/.
+    configured_dir = get_settings().EVAL_CANDIDATES_DIR
+    if configured_dir:
+        evals_dir = Path(configured_dir)
+    else:
+        evals_dir = Path(__file__).resolve().parents[4] / "evals" / "candidates"
     evals_dir.mkdir(parents=True, exist_ok=True)
     candidate_file = evals_dir / "golden_candidates.jsonl"
     with open(candidate_file, "a", encoding="utf-8") as f:

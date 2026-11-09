@@ -70,16 +70,20 @@ async def compare_retrieval(
     raw_candidates = []
     for cid, ce_score in zip(all_chunk_ids, ce_scores, strict=False):
         payload = all_payloads.get(cid, {})
-        raw_candidates.append({
-            "chunk_id": cid,
-            "doc_title": payload.get("doc_id", "Unknown"),
-            "text": payload.get("text", "")[:240],
-            "vector_score": round(dense_scores.get(cid, 0.0), 4),
-            "bm25_score": round(sparse_scores.get(cid, 0.0), 4),
-            "graph_hops": 1 if "INC" in payload.get("text", "") or "RFC" in payload.get("text", "") else 0,
-            "rrf_score": round(fused_scores.get(cid, 0.0), 5),
-            "cross_encoder_score": round(float(ce_score), 4),
-        })
+        raw_candidates.append(
+            {
+                "chunk_id": cid,
+                "doc_title": payload.get("doc_id", "Unknown"),
+                "text": payload.get("text", "")[:240],
+                "vector_score": round(dense_scores.get(cid, 0.0), 4),
+                "bm25_score": round(sparse_scores.get(cid, 0.0), 4),
+                "graph_hops": 1
+                if "INC" in payload.get("text", "") or "RFC" in payload.get("text", "")
+                else 0,
+                "rrf_score": round(fused_scores.get(cid, 0.0), 5),
+                "cross_encoder_score": round(float(ce_score), 4),
+            }
+        )
 
     raw_candidates.sort(key=lambda x: x["cross_encoder_score"], reverse=True)
 

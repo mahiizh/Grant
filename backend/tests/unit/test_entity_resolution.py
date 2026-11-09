@@ -1,4 +1,5 @@
 import pytest
+
 from app.ingestion.entity_resolution import EntityResolver
 
 
@@ -63,10 +64,18 @@ async def test_entity_resolution_30_pair_benchmark() -> None:
         else:
             false_positives += 1
 
-    precision = true_positives / (true_positives + false_positives) if (true_positives + false_positives) > 0 else 0.0
-    recall = true_positives / (true_positives + false_negatives) if (true_positives + false_negatives) > 0 else 0.0
+    precision = (
+        true_positives / (true_positives + false_positives)
+        if (true_positives + false_positives) > 0
+        else 0.0
+    )
+    recall = (
+        true_positives / (true_positives + false_negatives)
+        if (true_positives + false_negatives) > 0
+        else 0.0
+    )
 
-    print(f"\nEntity Resolution Benchmark Results:")
+    print("\nEntity Resolution Benchmark Results:")
     print(f"True Positives: {true_positives}/15")
     print(f"True Negatives: {true_negatives}/15")
     print(f"Precision: {precision:.2%}, Recall: {recall:.2%}")

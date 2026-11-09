@@ -272,7 +272,10 @@ class RAGOrchestrator:
                     if i < len(graph_evidence) and graph_evidence[i].chunk_id not in seen_chunk_ids:
                         combined_evidence.append(graph_evidence[i])
                         seen_chunk_ids.add(graph_evidence[i].chunk_id)
-                    if i < len(hybrid_evidence) and hybrid_evidence[i].chunk_id not in seen_chunk_ids:
+                    if (
+                        i < len(hybrid_evidence)
+                        and hybrid_evidence[i].chunk_id not in seen_chunk_ids
+                    ):
                         combined_evidence.append(hybrid_evidence[i])
                         seen_chunk_ids.add(hybrid_evidence[i].chunk_id)
 
@@ -375,7 +378,9 @@ class RAGOrchestrator:
             if settings.APP_ENV == "test" and not settings.GEMINI_API_KEY:
                 if evidence:
                     chunk_citations = " ".join(f"[{ev.chunk_id}]" for ev in evidence[:2])
-                    mock_ans = f"Based on system documentation, {evidence[0].text} {chunk_citations}"
+                    mock_ans = (
+                        f"Based on system documentation, {evidence[0].text} {chunk_citations}"
+                    )
                 else:
                     mock_ans = "I do not have sufficient information to answer this question."
 

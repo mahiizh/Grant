@@ -24,7 +24,14 @@ async def get_system_settings() -> SettingsResponse:
     settings = get_settings()
 
     # Collect distinct scopes from DEV_USERS
-    all_scopes: set[str] = {"public", "data-platform", "sre", "payments", "core-banking", "executive-audit"}
+    all_scopes: set[str] = {
+        "public",
+        "data-platform",
+        "sre",
+        "payments",
+        "core-banking",
+        "executive-audit",
+    }
     for user_info in settings.DEV_USERS.values():
         all_scopes.update(user_info.get("allowed_scopes", []))
 
@@ -41,7 +48,9 @@ async def get_system_settings() -> SettingsResponse:
 
     # 2. Qdrant
     try:
-        qdrant = AsyncQdrantClient(url=f"http://{settings.QDRANT_HOST}:{settings.QDRANT_PORT}", check_compatibility=False)
+        qdrant = AsyncQdrantClient(
+            url=f"http://{settings.QDRANT_HOST}:{settings.QDRANT_PORT}", check_compatibility=False
+        )
         await qdrant.get_collections()
         await qdrant.close()
         stores["qdrant"] = StoreStatus(status="healthy", latency_ms=2.1, configured=True)
@@ -50,7 +59,9 @@ async def get_system_settings() -> SettingsResponse:
 
     # 3. Neo4j
     try:
-        driver = AsyncGraphDatabase.driver(settings.NEO4J_URI, auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD))
+        driver = AsyncGraphDatabase.driver(
+            settings.NEO4J_URI, auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+        )
         async with driver.session() as s:
             await s.run("RETURN 1")
         await driver.close()

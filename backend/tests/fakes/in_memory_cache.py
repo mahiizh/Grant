@@ -1,6 +1,6 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
-from dataclasses import dataclass
 
 from app.cache.guards import validate_cache_hit
 from app.cache.keys import generate_exact_cache_key

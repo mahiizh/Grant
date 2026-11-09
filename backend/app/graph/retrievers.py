@@ -104,7 +104,9 @@ class GraphRetriever:
                 # Apply ACL/temporal filtering
                 if filter_criteria is not None:
                     scope_raw = r.get("acl_scope") or ""
-                    if "executive-audit" in scope_raw and not bool(filter_criteria.user_roles & {"executive-audit"}):
+                    if "executive-audit" in scope_raw and not bool(
+                        filter_criteria.user_roles & {"executive-audit"}
+                    ):
                         continue
 
                 prov = Provenance(

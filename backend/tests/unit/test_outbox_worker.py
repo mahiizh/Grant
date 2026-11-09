@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from typing import cast
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -8,7 +9,7 @@ from app.db.models import Base
 from app.db.outbox import OutboxEventType, OutboxService, OutboxStatus
 from app.db.postgres import DocumentRepository
 from app.domain import Chunk, Document, Provenance, TemporalBounds
-from app.indexing import OutboxWorker
+from app.indexing import Neo4jIndexer, OutboxWorker, QdrantIndexer
 from tests.fakes.in_memory_indexers import FakeNeo4jIndexer, FakeQdrantIndexer
 
 
@@ -61,7 +62,10 @@ async def test_outbox_worker_processes_chunks(test_session: AsyncSession) -> Non
     # 2. Run Outbox Worker
     qdrant = FakeQdrantIndexer()
     neo4j = FakeNeo4jIndexer()
-    worker = OutboxWorker(qdrant_indexer=qdrant, neo4j_indexer=neo4j)
+    worker = OutboxWorker(
+        qdrant_indexer=cast(QdrantIndexer, qdrant),
+        neo4j_indexer=cast(Neo4jIndexer, neo4j),
+    )
 
     processed_count = await worker.process_batch(session=test_session, batch_size=10)
     await test_session.flush()
@@ -107,7 +111,10 @@ async def test_outbox_worker_processes_deletion(test_session: AsyncSession) -> N
 
     qdrant = FakeQdrantIndexer()
     neo4j = FakeNeo4jIndexer()
-    worker = OutboxWorker(qdrant_indexer=qdrant, neo4j_indexer=neo4j)
+    worker = OutboxWorker(
+        qdrant_indexer=cast(QdrantIndexer, qdrant),
+        neo4j_indexer=cast(Neo4jIndexer, neo4j),
+    )
 
     # Process creation
     await worker.process_batch(session=test_session, batch_size=10)
@@ -143,7 +150,7 @@ async def test_outbox_worker_error_handling(test_session: AsyncSession) -> None:
         async def upsert_chunk(self, *args: object, **kwargs: object) -> None:
             raise ConnectionError("Qdrant service unreachable")
 
-    worker = OutboxWorker(qdrant_indexer=FailingQdrant())
+    worker = OutboxWorker(qdrant_indexer=cast(QdrantIndexer, FailingQdrant()))
     success = await worker.process_event(session=test_session, event=event)
     await test_session.flush()
 

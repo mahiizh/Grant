@@ -18,7 +18,7 @@ sections below remain the Step 0 evidence.
 | Item | Status | Evidence |
 | --- | --- | --- |
 | 0. Single Docker Postgres + Alembic | **Done** | Docker PG on host `5433`; `make up` port guard; Alembic revision `a9cf8318b733`; clean re-ingest + 0 drift |
-| 1. Tooling cleanup | Pending | — |
+| 1. Tooling cleanup | **Done** | `ruff check` + `ruff format` + `mypy` clean; eval writes redirected to temp dirs; `.env.example` updated |
 | 2. Eval items 1–5 | Pending | — |
 | 3. ACL items 7–9 | Pending | — |
 | 4. Item 6 honest baseline | Pending | — |
@@ -102,6 +102,49 @@ PostgreSQL server: 172.19.0.5:5432 | database=graphrag_lab | data_directory=/var
 ```
 
 `README.md` now documents the port split, the preflight guard, and the bring-up order.
+
+### Item 1 — tooling cleanup and hermetic test output
+
+**Lint, format, and types are clean.** `ruff check app tests`, `ruff format app tests`, and
+`mypy app tests` all pass with no errors (114 source files). The auto-fixes were import ordering,
+unused-import removal, and line wrapping; `git diff -w` shows no behavior changes.
+
+```text
+uv run --directory backend ruff check app tests   -> All checks passed!
+uv run --directory backend ruff format app tests  -> 23 files reformatted, 91 left unchanged
+uv run --directory backend mypy app tests         -> Success: no issues found in 114 source files
+```
+
+**Tests no longer write tracked eval files.** `backend/tests/conftest.py` now points
+`EVAL_GOLDEN_DIR` at a temp dir seeded with copies of `questions.jsonl` / `multi_turn.jsonl`, and
+`EVAL_CANDIDATES_DIR` at a fresh temp dir, before importing `app.main`. `evals.py` and `threads.py`
+resolve their paths from those settings. `.env.example` documents both variables (blank = repo
+defaults).
+
+Proof:
+
+```text
+SHA256 before = B289709FB1E2ED52AEB5EB9A6A019FF2DEB46837E0250FED6AF53E28423AEDAB
+pytest tests/unit/test_threads_api.py -> 1 passed
+SHA256 after  = B289709FB1E2ED52AEB5EB9A6A019FF2DEB46837E0250FED6AF53E28423AEDAB
+UNCHANGED = True
+temp output: C:\Users\mahil\AppData\Local\Temp\graphrag-candidates-9syn1ml8\golden_candidates.jsonl
+```
+
+After the full suite, `git status --short evals/` is empty and all three golden/candidate hashes are
+unchanged.
+
+**Full suite (Docker Postgres on 5433).** 64 tests collected, **63 passed, 1 failed**. The single
+failure is `test_three_turn_thread_pronoun_resolution_and_traces`, a live-LLM test that asserts the
+model's query rewrite removes "they"; the model returned
+`"How did they fix the outbox service deserialization error during deployment v2.4.1?"`, which keeps
+the pronoun. This is live-model nondeterminism, not a tooling regression. It is intentionally
+deferred to item 2, which marks live-LLM tests `@pytest.mark.live` and excludes them by default
+after building the hermetic fake.
+
+> Note: the harness process environment sets `POSTGRES_PORT=5432` (native PG17). Clear
+> `POSTGRES_*` before verification runs so the `.env` values for Docker on 5433 win:
+> `Remove-Item Env:POSTGRES_PORT,Env:POSTGRES_DB,Env:POSTGRES_USER,Env:POSTGRES_PASSWORD,Env:POSTGRES_HOST`.
 
 ---
 

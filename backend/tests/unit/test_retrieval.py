@@ -6,8 +6,14 @@ from app.evaluation.retrieval_metrics import ndcg_at_k, recall_at_k
 from app.retrieval.filters import RetrievalFilter
 from tests.fakes.in_memory_retrievers import (
     FakeBM25Retriever as BM25Retriever,
+)
+from tests.fakes.in_memory_retrievers import (
     FakeDenseRetriever as DenseRetriever,
+)
+from tests.fakes.in_memory_retrievers import (
     FakeGraphRetriever as GraphRetriever,
+)
+from tests.fakes.in_memory_retrievers import (
     FakeHybridRetriever as HybridRetriever,
 )
 

@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from typing import cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -6,11 +7,15 @@ from fastapi.testclient import TestClient
 from app.api.routes.query import set_orchestrator
 from app.core.acl import ACLScope
 from app.domain import Chunk, Entity, Provenance, Relation, TemporalBounds
+from app.graph.retrievers import GraphRetriever as RealGraphRetriever
 from app.main import app
 from app.orchestration.router import QueryRouter
 from app.orchestration.workflow import RAGOrchestrator
+from app.retrieval.hybrid import HybridRetriever as RealHybridRetriever
 from tests.fakes.in_memory_retrievers import (
     FakeGraphRetriever as GraphRetriever,
+)
+from tests.fakes.in_memory_retrievers import (
     FakeHybridRetriever as HybridRetriever,
 )
 
@@ -75,8 +80,8 @@ def build_test_orchestrator() -> RAGOrchestrator:
     graph.index_graph(entities=[e1, e2], relations=[rel], chunks=[c1, c2])
 
     return RAGOrchestrator(
-        hybrid_retriever=hybrid,
-        graph_retriever=graph,
+        hybrid_retriever=cast(RealHybridRetriever, hybrid),
+        graph_retriever=cast(RealGraphRetriever, graph),
     )
 
 

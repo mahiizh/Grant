@@ -62,7 +62,9 @@ async def check_qdrant() -> ComponentHealth:
             if resp.status_code == 200:
                 latency = round((time.perf_counter() - start) * 1000, 2)
                 return ComponentHealth(status="healthy", latency_ms=latency)
-            return ComponentHealth(status="unhealthy", latency_ms=0.0, error=f"HTTP {resp.status_code}")
+            return ComponentHealth(
+                status="unhealthy", latency_ms=0.0, error=f"HTTP {resp.status_code}"
+            )
     except Exception as e:
         return ComponentHealth(status="unhealthy", latency_ms=0.0, error=str(e))
 
@@ -79,7 +81,9 @@ async def check_neo4j() -> ComponentHealth:
             res = await session.run("RETURN 1 AS ping")
             record = await res.single()
             if not record or record["ping"] != 1:
-                return ComponentHealth(status="unhealthy", latency_ms=0.0, error="Invalid ping result")
+                return ComponentHealth(
+                    status="unhealthy", latency_ms=0.0, error="Invalid ping result"
+                )
         await driver.close()
         latency = round((time.perf_counter() - start) * 1000, 2)
         return ComponentHealth(status="healthy", latency_ms=latency)
@@ -127,10 +131,7 @@ async def system_health(response: Response) -> SystemHealthResponse:
         get_outbox_lag(),
     )
 
-    all_healthy = all(
-        c.status == "healthy"
-        for c in (pg_h, qd_h, neo_h, rd_h)
-    )
+    all_healthy = all(c.status == "healthy" for c in (pg_h, qd_h, neo_h, rd_h))
 
     if not all_healthy:
         response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE

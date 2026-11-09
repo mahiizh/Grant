@@ -6,8 +6,13 @@ from app.core.acl import ACLScope
 
 # Keywords characteristic of small talk / greetings
 SMALL_TALK_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"^(hi|hello|hey|greetings|good morning|good afternoon|good evening|howdy)[\s!.]*$", re.IGNORECASE),
-    re.compile(r"^(who are you|what can you do|how are you|tell me about yourself)[\s?!.]*$", re.IGNORECASE),
+    re.compile(
+        r"^(hi|hello|hey|greetings|good morning|good afternoon|good evening|howdy)[\s!.]*$",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^(who are you|what can you do|how are you|tell me about yourself)[\s?!.]*$", re.IGNORECASE
+    ),
     re.compile(r"^(thanks|thank you|bye|goodbye)[\s!.]*$", re.IGNORECASE),
 ]
 

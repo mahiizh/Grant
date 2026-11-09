@@ -17,7 +17,6 @@ class DocumentRecord(BaseModel):
     cost_usd: float = 0.0
 
 
-
 class DocumentsResponse(BaseModel):
     documents: list[DocumentRecord]
     total: int

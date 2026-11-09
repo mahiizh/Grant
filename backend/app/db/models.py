@@ -142,7 +142,10 @@ class ThreadRecord(Base):
     )
 
     messages: Mapped[list["MessageRecord"]] = relationship(
-        "MessageRecord", back_populates="thread", cascade="all, delete-orphan", order_by="MessageRecord.created_at"
+        "MessageRecord",
+        back_populates="thread",
+        cascade="all, delete-orphan",
+        order_by="MessageRecord.created_at",
     )
 
 
@@ -198,7 +201,4 @@ class SpanRecord(Base):
         DateTime(timezone=True), default=utc_now, nullable=False, index=True
     )
 
-    __table_args__ = (
-        Index("ix_spans_trace_start", "trace_id", "start_time"),
-    )
-
+    __table_args__ = (Index("ix_spans_trace_start", "trace_id", "start_time"),)

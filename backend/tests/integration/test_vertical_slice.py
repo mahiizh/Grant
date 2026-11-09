@@ -1,8 +1,6 @@
-from datetime import datetime, timezone
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.api.schemas.query import QueryResponse
 from app.indexing.reconciler import run_reconciliation
 from app.main import app
 
@@ -34,8 +32,12 @@ async def test_acl_leak_protection() -> None:
         data = resp_leak_check.json()
         citations = data.get("evidence", [])
         for cit in citations:
-            assert cit["doc_id"] != "doc_board_audit_q1_2026", "ACL LEAK: Executive audit chunk was retrieved!"
-            assert "doc_board_audit" not in cit["chunk_id"], "ACL LEAK: Executive audit chunk returned!"
+            assert cit["doc_id"] != "doc_board_audit_q1_2026", (
+                "ACL LEAK: Executive audit chunk was retrieved!"
+            )
+            assert "doc_board_audit" not in cit["chunk_id"], (
+                "ACL LEAK: Executive audit chunk returned!"
+            )
 
         # 3. Auditor user (scopes: executive-audit, public) requests executive-audit scope -> allowed
         resp_auditor = await client.post(

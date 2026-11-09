@@ -41,7 +41,14 @@ async def test_three_turn_thread_pronoun_resolution_and_traces(test_session: Asy
 
     thread_id = "test-thread-abc-123"
     admin_scope = ACLScope.restricted(
-        allowed_roles={"admin", "data-platform", "payments", "core-banking", "sre", "executive-audit"},
+        allowed_roles={
+            "admin",
+            "data-platform",
+            "payments",
+            "core-banking",
+            "sre",
+            "executive-audit",
+        },
         allowed_groups={"platform-admins"},
     )
 
@@ -92,7 +99,9 @@ async def test_three_turn_thread_pronoun_resolution_and_traces(test_session: Asy
 
     # Assertion 2: Distinct trace_id
     assert trace_id_2 is not None and trace_id_2.startswith("tr-")
-    assert trace_id_2 != trace_id_1, f"Trace ID must differ across turns: {trace_id_2} vs {trace_id_1}"
+    assert trace_id_2 != trace_id_1, (
+        f"Trace ID must differ across turns: {trace_id_2} vs {trace_id_1}"
+    )
 
     # Assertion 3: Citations differ per turn or exist
     assert len(citations_2) > 0

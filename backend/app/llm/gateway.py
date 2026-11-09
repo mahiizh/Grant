@@ -62,7 +62,9 @@ class ModelGateway:
         selected_model = model or self.default_model
 
         # 1. Test / Mock execution path
-        if mock_response is not None or (settings.APP_ENV == "test" and not settings.GEMINI_API_KEY):
+        if mock_response is not None or (
+            settings.APP_ENV == "test" and not settings.GEMINI_API_KEY
+        ):
             completion_text = mock_response or "Mock completion based on retrieved context."
             prompt_tokens = max(25, len(prompt.split()))
             completion_tokens = max(35, len(completion_text.split()))
@@ -119,7 +121,12 @@ class ModelGateway:
             except Exception as e:
                 last_exc = e
                 err_str = str(e).lower()
-                if any(x in err_str for x in ("503", "429", "timeout", "unavailable", "rate limit")) and attempt < 4:
+                if (
+                    any(
+                        x in err_str for x in ("503", "429", "timeout", "unavailable", "rate limit")
+                    )
+                    and attempt < 4
+                ):
                     backoff = 2.5 * (attempt + 1)
                     await asyncio.sleep(backoff)
                     continue
@@ -165,7 +172,9 @@ class ModelGateway:
         except Exception as e:
             if isinstance(e, BudgetExceededError):
                 raise
-            raise RuntimeError(f"LiteLLM completion processing failed for {selected_model}: {e}") from e
+            raise RuntimeError(
+                f"LiteLLM completion processing failed for {selected_model}: {e}"
+            ) from e
 
     @property
     def total_spent_usd(self) -> float:

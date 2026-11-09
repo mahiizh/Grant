@@ -1,9 +1,25 @@
+import os
+import shutil
+import tempfile
 from collections.abc import Generator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import create_app
+# Keep test runs hermetic: evaluation data is written to temp directories, never
+# to the tracked files under evals/. Set this before importing app.main so the
+# cached Settings pick the overrides up.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_GOLDEN_DIR = Path(tempfile.mkdtemp(prefix="graphrag-golden-"))
+for _name in ("questions.jsonl", "multi_turn.jsonl"):
+    _source = _REPO_ROOT / "evals" / "golden" / _name
+    if _source.exists():
+        shutil.copy2(_source, _GOLDEN_DIR / _name)
+os.environ["EVAL_GOLDEN_DIR"] = str(_GOLDEN_DIR)
+os.environ["EVAL_CANDIDATES_DIR"] = tempfile.mkdtemp(prefix="graphrag-candidates-")
+
+from app.main import create_app  # noqa: E402
 
 
 @pytest.fixture(scope="session")

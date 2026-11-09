@@ -61,7 +61,9 @@ class Neo4jIndexer:
         properties: dict[str, Any] | None = None,
     ) -> str:
         """Idempotently create or update a relationship edge between two entities."""
-        rel_type_clean = "".join(c if c.isalnum() else "_" for c in relation_type).upper() or "RELATES_TO"
+        rel_type_clean = (
+            "".join(c if c.isalnum() else "_" for c in relation_type).upper() or "RELATES_TO"
+        )
         cypher = f"""
         MERGE (a:Entity {{id: $source_id}})
         MERGE (b:Entity {{id: $target_id}})

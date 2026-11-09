@@ -13,6 +13,7 @@ from app.api.schemas.evals import (
     GoldenEvalRunResponse,
     GoldenPair,
 )
+from app.core.config import get_settings
 from app.evaluation.datasets import GoldenDataset
 from app.evaluation.runner import EvaluationRunner
 
@@ -20,7 +21,20 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/evals", tags=["evals"])
 
-GOLDEN_PATH = Path(__file__).resolve().parent.parent.parent.parent.parent / "evals" / "golden" / "questions.jsonl"
+
+def _golden_path() -> Path:
+    configured = get_settings().EVAL_GOLDEN_DIR
+    if configured:
+        return Path(configured) / "questions.jsonl"
+    return (
+        Path(__file__).resolve().parent.parent.parent.parent.parent
+        / "evals"
+        / "golden"
+        / "questions.jsonl"
+    )
+
+
+GOLDEN_PATH = _golden_path()
 
 
 def _read_golden_questions() -> list[GoldenPair]:

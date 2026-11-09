@@ -12,7 +12,6 @@ class QueryRequest(BaseModel):
     thread_id: str | None = None
 
 
-
 class EvidenceItem(BaseModel):
     """Retrieved evidence passage supporting an answer."""
 

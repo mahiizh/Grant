@@ -18,4 +18,3 @@ class SettingsResponse(BaseModel):
 class UpdateSettingsRequest(BaseModel):
     default_as_of_date: str | None = None
     canvas_theme: str | None = None
-

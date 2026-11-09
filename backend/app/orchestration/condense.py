@@ -159,9 +159,7 @@ async def condense_query(
             replacement_team = entities["team"] or entities["person"] or "the engineering team"
         rewritten = re.sub(r"\bthey\b", replacement_team, rewritten, flags=re.IGNORECASE)
         rewritten = re.sub(r"\bthem\b", replacement_team, rewritten, flags=re.IGNORECASE)
-        rewritten = re.sub(
-            r"\btheir\b", f"{replacement_team}'s", rewritten, flags=re.IGNORECASE
-        )
+        rewritten = re.sub(r"\btheir\b", f"{replacement_team}'s", rewritten, flags=re.IGNORECASE)
 
     # Rule 2: Replace "he" / "his" / "him"
     if any(p in tokens for p in ["he", "him", "his"]):
@@ -184,12 +182,39 @@ async def condense_query(
     # Rule 5: Replace "it" / "that"
     if any(p in tokens for p in ["it", "that"]):
         target = entities["topic"] or entities["service"] or "the incident"
-        rewritten = re.sub(r"\b(fix|resolve|heal|diagnose)\s+it\b", f"\\1 {target}", rewritten, flags=re.IGNORECASE)
-        rewritten = re.sub(r"\bcommanding\s+that\b", f"commanding {entities['incident'] or 'incident INC-2026-04'}", rewritten, flags=re.IGNORECASE)
-        rewritten = re.sub(r"\bfor\s+it\b", f"for {entities['service'] or 'the system'}", rewritten, flags=re.IGNORECASE)
-        rewritten = re.sub(r"\bdoes\s+it\b", f"does {entities['service'] or 'the database'}", rewritten, flags=re.IGNORECASE)
-        rewritten = re.sub(r"\bwhen\s+does\s+it\b", f"when does {entities['service'] or 'the service'}", rewritten, flags=re.IGNORECASE)
-        rewritten = re.sub(r"\bwhy\s+was\s+it\b", f"why was {entities['service'] or 'the service'}", rewritten, flags=re.IGNORECASE)
+        rewritten = re.sub(
+            r"\b(fix|resolve|heal|diagnose)\s+it\b", f"\\1 {target}", rewritten, flags=re.IGNORECASE
+        )
+        rewritten = re.sub(
+            r"\bcommanding\s+that\b",
+            f"commanding {entities['incident'] or 'incident INC-2026-04'}",
+            rewritten,
+            flags=re.IGNORECASE,
+        )
+        rewritten = re.sub(
+            r"\bfor\s+it\b",
+            f"for {entities['service'] or 'the system'}",
+            rewritten,
+            flags=re.IGNORECASE,
+        )
+        rewritten = re.sub(
+            r"\bdoes\s+it\b",
+            f"does {entities['service'] or 'the database'}",
+            rewritten,
+            flags=re.IGNORECASE,
+        )
+        rewritten = re.sub(
+            r"\bwhen\s+does\s+it\b",
+            f"when does {entities['service'] or 'the service'}",
+            rewritten,
+            flags=re.IGNORECASE,
+        )
+        rewritten = re.sub(
+            r"\bwhy\s+was\s+it\b",
+            f"why was {entities['service'] or 'the service'}",
+            rewritten,
+            flags=re.IGNORECASE,
+        )
 
     # Rule 6: Contextualize short followups without explicit subject
     if "latency impact on redis" in q_lower and "outbox" not in q_lower:

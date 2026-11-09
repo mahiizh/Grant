@@ -47,10 +47,16 @@ class EntityResolver:
         self.embedding_service = get_embedding_service()
         self._cache: dict[tuple[str, str], bool] = {}
 
-    def is_same_entity_rule(self, name_a: str, type_a: str, name_b: str, type_b: str) -> bool | None:
+    def is_same_entity_rule(
+        self, name_a: str, type_a: str, name_b: str, type_b: str
+    ) -> bool | None:
         """Deterministic rule-based check."""
         # Types must match (or one is generic)
-        if type_a.lower() != type_b.lower() and type_a.lower() not in ("entity", "unknown") and type_b.lower() not in ("entity", "unknown"):
+        if (
+            type_a.lower() != type_b.lower()
+            and type_a.lower() not in ("entity", "unknown")
+            and type_b.lower() not in ("entity", "unknown")
+        ):
             return False
 
         norm_a = normalize_text_token(name_a)

@@ -74,6 +74,11 @@ class Settings(BaseSettings):
     MAX_ACQUISITION_CALLS: int = 3
     MIN_TRUST_TO_CITE: float = 0.7
 
+    # Evaluation data paths. Override these in tests so runs never write into
+    # tracked files under evals/.
+    EVAL_GOLDEN_DIR: str | None = None
+    EVAL_CANDIDATES_DIR: str | None = None
+
     # Observability
     OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://localhost:4318"
     LANGFUSE_PUBLIC_KEY: str | None = None

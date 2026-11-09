@@ -98,7 +98,14 @@ class EvaluationRunner:
         }
 
         admin_scope = ACLScope.restricted(
-            allowed_roles={"admin", "data-platform", "payments", "core-banking", "sre", "executive-audit"},
+            allowed_roles={
+                "admin",
+                "data-platform",
+                "payments",
+                "core-banking",
+                "sre",
+                "executive-audit",
+            },
             allowed_groups={"platform-admins"},
         )
 
@@ -111,10 +118,14 @@ class EvaluationRunner:
                 router_predictions.append((predicted_route, q.optimal_strategy))
 
                 rewritten = state.get("rewritten_query", q.query).lower()
-                is_accurate = 1.0 if (
-                    not q.expected_entities
-                    or any(ent.lower() in rewritten for ent in q.expected_entities)
-                ) else 0.0
+                is_accurate = (
+                    1.0
+                    if (
+                        not q.expected_entities
+                        or any(ent.lower() in rewritten for ent in q.expected_entities)
+                    )
+                    else 0.0
+                )
                 category_metrics["multi_turn"].append(
                     {
                         "rewrite_accuracy": is_accurate,

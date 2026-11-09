@@ -1,5 +1,6 @@
 from collections.abc import AsyncGenerator
 from pathlib import Path
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -40,7 +41,9 @@ async def client(test_session: AsyncSession) -> AsyncGenerator[AsyncClient, None
     query_route.set_orchestrator(orchestrator)
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test", headers={"X-Dev-User": "admin"}) as ac:
+    async with AsyncClient(
+        transport=transport, base_url="http://test", headers={"X-Dev-User": "admin"}
+    ) as ac:
         yield ac
 
     app.dependency_overrides.clear()
@@ -49,7 +52,9 @@ async def client(test_session: AsyncSession) -> AsyncGenerator[AsyncClient, None
 @pytest.mark.anyio
 async def test_threads_crud_and_messages(client: AsyncClient) -> None:
     # 1. Create thread
-    res = await client.post("/api/v1/threads", json={"title": "Investigation INC-04", "acl_scope": "sre"})
+    res = await client.post(
+        "/api/v1/threads", json={"title": "Investigation INC-04", "acl_scope": "sre"}
+    )
     assert res.status_code == 201
     thread_data = res.json()
     thread_id = thread_data["thread_id"]
@@ -64,14 +69,18 @@ async def test_threads_crud_and_messages(client: AsyncClient) -> None:
     assert any(t["thread_id"] == thread_id for t in threads_list)
 
     # 3. Patch thread (rename)
-    res = await client.patch(f"/api/v1/threads/{thread_id}", json={"title": "Renamed Investigation"})
+    res = await client.patch(
+        f"/api/v1/threads/{thread_id}", json={"title": "Renamed Investigation"}
+    )
     assert res.status_code == 200
     assert res.json()["title"] == "Renamed Investigation"
 
     # 4. Post message Turn 1
     res = await client.post(
         f"/api/v1/threads/{thread_id}/messages",
-        json={"content": "Why did the outbox service fail to sync state to PostgreSQL for Alice Chen's team?"},
+        json={
+            "content": "Why did the outbox service fail to sync state to PostgreSQL for Alice Chen's team?"
+        },
     )
     assert res.status_code == 200
     turn1 = res.json()
@@ -79,7 +88,6 @@ async def test_threads_crud_and_messages(client: AsyncClient) -> None:
     assert turn1["trace_id"] is not None
     assert len(turn1["citations"]) > 0
     assert any(s["id"] == "condense" for s in turn1["pipeline_stages"])
-    asst_msg_id_1 = turn1["message_id"]
 
     # 5. Post message Turn 2 (with pronouns)
     res = await client.post(
