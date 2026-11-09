@@ -21,8 +21,11 @@ class Settings(BaseSettings):
     API_V1_PREFIX: str = "/api/v1"
 
     # PostgreSQL
+    # Host port 5433 by default so the Docker container can coexist with a
+    # native PostgreSQL install that already owns 5432. Keep this in sync with
+    # POSTGRES_PORT in infra/docker-compose.yml and .env.example.
     POSTGRES_HOST: str = "localhost"
-    POSTGRES_PORT: int = 5432
+    POSTGRES_PORT: int = 5433
     POSTGRES_USER: str = "postgres"
     POSTGRES_PASSWORD: str = "postgres"
     POSTGRES_DB: str = "graphrag_lab"

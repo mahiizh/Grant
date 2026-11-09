@@ -1,9 +1,11 @@
 import asyncio
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -23,6 +25,8 @@ from app.domain import (
     SourceTier,
     TemporalBounds,
 )
+
+logger = logging.getLogger(__name__)
 
 _engine: AsyncEngine | None = None
 _engine_loop: asyncio.AbstractEventLoop | None = None
@@ -73,10 +77,92 @@ def get_session_factory(engine: AsyncEngine | None = None) -> async_sessionmaker
 
 
 async def init_db(engine: AsyncEngine | None = None) -> None:
-    """Initialize database schema by creating all tables if not present."""
+    """Create every table directly from metadata (tests only).
+
+    Production schema changes must go through Alembic (`make migrate`); see
+    ``verify_schema`` for the startup guard.
+    """
     eng = engine or get_engine()
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
+
+def redacted_database_url(db_url: str | None = None) -> str:
+    """Return the resolved SQLAlchemy URL with the password hidden."""
+    return make_url(db_url or get_settings().database_url).render_as_string(hide_password=True)
+
+
+async def describe_database(engine: AsyncEngine | None = None) -> dict[str, Any]:
+    """Return the physical server identity behind the configured DATABASE_URL.
+
+    This is deliberately reported by the app, the ingestion CLI and the
+    reconciler so a mixed native/Docker PostgreSQL setup is visible instead of
+    silently writing to a different server.
+    """
+    eng = engine or get_engine()
+    async with eng.connect() as conn:
+        row = (
+            (
+                await conn.execute(
+                    text(
+                        "select current_database() as db, "
+                        "current_user as user_name, "
+                        "current_setting('data_directory') as data_directory, "
+                        "coalesce(host(inet_server_addr()), 'local') as server_addr, "
+                        "inet_server_port() as server_port"
+                    )
+                )
+            )
+            .mappings()
+            .one()
+        )
+    return {
+        "database_url": redacted_database_url(str(eng.url)),
+        "db": row["db"],
+        "user": row["user_name"],
+        "data_directory": row["data_directory"],
+        "server_addr": row["server_addr"],
+        "server_port": row["server_port"],
+    }
+
+
+def database_identity_lines(info: dict[str, Any]) -> tuple[str, str]:
+    """Render the two human-readable identity lines used by every entry point."""
+    url_line = f"Resolved DATABASE_URL: {info['database_url']}"
+    server_line = (
+        f"PostgreSQL server: {info['server_addr']}:{info['server_port']} "
+        f"| database={info['db']} | data_directory={info['data_directory']}"
+    )
+    return url_line, server_line
+
+
+async def announce_database_identity(engine: AsyncEngine | None = None) -> dict[str, Any]:
+    """Print and log the resolved DATABASE_URL and the server that answers it.
+
+    Used by the app lifespan, the ingestion CLI and the reconciler so all three
+    visibly agree on which PostgreSQL server they are writing to.
+    """
+    info = await describe_database(engine)
+    url_line, server_line = database_identity_lines(info)
+    print(url_line)
+    print(server_line)
+    logger.info("%s | %s", url_line, server_line)
+    return info
+    return info
+
+
+async def verify_schema(engine: AsyncEngine | None = None) -> None:
+    """Fail fast when Alembic migrations have not been applied."""
+    eng = engine or get_engine()
+    async with eng.connect() as conn:
+        version_table = (
+            await conn.execute(text("select to_regclass('public.alembic_version')"))
+        ).scalar()
+    if version_table is None:
+        raise RuntimeError(
+            "Database schema is not initialized: table 'alembic_version' is missing. "
+            "Run `make migrate` (Alembic) before starting the app, ingestion, or reconciler."
+        )
 
 
 @asynccontextmanager

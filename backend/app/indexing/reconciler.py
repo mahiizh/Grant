@@ -6,7 +6,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.db.models import ChunkRecord
-from app.db.postgres import get_session
+from app.db.postgres import announce_database_identity, get_session, verify_schema
 from app.indexing.neo4j_indexer import Neo4jIndexer
 from app.indexing.qdrant_indexer import QdrantIndexer
 
@@ -18,6 +18,9 @@ async def run_reconciliation(repair: bool = False) -> int:
     print("=" * 60)
     print("GraphRAG Multi-Store Storage Reconciler")
     print("=" * 60)
+
+    await announce_database_identity()
+    await verify_schema()
 
     # 1. Fetch from PostgreSQL
     async with get_session() as session:
@@ -62,7 +65,9 @@ async def run_reconciliation(repair: bool = False) -> int:
             return 0
 
         if not repair:
-            print("[WARNING] Drift detected! Run with `--repair` (or `make reconcile REPAIR=1`) to synchronize.")
+            print(
+                "[WARNING] Drift detected! Run with `--repair` (or `make reconcile REPAIR=1`) to synchronize."
+            )
             return 1
 
         # 5. Execute Repair
@@ -131,7 +136,9 @@ async def run_reconciliation(repair: bool = False) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Multi-store data consistency reconciler.")
-    parser.add_argument("--repair", action="store_true", help="Automatically repair any detected drift.")
+    parser.add_argument(
+        "--repair", action="store_true", help="Automatically repair any detected drift."
+    )
     args = parser.parse_args()
 
     exit_code = asyncio.run(run_reconciliation(repair=args.repair))

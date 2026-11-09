@@ -3,7 +3,7 @@ import logging
 import sys
 from pathlib import Path
 
-from app.db.postgres import get_session
+from app.db.postgres import announce_database_identity, get_session, verify_schema
 from app.indexing.neo4j_indexer import Neo4jIndexer
 from app.indexing.outbox_worker import OutboxWorker
 from app.indexing.qdrant_indexer import QdrantIndexer
@@ -21,6 +21,9 @@ async def run_corpus_ingestion(corpus_dir: str = "corpus") -> None:
     if not c_dir.exists():
         logger.error("Corpus directory not found at: %s", c_dir)
         sys.exit(1)
+
+    await announce_database_identity()
+    await verify_schema()
 
     md_files = sorted(c_dir.glob("*.md"))
     print("=" * 60)

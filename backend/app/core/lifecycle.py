@@ -7,7 +7,7 @@ from qdrant_client import AsyncQdrantClient, models
 from sqlalchemy import text
 
 from app.core.config import get_settings
-from app.db.postgres import get_engine, init_db
+from app.db.postgres import announce_database_identity, get_engine, verify_schema
 
 logger = logging.getLogger(__name__)
 
@@ -27,17 +27,24 @@ async def verify_infrastructure_live() -> None:
 
     # 1. Gemini API Key
     if not settings.GEMINI_API_KEY or not settings.GEMINI_API_KEY.strip():
-        raise RuntimeError("Startup failed: GEMINI_API_KEY is required in live mode (APP_ENV != 'test').")
+        raise RuntimeError(
+            "Startup failed: GEMINI_API_KEY is required in live mode (APP_ENV != 'test')."
+        )
 
     # 2. PostgreSQL
     try:
         engine = get_engine()
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-        await init_db(engine)
-        logger.info("PostgreSQL connection and schema verified.")
     except Exception as e:
-        raise RuntimeError(f"Startup failed: PostgreSQL is unreachable at {settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}: {e}") from e
+        raise RuntimeError(
+            f"Startup failed: PostgreSQL is unreachable at "
+            f"{settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}: {e}"
+        ) from e
+
+    await announce_database_identity(engine)
+    await verify_schema(engine)
+    logger.info("PostgreSQL connection and Alembic schema verified.")
 
     # 3. Qdrant
     try:
@@ -47,7 +54,11 @@ async def verify_infrastructure_live() -> None:
         )
         exists = await qdrant.collection_exists(settings.QDRANT_COLLECTION)
         if not exists:
-            logger.info("Creating Qdrant collection '%s' with %d-dim dense cosine vectors...", settings.QDRANT_COLLECTION, settings.EMBEDDING_DIM)
+            logger.info(
+                "Creating Qdrant collection '%s' with %d-dim dense cosine vectors...",
+                settings.QDRANT_COLLECTION,
+                settings.EMBEDDING_DIM,
+            )
             await qdrant.create_collection(
                 collection_name=settings.QDRANT_COLLECTION,
                 vectors_config={
@@ -56,9 +67,7 @@ async def verify_infrastructure_live() -> None:
                         distance=models.Distance.COSINE,
                     )
                 },
-                sparse_vectors_config={
-                    "sparse": models.SparseVectorParams()
-                },
+                sparse_vectors_config={"sparse": models.SparseVectorParams()},
             )
 
         info = await qdrant.get_collection(settings.QDRANT_COLLECTION)
@@ -72,7 +81,9 @@ async def verify_infrastructure_live() -> None:
         await qdrant.close()
         logger.info("Qdrant connection and collection schema (%d-dim) verified.", actual_dim)
     except Exception as e:
-        raise RuntimeError(f"Startup failed: Qdrant check failed at {settings.QDRANT_HOST}:{settings.QDRANT_PORT}: {e}") from e
+        raise RuntimeError(
+            f"Startup failed: Qdrant check failed at {settings.QDRANT_HOST}:{settings.QDRANT_PORT}: {e}"
+        ) from e
 
     # 4. Neo4j
     try:
@@ -88,7 +99,9 @@ async def verify_infrastructure_live() -> None:
         await driver.close()
         logger.info("Neo4j connection and Cypher ping verified.")
     except Exception as e:
-        raise RuntimeError(f"Startup failed: Neo4j is unreachable at {settings.NEO4J_URI}: {e}") from e
+        raise RuntimeError(
+            f"Startup failed: Neo4j is unreachable at {settings.NEO4J_URI}: {e}"
+        ) from e
 
     # 5. Redis
     try:
@@ -99,6 +112,8 @@ async def verify_infrastructure_live() -> None:
         await redis_client.aclose()
         logger.info("Redis connection and PING verified.")
     except Exception as e:
-        raise RuntimeError(f"Startup failed: Redis is unreachable at {settings.REDIS_HOST}:{settings.REDIS_PORT}: {e}") from e
+        raise RuntimeError(
+            f"Startup failed: Redis is unreachable at {settings.REDIS_HOST}:{settings.REDIS_PORT}: {e}"
+        ) from e
 
     logger.info("All live infrastructure checks PASSED.")

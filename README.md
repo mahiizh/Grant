@@ -315,6 +315,74 @@ The product is complete when all of these hold:
 - [ ] MS GraphRAG and LightRAG baselines are run on your corpus and compared
 - [ ] Each experiment has a write-up in `docs/experiments/`
 
+## Local setup
+
+### Prerequisites
+
+- Docker Desktop (or Docker Engine + Compose v2)
+- [`uv`](https://docs.astral.sh/uv/) for the Python backend
+- Node.js 20+ for the frontend
+
+Copy `.env.example` to `.env` and set the secrets you need (`GEMINI_API_KEY` may also live in
+`backend/.env`). Both files are git-ignored; only `.env.example` is tracked.
+
+### One PostgreSQL, and it must be the Docker one
+
+The whole stack (app, ingestion CLI, reconciler, Alembic) resolves `DATABASE_URL` from the same
+settings, and Docker Compose publishes PostgreSQL on **host port 5433 by default**. That port was
+chosen so the project's Docker Postgres can coexist with a native PostgreSQL installation that
+already owns the default 5432: both servers can run at the same time without either one shadowing
+the other. The host port is controlled by `POSTGRES_PORT`, which must agree in `.env`,
+`infra/docker-compose.yml`, and the backend defaults.
+
+A second PostgreSQL on the *same* port is still dangerous: one server can win IPv4 and another
+IPv6, and part of the stack silently writes to the wrong database. To prevent that, `make up` runs
+a preflight check and **fails** if the configured port is already served by anything that is not
+the project's Docker Postgres.
+
+If something else is listening on the configured port, stop it (or pick another free
+`POSTGRES_PORT`). You do **not** need to stop a native PostgreSQL on 5432 — that is the point of
+using 5433.
+
+**Windows (elevated PowerShell), only if the service owns the configured port:**
+
+```powershell
+Get-Service *postgres*
+Stop-Service <name>
+```
+
+**macOS:**
+
+```bash
+brew services stop postgresql@17
+```
+
+**Linux (systemd):**
+
+```bash
+sudo systemctl stop postgresql
+```
+
+### Bring-up
+
+```bash
+make up          # preflight + docker compose up -d --wait (Postgres, Qdrant, Neo4j, Redis)
+make migrate     # Alembic upgrade head; creates/updates the schema
+make ingest      # also runs migrate first
+make reconcile   # also runs migrate first; verifies Postgres/Qdrant/Neo4j consistency
+make dev         # also runs migrate first; starts the API on :8000
+```
+
+Alembic is the only way the production schema changes. The app, the ingestion CLI, and the
+reconciler all verify that `alembic_version` exists at startup and refuse to run if it does not,
+so a fresh clone must run `make migrate` (which the targets above do for you). Applying
+`Base.metadata.create_all` is reserved for the test suite.
+
+Each of those processes logs the resolved `DATABASE_URL` (password redacted) and the identity of
+the server that answers it (`inet_server_port`, `data_directory`), so it is obvious whether a run
+is talking to the Docker Postgres or to a stray native install. By default the URL is
+`postgresql+asyncpg://…@localhost:5433/graphrag_lab`.
+
 ## Sources
 
 - [When to use Graphs in RAG (GraphRAG-Bench), ICLR 2026](https://liner.com/review/when-to-use-graphs-in-rag-a-comprehensive-analysis-for)

@@ -10,6 +10,101 @@
 
 ---
 
+## 0. Remediation progress (post-audit)
+
+This section tracks the approved remediation sequence. It is appended as items land; the audit
+sections below remain the Step 0 evidence.
+
+| Item | Status | Evidence |
+| --- | --- | --- |
+| 0. Single Docker Postgres + Alembic | **Done** | Docker PG on host `5433`; `make up` port guard; Alembic revision `a9cf8318b733`; clean re-ingest + 0 drift |
+| 1. Tooling cleanup | Pending | — |
+| 2. Eval items 1–5 | Pending | — |
+| 3. ACL items 7–9 | Pending | — |
+| 4. Item 6 honest baseline | Pending | — |
+| 5. Items 11–13 | Pending | — |
+
+### Item 0 — one PostgreSQL, one schema authority
+
+**Port split (changed from the original "stop native PG17" plan, at the user's request).** The
+Docker Postgres publishes host port **5433** so it can run alongside the native PostgreSQL 17
+install that owns 5432. `POSTGRES_PORT` is the single knob and must agree in `.env`,
+`infra/docker-compose.yml`, and `backend/app/core/config.py`. This removes the IPv4/IPv6 shadowing
+that made clients hit different servers.
+
+Proof:
+
+```text
+make up
+  Checking PostgreSQL port 5433 for a non-Docker server...
+    127.0.0.1:5433 -> free
+    ::1:5433 -> free
+  OK: no conflicting PostgreSQL server on 5433.
+  graphrag-postgres ... 0.0.0.0:5433->5432/tcp, [::]:5433->5432/tcp
+```
+
+`make up` still fails closed: `backend/app/tools/preflight_postgres.py` connects to the configured
+port and refuses to start if the listener's `data_directory` is not `/var/lib/postgresql/...`
+(i.e. not the project's Docker server). Proven against native PG17 on 5432 before the port change.
+
+**Alembic is authoritative.** `backend/alembic/` + `backend/alembic.ini` were added. The initial
+migration `a9cf8318b733_initial_schema.py` creates `documents`, `outbox_events`, `spans`,
+`threads`, `chunks`, `messages` plus indexes. `make migrate` runs `alembic upgrade head`; `dev`,
+`ingest`, and `reconcile` depend on it. `init_db` / `create_all` is now tests-only.
+
+Proof (fresh Docker DB):
+
+```text
+make migrate
+  Running upgrade  -> a9cf8318b733, initial schema
+psql: alembic_version, chunks, documents, messages, outbox_events, spans, threads
+version=a9cf8318b733
+alembic check -> No new upgrade operations detected.
+downgrade base -> upgrade head -> exit 0
+```
+
+The app refuses to start without the migration. `backend/app/core/lifecycle.py` calls
+`verify_schema`, which checks `to_regclass('public.alembic_version')`; a DB created with
+`create_all` (e.g. the old native DB) raises:
+
+```text
+verify_schema raised: Database schema is not initialized: table 'alembic_version' is missing.
+Run `make migrate` (Alembic) before starting the app, ingestion, or reconciler.
+```
+
+**Clean re-ingest into Docker Postgres.** Qdrant collection, Neo4j data, and Redis were reset, then
+`make ingest` ran against the migrated Docker DB:
+
+```text
+Total Chunks: 45 | Qdrant Vectors: 45 | Neo4j Entity Nodes: 17 | Neo4j Relationship Edges: 95
+Outbox Worker processed 60 events successfully.
+```
+
+`make reconcile` then reported `45 chunks` in Postgres/Qdrant/Neo4j and **0 missing, 0 ghosts** in
+both stores.
+
+**Same resolved database in all three entry points.** The shared helper
+`announce_database_identity()` prints the redacted URL and the server identity; the app lifespan,
+the ingestion CLI, and the reconciler all call it:
+
+```text
+# ingestion CLI
+Resolved DATABASE_URL: postgresql+asyncpg://postgres:***@localhost:5433/graphrag_lab
+PostgreSQL server: 172.19.0.5:5432 | database=graphrag_lab | data_directory=/var/lib/postgresql/data
+
+# reconciler
+Resolved DATABASE_URL: postgresql+asyncpg://postgres:***@localhost:5433/graphrag_lab
+PostgreSQL server: 172.19.0.5:5432 | database=graphrag_lab | data_directory=/var/lib/postgresql/data
+
+# app lifespan
+Resolved DATABASE_URL: postgresql+asyncpg://postgres:***@localhost:5433/graphrag_lab
+PostgreSQL server: 172.19.0.5:5432 | database=graphrag_lab | data_directory=/var/lib/postgresql/data
+```
+
+`README.md` now documents the port split, the preflight guard, and the bring-up order.
+
+---
+
 ## 1. Repo hygiene and secrets
 
 | Check | Result | Proof |
@@ -445,6 +540,19 @@ The user's priorities are front-loaded. Each item is a small, independently veri
 - No threshold tuning to make the gate green.
 - No new UI features.
 - No new retrieval algorithms until the baseline is honest.
+
+---
+
+## 13. Known issues (tracked, not yet fixed)
+
+- **Query latency: ~9.9 s end-to-end** for the live `bob`/`scope=sre` answer (measured in Step 0,
+  §4.2). This is recorded, not optimized. Once tracing is real (per-stage spans with independent
+  timestamps), break the 9.9 s down by route, dense retrieval, sparse retrieval, graph traversal,
+  rerank, cache lookup, LLM generation, and serialization, then decide what to fix. Do not tune
+  latency before the baseline is honest.
+- **Docker Postgres host port is 5433**, while the native PostgreSQL 17 install may still own 5432.
+  This is intentional (coexistence). Any client that hardcodes 5432 is talking to the native
+  server, not the project database. `POSTGRES_PORT` is the single source of truth.
 
 ---
 

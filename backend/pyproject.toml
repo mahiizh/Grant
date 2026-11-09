@@ -4,6 +4,7 @@ version = "0.0.0"
 description = "Glass-box GraphRAG engine, teaching lab and benchmark harness"
 requires-python = ">=3.11"
 dependencies = [
+    "alembic>=1.13",
     "asyncpg>=0.30.0",
     "fastapi>=0.162.0",
     "fastembed>=0.9.1",

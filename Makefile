@@ -1,4 +1,9 @@
-.PHONY: help dev test test-unit test-gate lint format typecheck check up down logs ps clean frontend-dev frontend-build
+.PHONY: help dev migrate test test-unit test-gate lint format typecheck check up down logs ps clean frontend-dev frontend-build
+
+# Keep Compose and the backend on the same env file. Fall back to .env.example
+# so `make up` still works before the first `cp .env.example .env`.
+COMPOSE_ENV := $(if $(wildcard .env),.env,.env.example)
+COMPOSE := docker compose --env-file $(COMPOSE_ENV) -f infra/docker-compose.yml
 
 help:
 	@echo "Available commands:"
@@ -11,13 +16,14 @@ help:
 	@echo "  make format         - Run Ruff code formatter"
 	@echo "  make typecheck      - Run Mypy static type checker"
 	@echo "  make check          - Run all checks (lint, format-check, typecheck, test)"
-	@echo "  make up             - Start local infrastructure (Postgres, Qdrant, Neo4j, Redis)"
+	@echo "  make up             - Start local infrastructure (fails if POSTGRES_PORT is not Docker Postgres)"
+	@echo "  make migrate        - Apply Alembic migrations to PostgreSQL"
 	@echo "  make down           - Stop local infrastructure"
 	@echo "  make logs           - Tail docker infrastructure logs"
 	@echo "  make ps             - Show status of infrastructure containers"
 	@echo "  make clean          - Remove temporary and cache files"
 
-dev:
+dev: migrate
 	uv run --directory backend uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 frontend-dev:
@@ -41,10 +47,13 @@ test-int:
 worker:
 	uv run --directory backend python -m app.indexing.outbox_worker
 
-ingest:
+migrate:
+	uv run --directory backend alembic upgrade head
+
+ingest: migrate
 	uv run --directory backend python -m app.ingestion.cli
 
-reconcile:
+reconcile: migrate
 	uv run --directory backend python -m app.indexing.reconciler $(if $(REPAIR),--repair,)
 
 
@@ -61,16 +70,17 @@ check: lint typecheck test
 	uv run --directory backend ruff format --check app tests
 
 up:
-	docker compose -f infra/docker-compose.yml up -d
+	uv run --directory backend python -m app.tools.preflight_postgres
+	$(COMPOSE) up -d --wait
 
 down:
-	docker compose -f infra/docker-compose.yml down
+	$(COMPOSE) down
 
 logs:
-	docker compose -f infra/docker-compose.yml logs -f
+	$(COMPOSE) logs -f
 
 ps:
-	docker compose -f infra/docker-compose.yml ps
+	$(COMPOSE) ps
 
 clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} +
