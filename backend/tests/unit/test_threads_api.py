@@ -1,5 +1,4 @@
 from collections.abc import AsyncGenerator
-from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -8,8 +7,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from app.api.routes import query as query_route
 from app.db.models import Base
 from app.db.postgres import get_db_session
-from app.evaluation.runner import EvaluationRunner
 from app.main import app
+from tests.fakes.hermetic import build_hermetic_orchestrator, load_corpus_chunks
 
 
 @pytest.fixture
@@ -32,12 +31,7 @@ async def client(test_session: AsyncSession) -> AsyncGenerator[AsyncClient, None
 
     app.dependency_overrides[get_db_session] = override_get_db
 
-    repo_root = Path(__file__).resolve().parents[3]
-    corpus_dir = repo_root / "corpus"
-    orchestrator = await EvaluationRunner.setup_corpus_and_orchestrator(
-        session=test_session,
-        corpus_dir=corpus_dir,
-    )
+    orchestrator = build_hermetic_orchestrator(load_corpus_chunks())[0]
     query_route.set_orchestrator(orchestrator)
 
     transport = ASGITransport(app=app)

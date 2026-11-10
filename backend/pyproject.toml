@@ -60,9 +60,10 @@ no_implicit_optional = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q"
+addopts = "-q -m 'not live'"
 markers = [
     "integration: requires live containers",
     "eval: golden-set evaluation",
     "security: ACL leak and prompt-injection tests",
+    "live: requires a live LLM provider and API quota (opt in with -m live)",
 ]

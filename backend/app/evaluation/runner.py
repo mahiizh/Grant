@@ -1,15 +1,14 @@
+import asyncio
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
-
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cache.exact import ExactCache
 from app.cache.semantic import SemanticCache
 from app.core.acl import ACLScope
-from app.domain import Answer, Evidence, Provenance
-from app.evaluation.datasets import GoldenDataset
+from app.core.config import get_settings
+from app.evaluation.datasets import GoldenDataset, GoldenQuestion, SplitType
 from app.evaluation.retrieval_metrics import (
+    hit_rate_at_k,
     ndcg_at_k,
     precision_at_k,
     recall_at_k,
@@ -17,85 +16,160 @@ from app.evaluation.retrieval_metrics import (
 )
 from app.evaluation.router_regret import evaluate_router_decisions
 from app.graph.retrievers import GraphRetriever
-from app.llm.gateway import ModelGateway
+from app.llm.gateway import BudgetExceededError, ModelGateway
+from app.orchestration.state import RAGState
 from app.orchestration.workflow import RAGOrchestrator
 from app.retrieval.hybrid import HybridRetriever
 
 
 @dataclass
 class BenchmarkReport:
-    """Consolidated benchmark results across all 5 evaluation categories."""
+    """Consolidated benchmark results across the evaluation categories."""
 
     total_questions: int
     overall_router_accuracy: float
+    split: str = "all"
     category_scores: dict[str, dict[str, float]] = field(default_factory=dict)
+    category_operational: dict[str, dict[str, float]] = field(default_factory=dict)
+    per_question: list[dict[str, Any]] = field(default_factory=list)
+    total_cost_usd: float = 0.0
+    budget_usd: float = 0.0
+    cache_hit_rate: float = 0.0
     summary: dict[str, Any] = field(default_factory=dict)
 
 
 class EvaluationRunner:
     """Executes the benchmark suite against the GraphRAG orchestrator and scores IR metrics."""
 
-    def __init__(self, orchestrator: RAGOrchestrator | None = None) -> None:
+    def __init__(
+        self,
+        orchestrator: RAGOrchestrator | None = None,
+        budget_usd: float | None = None,
+        concurrency: int | None = None,
+    ) -> None:
         self.orchestrator = orchestrator or RAGOrchestrator()
+        settings = get_settings()
+        self.budget_usd = budget_usd if budget_usd is not None else settings.LLM_MAX_BUDGET_PER_RUN
+        self.concurrency = max(
+            1, concurrency if concurrency is not None else settings.EVAL_CONCURRENCY
+        )
 
     @classmethod
-    async def setup_corpus_and_orchestrator(
-        cls,
-        session: AsyncSession,
-        corpus_dir: Path | str,
-    ) -> RAGOrchestrator:
-        """Initialize production retrievers, graphs, and caches connected to stores."""
-        hybrid = HybridRetriever()
-        graph = GraphRetriever()
-        exact_cache = ExactCache()
-        exact_cache.clear()
-        semantic_cache = SemanticCache(similarity_threshold=0.75)
-        semantic_cache.clear()
+    def build_production_orchestrator(cls) -> RAGOrchestrator:
+        """Build the live orchestrator.
 
-        # Pre-warm target incident query for eval_paraphrase_003a
-        q_parent_3 = "When was incident INC-2026-04?"
-        ans_3 = Answer(
-            query=q_parent_3,
-            answer="The incident occurred on April 12, 2026 between 14:10 and 15:35 UTC.",
-            evidence=[
-                Evidence(
-                    chunk_id="chk_postmortem_inc_2026_04_01",
-                    doc_id="doc_postmortem_inc_04",
-                    text=(
-                        "On April 12, 2026, between 14:10 and 15:35 UTC, "
-                        "customers experienced a 24% failure rate"
-                    ),
-                    score=1.0,
-                    retrieval_method="hybrid",
-                    provenance=Provenance.from_document("corpus/postmortem_inc_2026_04.md"),
-                )
-            ],
-        )
-        exact_cache.set(q_parent_3, ans_3, ACLScope.public())
-        semantic_cache.set(q_parent_3, ans_3, ACLScope.public())
-
+        Caches are deliberately *not* pre-seeded. The eval CLI clears them at the
+        start of a run so every answer is earned by the pipeline under test.
+        """
         return RAGOrchestrator(
-            hybrid_retriever=hybrid,
-            graph_retriever=graph,
-            exact_cache=exact_cache,
-            semantic_cache=semantic_cache,
-            model_gateway=ModelGateway(),
+            hybrid_retriever=HybridRetriever(),
+            graph_retriever=GraphRetriever(),
+            exact_cache=ExactCache(),
+            semantic_cache=SemanticCache(similarity_threshold=0.75),
+            model_gateway=ModelGateway(max_budget_per_run=get_settings().LLM_MAX_BUDGET_PER_RUN),
         )
+
+    @staticmethod
+    def _ordered_waves(questions: list[GoldenQuestion]) -> list[list[GoldenQuestion]]:
+        """Group questions into dependency waves so parents run before paraphrases."""
+        by_id = {q.id: q for q in questions}
+        remaining = dict(by_id)
+        completed: set[str] = set()
+        waves: list[list[GoldenQuestion]] = []
+
+        while remaining:
+            wave = [
+                q
+                for q in remaining.values()
+                if all(dep in completed or dep not in by_id for dep in q.depends_on)
+            ]
+            if not wave:
+                unresolved = ", ".join(sorted(remaining))
+                raise ValueError(f"Unresolved or cyclic golden dependencies: {unresolved}")
+            waves.append(wave)
+            for q in wave:
+                remaining.pop(q.id)
+                completed.add(q.id)
+
+        return waves
+
+    @staticmethod
+    def _rewrite_accuracy(question: GoldenQuestion, rewritten: str) -> float:
+        if question.category != "multi_turn":
+            return 0.0
+        if not question.expected_entities:
+            return 1.0
+        lowered = rewritten.lower()
+        return 1.0 if all(ent.lower() in lowered for ent in question.expected_entities) else 0.0
+
+    @staticmethod
+    def _score_question(
+        question: GoldenQuestion,
+        state: RAGState,
+    ) -> dict[str, Any]:
+        evidence = state.get("evidence", [])
+        retrieved_chunk_ids = [ev.chunk_id for ev in evidence]
+        retrieved_doc_ids = list(dict.fromkeys(ev.doc_id for ev in evidence))
+
+        target_chunks = set(question.expected_chunk_ids)
+        target_docs = set(question.expected_doc_ids)
+
+        chunk_metrics = {
+            "chunk_recall@1": recall_at_k(retrieved_chunk_ids, target_chunks, 1),
+            "chunk_recall@3": recall_at_k(retrieved_chunk_ids, target_chunks, 3),
+            "chunk_recall@5": recall_at_k(retrieved_chunk_ids, target_chunks, 5),
+            "chunk_precision@1": precision_at_k(retrieved_chunk_ids, target_chunks, 1),
+            "chunk_ndcg@5": ndcg_at_k(retrieved_chunk_ids, target_chunks, 5),
+            "chunk_ndcg@10": ndcg_at_k(retrieved_chunk_ids, target_chunks, 10),
+            "chunk_mrr": reciprocal_rank(retrieved_chunk_ids, target_chunks),
+            "chunk_hit_rate@5": hit_rate_at_k(retrieved_chunk_ids, target_chunks, 5),
+        }
+        doc_metrics = {
+            "doc_recall@3": recall_at_k(retrieved_doc_ids, target_docs, 3),
+            "doc_ndcg@10": ndcg_at_k(retrieved_doc_ids, target_docs, 10),
+            "doc_mrr": reciprocal_rank(retrieved_doc_ids, target_docs),
+        }
+
+        rewritten = state.get("rewritten_query", question.query)
+        operational = {
+            "latency_ms": float(state.get("latency_ms", 0.0)),
+            "cost_usd": float(state.get("cost_usd", 0.0)),
+            "is_cached": 1.0 if state.get("is_cached", False) else 0.0,
+            "is_abstention": 1.0 if state.get("is_abstention", False) else 0.0,
+            "citations_valid": 1.0 if state.get("citations_valid", False) else 0.0,
+            "rewrite_accuracy": EvaluationRunner._rewrite_accuracy(question, rewritten),
+        }
+
+        return {
+            "id": question.id,
+            "category": question.category,
+            "split": question.split,
+            "route": state.get("route", "vector"),
+            "optimal_strategy": question.optimal_strategy,
+            "rewritten_query": rewritten,
+            "retrieved_chunk_ids": retrieved_chunk_ids,
+            "retrieved_doc_ids": retrieved_doc_ids,
+            "expected_chunk_ids": sorted(target_chunks),
+            "expected_doc_ids": sorted(target_docs),
+            "chunk_metrics": chunk_metrics,
+            "doc_metrics": doc_metrics,
+            "operational": operational,
+        }
 
     async def run_benchmark(
         self,
         dataset: GoldenDataset,
+        split: SplitType | None = None,
     ) -> BenchmarkReport:
-        """Execute all golden questions and compute IR metrics and router accuracy."""
-        router_predictions: list[tuple[str, str]] = []
-        category_metrics: dict[str, list[dict[str, float]]] = {
-            "fact": [],
-            "multi_hop": [],
-            "global": [],
-            "unanswerable": [],
-            "paraphrase": [],
-            "multi_turn": [],
-        }
+        """Execute the golden questions and compute chunk-level IR metrics per category."""
+        selected = dataset.filter_by_split(split) if split else dataset
+        questions = selected.questions
+        if not questions:
+            raise ValueError(f"No golden questions selected for split={split!r}")
+
+        gateway = self.orchestrator.gateway
+        gateway.max_run_budget = self.budget_usd
+        gateway.reset_usage()
 
         admin_scope = ACLScope.restricted(
             allowed_roles={
@@ -109,99 +183,103 @@ class EvaluationRunner:
             allowed_groups={"platform-admins"},
         )
 
-        for q in dataset.questions:
-            if q.category == "multi_turn":
-                state = await self.orchestrator.run(
-                    query=q.query, thread_history=q.thread_turns, acl_scope=admin_scope
-                )
-                predicted_route = state.get("route", "vector")
-                router_predictions.append((predicted_route, q.optimal_strategy))
+        router_predictions: list[tuple[str, str]] = []
+        per_question: list[dict[str, Any]] = []
+        semaphore = asyncio.Semaphore(self.concurrency)
 
-                rewritten = state.get("rewritten_query", q.query).lower()
-                is_accurate = (
-                    1.0
-                    if (
-                        not q.expected_entities
-                        or any(ent.lower() in rewritten for ent in q.expected_entities)
+        async def run_one(question: GoldenQuestion) -> dict[str, Any]:
+            async with semaphore:
+                if gateway.total_spent_usd >= self.budget_usd:
+                    raise BudgetExceededError(
+                        f"Run budget ${self.budget_usd:.4f} exhausted before question "
+                        f"{question.id} (spent ${gateway.total_spent_usd:.6f})"
                     )
-                    else 0.0
+                state = await self.orchestrator.run(
+                    query=question.query,
+                    thread_history=question.thread_turns,
+                    acl_scope=admin_scope,
                 )
-                category_metrics["multi_turn"].append(
-                    {
-                        "rewrite_accuracy": is_accurate,
-                        "latency_ms": state.get("latency_ms", 0.0),
-                    }
-                )
-                continue
+                return self._score_question(question, state)
 
-            state = await self.orchestrator.run(query=q.query, acl_scope=admin_scope)
-            predicted_route = state.get("route", "vector")
-            router_predictions.append((predicted_route, q.optimal_strategy))
+        for wave in self._ordered_waves(questions):
+            results = await asyncio.gather(*(run_one(q) for q in wave))
+            per_question.extend(results)
 
-            # Evaluate based on category
-            if q.category == "unanswerable":
-                # Success is 1.0 if system correctly abstained, else 0.0
-                is_correct_abstention = 1.0 if state.get("is_abstention", False) else 0.0
-                category_metrics["unanswerable"].append(
-                    {
-                        "abstention_rate": is_correct_abstention,
-                        "cost_usd": state.get("cost_usd", 0.0),
-                    }
-                )
+        # Preserve dataset order in the report even though waves ran concurrently.
+        order = {q.id: index for index, q in enumerate(questions)}
+        per_question.sort(key=lambda row: order[row["id"]])
 
-            elif q.category in ("paraphrase", "cache"):
-                # Success is 1.0 if served from cache
-                is_cached = 1.0 if state.get("is_cached", False) else 0.0
-                category_metrics["paraphrase"].append(
-                    {
-                        "cache_hit_rate": is_cached,
-                        "latency_ms": state.get("latency_ms", 0.0),
-                    }
-                )
+        for row in per_question:
+            router_predictions.append((row["route"], row["optimal_strategy"]))
 
-            else:
-                # Information Retrieval scoring (fact, multi_hop, global)
-                retrieved_docs = [ev.doc_id for ev in state.get("evidence", [])]
+        category_scores: dict[str, dict[str, float]] = {}
+        category_operational: dict[str, dict[str, float]] = {}
+        for row in per_question:
+            category = row["category"]
+            category_scores.setdefault(category, {}).setdefault("_count", 0.0)
+            category_operational.setdefault(category, {}).setdefault("_count", 0.0)
 
-                target_docs = set(q.expected_doc_ids)
-                # Compute Recall, Precision, nDCG on doc retrieval
-                r_at_1 = recall_at_k(retrieved_docs, target_docs, k=1)
-                r_at_3 = recall_at_k(retrieved_docs, target_docs, k=3)
-                p_at_1 = precision_at_k(retrieved_docs, target_docs, k=1)
-                ndcg_1 = ndcg_at_k(retrieved_docs, target_docs, k=1)
-                mrr = reciprocal_rank(retrieved_docs, target_docs)
+        for row in per_question:
+            category = row["category"]
+            metrics = {**row["chunk_metrics"], **row["doc_metrics"]}
+            operational = dict(row["operational"])
+            if category == "unanswerable":
+                metrics["abstention_rate"] = operational["is_abstention"]
+            if category == "paraphrase":
+                metrics["cache_hit_rate"] = operational["is_cached"]
+            if category == "multi_turn":
+                metrics["rewrite_accuracy"] = operational["rewrite_accuracy"]
 
-                category_metrics[q.category].append(
-                    {
-                        "recall@1": r_at_1,
-                        "recall@3": r_at_3,
-                        "precision@1": p_at_1,
-                        "ndcg@1": ndcg_1,
-                        "mrr": mrr,
-                    }
-                )
+            scores = category_scores[category]
+            for name, value in metrics.items():
+                scores[name] = scores.get(name, 0.0) + value
+            scores["_count"] += 1
 
-        # Compute Category Means
-        summary_scores: dict[str, dict[str, float]] = {}
-        for cat, metric_list in category_metrics.items():
-            if not metric_list:
-                continue
-            cat_summary: dict[str, float] = {}
-            keys = metric_list[0].keys()
-            for k in keys:
-                cat_summary[k] = round(sum(m[k] for m in metric_list) / len(metric_list), 4)
-            summary_scores[cat] = cat_summary
+            ops = category_operational[category]
+            for name, value in operational.items():
+                ops[name] = ops.get(name, 0.0) + value
+            ops["_count"] += 1
 
-        # Router Report
+        def finalize(groups: dict[str, dict[str, float]]) -> dict[str, dict[str, float]]:
+            finalized: dict[str, dict[str, float]] = {}
+            for category, values in groups.items():
+                count = values["_count"]
+                finalized[category] = {
+                    name: round(total / count, 4)
+                    for name, total in values.items()
+                    if name != "_count"
+                }
+            return finalized
+
+        category_scores = finalize(category_scores)
+        category_operational = finalize(category_operational)
+
         router_report = evaluate_router_decisions(router_predictions)
+        total = len(per_question)
+        cache_hits = sum(row["operational"]["is_cached"] for row in per_question)
+        cache_hit_rate = round(cache_hits / total, 4) if total else 0.0
+        total_cost = gateway.total_spent_usd
 
         return BenchmarkReport(
-            total_questions=len(dataset),
+            total_questions=total,
             overall_router_accuracy=router_report.accuracy,
-            category_scores=summary_scores,
+            split=split or "all",
+            category_scores=category_scores,
+            category_operational=category_operational,
+            per_question=per_question,
+            total_cost_usd=total_cost,
+            budget_usd=self.budget_usd,
+            cache_hit_rate=cache_hit_rate,
             summary={
+                "split": split or "all",
                 "router_accuracy": router_report.accuracy,
                 "strategy_distribution": router_report.strategy_distribution,
-                "category_scores": summary_scores,
+                "category_scores": category_scores,
+                "category_operational": category_operational,
+                "total_cost_usd": total_cost,
+                "budget_usd": self.budget_usd,
+                "cache_hit_rate": cache_hit_rate,
+                "gateway_calls": gateway.total_calls,
+                "gateway_cache_hits": gateway.cache_hits,
             },
         )

@@ -36,6 +36,7 @@ build/
 
 # Model / embedding caches
 .cache/
+.llm_cache/
 fastembed_cache/
 hf_cache/
 *.onnx

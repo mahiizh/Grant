@@ -19,7 +19,7 @@ sections below remain the Step 0 evidence.
 | --- | --- | --- |
 | 0. Single Docker Postgres + Alembic | **Done** | Docker PG on host `5433`; `make up` port guard; Alembic revision `a9cf8318b733`; clean re-ingest + 0 drift |
 | 1. Tooling cleanup | **Done** | `ruff check` + `ruff format` + `mypy` clean; eval writes redirected to temp dirs; `.env.example` updated |
-| 2. Eval items 1–5 | Pending | — |
+| 2. Eval items 1–5 | **Done** | Grounded 30-row dev/test golden set; chunk-level metrics per category; isolated clean-ingest `make eval`; hermetic gate; 65 tests pass |
 | 3. ACL items 7–9 | Pending | — |
 | 4. Item 6 honest baseline | Pending | — |
 | 5. Items 11–13 | Pending | — |
@@ -145,6 +145,111 @@ after building the hermetic fake.
 > Note: the harness process environment sets `POSTGRES_PORT=5432` (native PG17). Clear
 > `POSTGRES_*` before verification runs so the `.env` values for Docker on 5433 win:
 > `Remove-Item Env:POSTGRES_PORT,Env:POSTGRES_DB,Env:POSTGRES_USER,Env:POSTGRES_PASSWORD,Env:POSTGRES_HOST`.
+
+---
+
+### Item 2 — evaluation items 1–5 (honest measurement machinery)
+
+Scope delivered: (1) isolated clean ingest + `make eval`; (2) real chunk ids and chunk-level
+recall/precision/nDCG/MRR per category in the API and CI; (3) dev/test split; (4) hermetic tests
+with a model fake and `LIVE_LLM=1` opt-in; (5) `multi_turn.jsonl` included and every golden
+`expected_chunk_ids` asserted to exist after ingest. No thresholds were tuned.
+
+**Golden data is grounded in the corpus, not fabricated.** `evals/golden/questions.jsonl` has 20
+rows (10 dev / 10 test) and `multi_turn.jsonl` has 10 rows (5 dev / 5 test). Every
+`expected_chunk_ids` value is a real chunk id produced by `parse_markdown` +
+`chunk_parsed_document` over `corpus/`. `evals/golden/README.md` documents the split, provenance,
+chunk-id format (`chk_{doc_id}_{index:04d}_{sha256(text)[:10]}`), dependency rules, and non-goals.
+
+**The dataset model understands splits and dependencies.** `backend/app/evaluation/datasets.py`
+adds `split`, `depends_on`, `load_from_dir`, `filter_by_split`, `missing_chunk_ids`, `splits`, and
+`split_summary`. Paraphrase rows declare the parent they paraphrase; the runner executes the parent
+first in the same orchestrator so the cache is populated naturally and never pre-seeded.
+
+**The runner reports chunk-level IR metrics per category.** `backend/app/evaluation/runner.py`
+reports `chunk_recall@1/3/5`, `chunk_precision@1`, `chunk_ndcg@5/10`, `chunk_mrr`,
+`chunk_hit_rate@5`, `doc_recall@3`, `doc_ndcg@10`, `doc_mrr`, plus operational latency/cost,
+cache-hit, abstention, citation validity, and multi-turn rewrite accuracy. Concurrency defaults to
+`EVAL_CONCURRENCY=2`, questions run in dependency waves, and the run is capped by
+`LLM_MAX_BUDGET_PER_RUN` with total cost reported.
+
+**The gateway is resilient and cheap to re-run.** `backend/app/llm/gateway.py` adds exponential
+backoff with jitter for 429/5xx/timeout, an on-disk cache keyed by model/prompt/system/max_tokens/
+temperature, a per-run budget, and `reset_usage()`. Cache hits cost `$0` in the run and are
+reported as `cached=True`; the stored original cost is preserved in the cache file only.
+
+**Tests are hermetic and live calls are opt-in.** `backend/tests/fakes/fake_gateway.py` synthesizes
+deterministic cited answers from the wrapped `<source_chunk>` context; `backend/tests/fakes/hermetic.py`
+reproduces the 15-document / 45-chunk corpus in memory; `backend/tests/fakes/in_memory_cache.py`
+now uses embedding similarity plus `validate_cache_hit`. `backend/pyproject.toml` sets
+`addopts = "-q -m 'not live'"` and registers the `live` marker, so `pytest -m live` is the only way
+to hit a provider. `backend/tests/conftest.py` sets `APP_ENV=test`, `GEMINI_API_KEY=""`, a temp
+`LLM_CACHE_DIR`, and temp golden/candidate dirs before importing the app.
+
+**`make eval` runs a clean, isolated ingest.** `backend/app/tools/eval_cli.py` overrides
+`POSTGRES_DB`/`QDRANT_COLLECTION` from `EVAL_POSTGRES_DB`/`EVAL_QDRANT_COLLECTION` before importing
+app modules, refuses to run if either resolves to the developer store, recreates the eval database,
+applies Alembic, resets the eval Qdrant collection, ingests the corpus, drains the outbox, verifies
+counts, validates every golden chunk id, clears both caches, and scores the requested split.
+
+Honest live baseline (`make eval`, test split, first run, cache empty):
+
+```text
+Eval PostgreSQL database: graphrag_lab_eval
+Eval Qdrant collection:   grant_chunks_eval
+Recreated eval database 'graphrag_lab_eval'.
+Reset eval Qdrant collection 'grant_chunks_eval'.
+Resolved DATABASE_URL: postgresql+asyncpg://postgres:***@localhost:5433/graphrag_lab_eval
+PostgreSQL server: 172.19.0.5:5432 | database=graphrag_lab_eval | data_directory=/var/lib/postgresql/data
+Ingested 15 documents; outbox processed 60 events.
+PostgreSQL documents: 15
+PostgreSQL chunks:    45
+Qdrant vectors:       45
+Golden dataset: 30 rows ({'dev': 15, 'test': 15, 'total': 30}), categories=['fact', 'global', 'multi_hop', 'multi_turn', 'paraphrase', 'unanswerable']
+
+Golden evaluation report (split=test)
+Questions:        15
+Router accuracy:  0.6667
+Cache hit rate:   0.1333
+Total cost:       $0.005414 / budget $0.5000
+
+category       n  chunk_r@5  chunk_ndcg@10  chunk_mrr   hit@5  doc_ndcg@10  latency_ms  cost_usd
+fact           3      1.000          0.877      0.833   1.000        0.877      9092.8  0.000400
+global         1      1.000          1.000      1.000   1.000        1.000     10288.1  0.000700
+multi_hop      2      1.000          0.597      0.417   1.000        0.693      8459.1  0.000400
+multi_turn     5      0.700          0.514      0.467   0.800        0.984     22152.9  0.000500
+paraphrase     2      1.000          0.816      0.750   1.000        0.816        28.4  0.000000
+unanswerable   2      1.000          1.000      1.000   1.000        1.000         3.2  0.000000
+```
+
+Safety/structural values from the same run: `unanswerable.abstention_rate = 1.0`,
+`paraphrase.cache_hit_rate = 1.0` (both test paraphrases hit the naturally-populated cache),
+`multi_turn.rewrite_accuracy = 0.8`. Re-running `make eval` with the cache warm costs `$0.000000`
+and drops per-question latency to sub-second, proving the disk cache works. The ~9s single-turn
+latency seen here is the already-tracked known issue; it is not optimized in this item.
+
+**Verification:**
+
+```text
+uv run --directory backend ruff check app tests   -> All checks passed!
+uv run --directory backend ruff format app tests  -> 117 files left unchanged
+uv run --directory backend mypy app tests         -> Success: no issues found in 117 source files
+uv run --directory backend pytest                 -> 65 passed in 7.53s
+pytest tests/eval_gate/test_eval_gate.py -s -v    -> 2 passed in 0.22s
+```
+
+The CI gate is hermetic and asserts structure, not tuned quality: all 30 rows load, the split is
+15/15, all six categories are present, every `expected_chunk_ids` exists, `multi_turn.jsonl` is
+included, paraphrase rows have `depends_on`, caches start empty, chunk-level metrics exist per
+category, `unanswerable.abstention_rate == 1.0`, and `multi_turn.rewrite_accuracy >= 0.8`.
+
+Hermeticity proof: after the full suite and live `make eval`, the tracked candidate file is
+unchanged (`SHA256 B289709FB1E2ED52AEB5EB9A6A019FF2DEB46837E0250FED6AF53E28423AEDAB`), and
+`git status --short evals/` shows only the intentional golden edits. Eval output goes to the temp
+JSON path when requested, and the LLM cache lives in gitignored `.llm_cache/`.
+
+> Known and deliberately not tuned here: router accuracy `0.6667`, multi-hop `chunk_ndcg@10 0.597`,
+> and multi-turn `rewrite_accuracy 0.8` are the honest baseline for item 6.
 
 ---
 

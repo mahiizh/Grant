@@ -1,4 +1,4 @@
-.PHONY: help dev migrate test test-unit test-gate lint format typecheck check up down logs ps clean frontend-dev frontend-build
+.PHONY: help dev migrate test test-unit test-gate eval lint format typecheck check up down logs ps clean frontend-dev frontend-build
 
 # Keep Compose and the backend on the same env file. Fall back to .env.example
 # so `make up` still works before the first `cp .env.example .env`.
@@ -12,6 +12,7 @@ help:
 	@echo "  make frontend-build - Build production frontend bundle"
 	@echo "  make test           - Run all unit and CI eval gate tests"
 	@echo "  make test-gate      - Run CI evaluation gate against golden dataset"
+	@echo "  make eval           - Clean-ingest into an isolated DB/collection and score the golden test split"
 	@echo "  make lint           - Run Ruff linter"
 	@echo "  make format         - Run Ruff code formatter"
 	@echo "  make typecheck      - Run Mypy static type checker"
@@ -55,6 +56,15 @@ ingest: migrate
 
 reconcile: migrate
 	uv run --directory backend python -m app.indexing.reconciler $(if $(REPAIR),--repair,)
+
+# Isolated evaluation: dedicated PostgreSQL DB + Qdrant collection, clean ingest,
+# then the golden test split. Extra flags: SPLIT=dev|test|all BUDGET_USD=0.50
+eval:
+	uv run --directory backend python -m app.tools.eval_cli \
+		--split $(or $(SPLIT),test) \
+		$(if $(BUDGET_USD),--budget-usd $(BUDGET_USD),) \
+		$(if $(CONCURRENCY),--concurrency $(CONCURRENCY),) \
+		$(if $(JSON_REPORT),--json-report $(JSON_REPORT),)
 
 
 lint:

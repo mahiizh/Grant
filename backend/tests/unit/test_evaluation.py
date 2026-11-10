@@ -112,18 +112,18 @@ def test_load_golden_dataset() -> None:
     # Verify summary
     summary = dataset.summary()
     assert summary["total"] == 20
-    assert summary["fact"] == 5
-    assert summary["multi_hop"] == 5
+    assert summary["fact"] == 6
+    assert summary["multi_hop"] == 4
     assert summary["global"] == 2
-    assert summary["unanswerable"] == 3
-    assert summary["paraphrase"] == 5
+    assert summary["unanswerable"] == 4
+    assert summary["paraphrase"] == 4
 
     # Verify specific lookup
-    q = dataset.get_by_id("eval_multihop_001")
+    q = dataset.get_by_id("multi_hop_001")
     assert isinstance(q, GoldenQuestion)
     assert q.category == "multi_hop"
     assert q.optimal_strategy == "graph"
-    assert q.expected_path is not None
+    assert q.expected_path is None
     assert len(q.expected_doc_ids) >= 2
 
 

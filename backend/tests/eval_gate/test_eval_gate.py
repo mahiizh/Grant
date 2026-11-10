@@ -1,78 +1,111 @@
-from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.db.models import Base
-from app.evaluation import EvaluationRunner, GoldenDataset
+from app.core.config import get_settings
+from app.evaluation.datasets import GoldenDataset
+from app.evaluation.runner import EvaluationRunner
+from tests.fakes.hermetic import (
+    REPO_ROOT,
+    build_hermetic_orchestrator,
+    load_corpus_chunks,
+)
 
 
-@pytest.fixture
-async def test_session() -> AsyncGenerator[AsyncSession, None]:
-    """Provide an isolated, in-memory SQLite database session."""
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
-    async with factory() as session:
-        yield session
-
-    await engine.dispose()
+def _golden_dir() -> Path:
+    configured = get_settings().EVAL_GOLDEN_DIR
+    return Path(configured) if configured else REPO_ROOT / "evals" / "golden"
 
 
 @pytest.mark.anyio
-async def test_golden_benchmark_ci_eval_gate(test_session: AsyncSession) -> None:
-    """CI Evaluation Gate: Enforces quality, recall, and safety thresholds on the golden dataset.
+async def test_golden_dataset_is_grounded_and_complete() -> None:
+    """Every golden row must point at a real chunk id produced by the corpus."""
+    chunks = load_corpus_chunks()
+    chunk_ids = {chunk.chunk_id for chunk in chunks}
+    dataset = GoldenDataset.load_from_dir(_golden_dir())
 
-    Fails the build if retrieval accuracy or unanswerable abstention degrades.
-    """
-    repo_root = Path(__file__).resolve().parents[3]
-    corpus_dir = repo_root / "corpus"
-    golden_file = repo_root / "evals" / "golden" / "questions.jsonl"
+    assert len(dataset) == 30, dataset.summary()
+    assert dataset.splits == {"dev", "test"}
+    assert dataset.split_summary()["dev"] == 15
+    assert dataset.split_summary()["test"] == 15
+    assert dataset.categories == {
+        "fact",
+        "multi_hop",
+        "global",
+        "unanswerable",
+        "paraphrase",
+        "multi_turn",
+    }
+    # multi_turn.jsonl is included, not excluded.
+    assert len(dataset.filter_by_category("multi_turn")) == 10
 
-    assert golden_file.exists(), f"Golden dataset missing at {golden_file}"
+    missing = dataset.missing_chunk_ids(chunk_ids)
+    assert not missing, f"Golden rows reference chunks that do not exist: {missing}"
 
-    # 1. Setup Corpus, Ingestion, and Orchestrator
-    orchestrator = await EvaluationRunner.setup_corpus_and_orchestrator(
-        session=test_session,
-        corpus_dir=corpus_dir,
-    )
-    await test_session.flush()
+    # Paraphrase rows must declare the parent they depend on.
+    for question in dataset.filter_by_category("paraphrase"):
+        assert question.depends_on, f"{question.id} has no depends_on parent"
 
-    # 2. Load the 20-Question Golden Benchmark
-    dataset = GoldenDataset.load_from_jsonl(golden_file)
-    assert len(dataset) == 20
 
-    # 3. Run Benchmark
-    runner = EvaluationRunner(orchestrator=orchestrator)
-    report = await runner.run_benchmark(dataset)
+@pytest.mark.anyio
+async def test_hermetic_eval_gate_reports_chunk_level_metrics() -> None:
+    """CI gate: hermetic, no network, chunk-level metrics per category."""
+    dataset = GoldenDataset.load_from_dir(_golden_dir())
+    orchestrator, chunks = build_hermetic_orchestrator(load_corpus_chunks())
 
-    scores = report.category_scores
+    # No cache pre-seeding: the pipeline must earn every cache entry.
+    assert orchestrator.exact_cache.stats["entries"] == 0
+    assert orchestrator.semantic_cache.stats["entries"] == 0
 
-    # 4. Enforce Quality Gate Thresholds (Definition of Done)
-    # Threshold 1: Router accuracy must be >= 85%
-    assert report.overall_router_accuracy >= 0.85, (
-        f"Router accuracy dropped below 85%: {report.overall_router_accuracy:.2%}"
-    )
+    runner = EvaluationRunner(orchestrator=orchestrator, concurrency=2)
+    report = await runner.run_benchmark(dataset, split="test")
 
-    # Threshold 2: Unanswerable queries MUST abstain with 100% precision (Zero Hallucinations)
-    unans_rate = scores["unanswerable"]["abstention_rate"]
-    assert unans_rate == 1.0, f"Abstention rate dropped below 100%: {unans_rate:.2%}"
+    assert report.total_questions == 15
+    assert report.split == "test"
+    assert report.budget_usd > 0.0
+    assert report.total_cost_usd >= 0.0
+    assert len(report.per_question) == 15
 
-    # Threshold 3: Fact retrieval Recall@1 must be >= 80%
-    fact_r1 = scores["fact"]["recall@1"]
-    assert fact_r1 >= 0.80, f"Fact Recall@1 dropped below 80%: {fact_r1:.2%}"
+    assert set(report.category_scores) == {
+        "fact",
+        "multi_hop",
+        "global",
+        "unanswerable",
+        "paraphrase",
+        "multi_turn",
+    }
+    for category, scores in report.category_scores.items():
+        for metric in (
+            "chunk_recall@5",
+            "chunk_ndcg@10",
+            "chunk_mrr",
+            "chunk_hit_rate@5",
+            "doc_ndcg@10",
+        ):
+            assert metric in scores, f"{category} missing {metric}"
+        assert 0.0 <= scores["chunk_ndcg@10"] <= 1.0
 
-    # Threshold 4: Fact retrieval nDCG@1 must be >= 80%
-    fact_ndcg1 = scores["fact"]["ndcg@1"]
-    assert fact_ndcg1 >= 0.80, f"Fact nDCG@1 dropped below 80%: {fact_ndcg1:.2%}"
+    for _category, operational in report.category_operational.items():
+        assert "latency_ms" in operational
+        assert "cost_usd" in operational
+        assert "citations_valid" in operational
 
-    # Threshold 5: Multi-hop retrieval Recall@3 must be >= 80%
-    multihop_r3 = scores["multi_hop"]["recall@3"]
-    assert multihop_r3 >= 0.80, f"Multi-hop Recall@3 dropped below 80%: {multihop_r3:.2%}"
+    # Deterministic safety invariants (not tuned retrieval thresholds).
+    assert report.category_scores["unanswerable"]["abstention_rate"] == 1.0
+    assert report.category_scores["multi_turn"]["rewrite_accuracy"] >= 0.8
 
-    # Threshold 6: Cache hit rate on paraphrases must be >= 80%
-    cache_rate = scores["paraphrase"]["cache_hit_rate"]
-    assert cache_rate >= 0.80, f"Cache hit rate dropped below 80%: {cache_rate:.2%}"
+    # The pipeline populated the cache itself after generation.
+    assert orchestrator.exact_cache.stats["entries"] > 0
+
+    print("\nHermetic eval gate (test split)")
+    print(f"  questions: {report.total_questions}")
+    print(f"  router accuracy: {report.overall_router_accuracy:.4f}")
+    print(f"  cache hit rate: {report.cache_hit_rate:.4f}")
+    print(f"  cost: ${report.total_cost_usd:.6f} / budget ${report.budget_usd:.2f}")
+    for category in sorted(report.category_scores):
+        scores = report.category_scores[category]
+        print(
+            f"  {category:12s} chunk_recall@5={scores['chunk_recall@5']:.3f} "
+            f"chunk_ndcg@10={scores['chunk_ndcg@10']:.3f} "
+            f"chunk_mrr={scores['chunk_mrr']:.3f}"
+        )

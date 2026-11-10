@@ -1,6 +1,10 @@
 import asyncio
+import hashlib
+import json
 import os
+import random
 from dataclasses import dataclass
+from pathlib import Path
 
 import litellm
 
@@ -8,7 +12,7 @@ from app.core.config import get_settings
 
 
 class BudgetExceededError(Exception):
-    """Raised when an LLM call exceeds the allocated per-request cost budget."""
+    """Raised when an LLM call exceeds the allocated cost budget."""
 
 
 MODEL_PRICING: dict[str, dict[str, float]] = {
@@ -34,6 +38,33 @@ class ModelResponse:
     cached: bool = False
 
 
+def _is_retryable(exc: Exception) -> bool:
+    """Return True for rate limits, transient 5xx responses, and timeouts."""
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    if isinstance(status, int):
+        return status == 429 or 500 <= status < 600
+
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "429",
+            "500",
+            "502",
+            "503",
+            "504",
+            "rate limit",
+            "timeout",
+            "timed out",
+            "unavailable",
+            "overloaded",
+            "temporarily",
+        )
+    )
+
+
 class ModelGateway:
     """Central gateway for LLM calls enforcing budgets, tracking usage, and routing through LiteLLM."""
 
@@ -41,12 +72,104 @@ class ModelGateway:
         self,
         default_model: str | None = None,
         max_budget_per_request: float = 0.05,
+        max_budget_per_run: float | None = None,
     ) -> None:
         settings = get_settings()
         self.default_model = default_model or settings.LLM_MODEL
         self.max_budget = max_budget_per_request
+        self.max_run_budget = (
+            max_budget_per_run
+            if max_budget_per_run is not None
+            else settings.LLM_MAX_BUDGET_PER_RUN
+        )
+        self.cache_enabled = settings.LLM_CACHE_ENABLED
+        self.cache_dir = Path(settings.LLM_CACHE_DIR)
         self._total_spent_usd: float = 0.0
         self._total_calls: int = 0
+        self._cache_hits: int = 0
+
+    def reset_usage(self) -> None:
+        """Reset per-run counters so a new benchmark starts from zero cost."""
+        self._total_spent_usd = 0.0
+        self._total_calls = 0
+        self._cache_hits = 0
+
+    def _cache_key(
+        self,
+        selected_model: str,
+        prompt: str,
+        system_prompt: str | None,
+        max_tokens: int,
+        temperature: float,
+    ) -> str:
+        raw = json.dumps(
+            {
+                "model": selected_model,
+                "prompt": prompt,
+                "system_prompt": system_prompt,
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            },
+            sort_keys=True,
+        )
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def _read_cache(self, key: str) -> ModelResponse | None:
+        if not self.cache_enabled:
+            return None
+        path = self.cache_dir / f"{key}.json"
+        if not path.exists():
+            return None
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            stored = data["usage"]
+            # A cache hit costs nothing in this run, even though the stored
+            # entry remembers what the original completion cost.
+            usage = ModelUsage(
+                prompt_tokens=stored.get("prompt_tokens", 0),
+                completion_tokens=stored.get("completion_tokens", 0),
+                total_tokens=stored.get("total_tokens", 0),
+                cost_usd=0.0,
+            )
+            return ModelResponse(
+                content=data["content"],
+                model=data["model"],
+                usage=usage,
+                cached=True,
+            )
+        except (OSError, KeyError, ValueError, TypeError):
+            return None
+
+    def _write_cache(self, key: str, response: ModelResponse) -> None:
+        if not self.cache_enabled:
+            return
+        try:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "content": response.content,
+                "model": response.model,
+                "usage": {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                    "cost_usd": response.usage.cost_usd,
+                },
+            }
+            (self.cache_dir / f"{key}.json").write_text(json.dumps(payload), encoding="utf-8")
+        except OSError:
+            # A read-only or full cache directory must never break generation.
+            return
+
+    def _enforce_budgets(self, cost_usd: float) -> None:
+        if cost_usd > self.max_budget:
+            raise BudgetExceededError(
+                f"Completion cost ${cost_usd:.5f} exceeded max budget ${self.max_budget:.4f}"
+            )
+        if self._total_spent_usd + cost_usd > self.max_run_budget:
+            raise BudgetExceededError(
+                f"Run budget exceeded: ${self._total_spent_usd + cost_usd:.5f} > "
+                f"${self.max_run_budget:.4f}"
+            )
 
     async def complete(
         self,
@@ -57,11 +180,11 @@ class ModelGateway:
         temperature: float = 0.1,
         mock_response: str | None = None,
     ) -> ModelResponse:
-        """Execute text completion via LiteLLM with real cost and token tracking."""
+        """Execute text completion via LiteLLM with caching, budgets, and usage tracking."""
         settings = get_settings()
         selected_model = model or self.default_model
 
-        # 1. Test / Mock execution path
+        # 1. Test / Mock execution path (never hits the network or the disk cache)
         if mock_response is not None or (
             settings.APP_ENV == "test" and not settings.GEMINI_API_KEY
         ):
@@ -69,10 +192,7 @@ class ModelGateway:
             prompt_tokens = max(25, len(prompt.split()))
             completion_tokens = max(35, len(completion_text.split()))
             cost_usd = round((prompt_tokens * 0.000000075) + (completion_tokens * 0.0000003), 6)
-            if cost_usd > self.max_budget:
-                raise BudgetExceededError(
-                    f"Completion cost ${cost_usd:.5f} exceeded max budget ${self.max_budget:.4f}"
-                )
+            self._enforce_budgets(cost_usd)
             usage = ModelUsage(
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
@@ -87,7 +207,14 @@ class ModelGateway:
                 usage=usage,
             )
 
-        # 2. Live Provider Path via LiteLLM
+        # 2. On-disk cache keyed by (model, prompt hash)
+        cache_key = self._cache_key(selected_model, prompt, system_prompt, max_tokens, temperature)
+        cached = self._read_cache(cache_key)
+        if cached is not None:
+            self._cache_hits += 1
+            return cached
+
+        # 3. Live provider path via LiteLLM
         if not settings.GEMINI_API_KEY:
             raise RuntimeError(
                 "GEMINI_API_KEY environment variable is required in live mode. Please set it in .env"
@@ -98,14 +225,14 @@ class ModelGateway:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        # Set API base or key
         api_key = settings.GEMINI_API_KEY
         if api_key:
             os.environ["GEMINI_API_KEY"] = api_key
 
         resp = None
         last_exc: Exception | None = None
-        for attempt in range(5):
+        max_attempts = 5
+        for attempt in range(max_attempts):
             try:
                 resp = await litellm.acompletion(
                     model=selected_model,
@@ -115,23 +242,17 @@ class ModelGateway:
                     api_key=api_key,
                     api_base=settings.LITELLM_API_BASE,
                     timeout=20.0,
-                    num_retries=2,
+                    num_retries=0,
                 )
                 break
             except Exception as e:
                 last_exc = e
-                err_str = str(e).lower()
-                if (
-                    any(
-                        x in err_str for x in ("503", "429", "timeout", "unavailable", "rate limit")
-                    )
-                    and attempt < 4
-                ):
-                    backoff = 2.5 * (attempt + 1)
-                    await asyncio.sleep(backoff)
+                if _is_retryable(e) and attempt < max_attempts - 1:
+                    # Exponential backoff with full jitter.
+                    delay = min(8.0, 0.5 * (2**attempt))
+                    delay += random.uniform(0.0, delay * 0.5)
+                    await asyncio.sleep(delay)
                     continue
-                if isinstance(e, BudgetExceededError):
-                    raise
                 raise RuntimeError(f"LiteLLM completion failed for {selected_model}: {e}") from e
 
         if resp is None:
@@ -151,15 +272,12 @@ class ModelGateway:
                 cost = (prompt_tokens * 0.000000075) + (completion_tokens * 0.0000003)
 
             cost_usd = round(cost, 6)
-            if cost_usd > self.max_budget:
-                raise BudgetExceededError(
-                    f"Completion cost ${cost_usd:.5f} exceeded max budget ${self.max_budget:.4f}"
-                )
+            self._enforce_budgets(cost_usd)
 
             self._total_spent_usd += cost_usd
             self._total_calls += 1
 
-            return ModelResponse(
+            response = ModelResponse(
                 content=content,
                 model=selected_model,
                 usage=ModelUsage(
@@ -169,9 +287,11 @@ class ModelGateway:
                     cost_usd=cost_usd,
                 ),
             )
+            self._write_cache(cache_key, response)
+            return response
+        except BudgetExceededError:
+            raise
         except Exception as e:
-            if isinstance(e, BudgetExceededError):
-                raise
             raise RuntimeError(
                 f"LiteLLM completion processing failed for {selected_model}: {e}"
             ) from e
@@ -183,3 +303,7 @@ class ModelGateway:
     @property
     def total_calls(self) -> int:
         return self._total_calls
+
+    @property
+    def cache_hits(self) -> int:
+        return self._cache_hits

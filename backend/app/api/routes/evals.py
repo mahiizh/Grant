@@ -55,6 +55,8 @@ def _read_golden_questions() -> list[GoldenPair]:
                     expected_answer=item.get("expected_answer") or "",
                     ground_truth_entities=item.get("expected_entities") or [],
                     ground_truth_chunk_ids=item.get("expected_chunk_ids") or [],
+                    split=item.get("split", "dev"),
+                    depends_on=item.get("depends_on") or [],
                     complexity="medium",
                 )
             )
@@ -84,6 +86,8 @@ async def add_golden_pair(
         "expected_entities": request.ground_truth_entities,
         "expected_path": None,
         "optimal_strategy": request.expected_route,
+        "split": request.split,
+        "depends_on": request.depends_on,
     }
     GOLDEN_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(GOLDEN_PATH, "a", encoding="utf-8") as f:
@@ -97,6 +101,8 @@ async def add_golden_pair(
         expected_answer=request.expected_answer,
         ground_truth_entities=request.ground_truth_entities,
         ground_truth_chunk_ids=request.ground_truth_chunk_ids,
+        split=request.split,
+        depends_on=request.depends_on,
         complexity=request.complexity,
     )
 
@@ -112,19 +118,33 @@ async def run_golden_evaluation(
     if not GOLDEN_PATH.exists():
         raise HTTPException(status_code=404, detail="Golden questions file not found.")
 
+    split = None if request.split == "all" else request.split
     dataset = GoldenDataset.load_from_jsonl(GOLDEN_PATH)
+    if split is not None:
+        dataset = dataset.filter_by_split(split)
     if request.sample_size:
         dataset = GoldenDataset(dataset.questions[: request.sample_size])
+    if len(dataset) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No golden questions selected for split={request.split!r}.",
+        )
 
     runner = EvaluationRunner()
-    report = await runner.run_benchmark(dataset)
+    report = await runner.run_benchmark(dataset, split=split)
 
     completed_at = datetime.now(UTC).isoformat()
     return GoldenEvalRunResponse(
         run_id=run_id,
         status="completed",
+        split=report.split,
         total_questions=report.total_questions,
         accuracy=round(report.overall_router_accuracy, 4),
+        category_scores=report.category_scores,
+        category_operational=report.category_operational,
+        total_cost_usd=report.total_cost_usd,
+        budget_usd=report.budget_usd,
+        cache_hit_rate=report.cache_hit_rate,
         started_at=started_at,
         completed_at=completed_at,
     )

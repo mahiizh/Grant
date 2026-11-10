@@ -74,10 +74,21 @@ class Settings(BaseSettings):
     MAX_ACQUISITION_CALLS: int = 3
     MIN_TRUST_TO_CITE: float = 0.7
 
+    # LLM response cache. Keyed by (model, prompt hash) so repeated eval runs
+    # do not pay for the same completion twice. Cache hits cost $0 in the run.
+    LLM_CACHE_ENABLED: bool = True
+    LLM_CACHE_DIR: str = ".llm_cache"
+    LLM_MAX_BUDGET_PER_RUN: float = 0.50
+
     # Evaluation data paths. Override these in tests so runs never write into
     # tracked files under evals/.
     EVAL_GOLDEN_DIR: str | None = None
     EVAL_CANDIDATES_DIR: str | None = None
+    # Isolated stores for `make eval`: a dedicated database and Qdrant
+    # collection so an eval run cannot mutate the developer database.
+    EVAL_POSTGRES_DB: str = "graphrag_lab_eval"
+    EVAL_QDRANT_COLLECTION: str = "grant_chunks_eval"
+    EVAL_CONCURRENCY: int = 2
 
     # Observability
     OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://localhost:4318"

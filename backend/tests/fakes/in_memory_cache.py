@@ -6,6 +6,7 @@ from app.cache.guards import validate_cache_hit
 from app.cache.keys import generate_exact_cache_key
 from app.core.acl import ACLScope
 from app.domain import Answer
+from tests.fakes.in_memory_retrievers import cosine_similarity, text_to_embedding
 
 
 class FakeExactCache:
@@ -114,6 +115,10 @@ class FakeSemanticCache:
             self._misses += 1
             return None
 
+        query_embedding = text_to_embedding(query, dim=384)
+        best_entry: FakeSemanticCacheEntry | None = None
+        best_similarity = 0.0
+
         for entry in self._entries:
             if entry.tenant_id != acl_scope.tenant_id or entry.index_version != index_version:
                 continue
@@ -125,28 +130,35 @@ class FakeSemanticCache:
             ):
                 continue
 
-            if query.lower().strip() == entry.query.lower().strip():
-                guard_result = validate_cache_hit(
-                    new_query=query,
-                    cached_query=entry.query,
-                )
-                if not guard_result.passed:
-                    self._guard_rejections += 1
-                    continue
+            similarity = cosine_similarity(query_embedding, entry.embedding)
+            if similarity < self.threshold or similarity <= best_similarity:
+                continue
 
-                self._hits += 1
-                return Answer(
-                    query=query,
-                    answer=entry.answer.answer,
-                    evidence=entry.answer.evidence,
-                    is_abstention=entry.answer.is_abstention,
-                    router_strategy="semantic_cache",
-                    cost_usd=0.0,
-                    latency_ms=4.5,
-                )
+            guard_result = validate_cache_hit(
+                new_query=query,
+                cached_query=entry.query,
+            )
+            if not guard_result.passed:
+                self._guard_rejections += 1
+                continue
 
-        self._misses += 1
-        return None
+            best_entry = entry
+            best_similarity = similarity
+
+        if best_entry is None:
+            self._misses += 1
+            return None
+
+        self._hits += 1
+        return Answer(
+            query=query,
+            answer=best_entry.answer.answer,
+            evidence=best_entry.answer.evidence,
+            is_abstention=best_entry.answer.is_abstention,
+            router_strategy="semantic_cache",
+            cost_usd=0.0,
+            latency_ms=4.5,
+        )
 
     def set(
         self,
@@ -157,7 +169,7 @@ class FakeSemanticCache:
     ) -> None:
         entry = FakeSemanticCacheEntry(
             query=query,
-            embedding=[0.0] * 384,
+            embedding=text_to_embedding(query, dim=384),
             answer=answer,
             acl_scope=acl_scope,
             index_version=index_version,

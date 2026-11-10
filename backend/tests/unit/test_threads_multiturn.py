@@ -1,43 +1,26 @@
-from collections.abc import AsyncGenerator
 from pathlib import Path
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.core.acl import ACLScope
-from app.db.models import Base
 from app.evaluation.datasets import GoldenDataset
 from app.evaluation.runner import EvaluationRunner
+from tests.fakes.hermetic import build_hermetic_orchestrator, load_corpus_chunks
 
 
-@pytest.fixture
-async def test_session() -> AsyncGenerator[AsyncSession, None]:
-    engine = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-    factory = async_sessionmaker(bind=engine, expire_on_commit=False, class_=AsyncSession)
-    async with factory() as session:
-        yield session
-
-    await engine.dispose()
+def _hermetic_orchestrator():
+    return build_hermetic_orchestrator(load_corpus_chunks())[0]
 
 
 @pytest.mark.anyio
-async def test_three_turn_thread_pronoun_resolution_and_traces(test_session: AsyncSession) -> None:
+async def test_three_turn_thread_pronoun_resolution_and_traces() -> None:
     """Verify 3-turn thread:
 
     1. Turn 2 uses pronouns ('they', 'it') and the condense_query step resolves them to Alice Chen & outbox.
     2. Every turn has its own distinct trace_id.
     3. Citations differ per turn as conversation focus evolves.
     """
-    repo_root = Path(__file__).resolve().parents[3]
-    corpus_dir = repo_root / "corpus"
-
-    orchestrator = await EvaluationRunner.setup_corpus_and_orchestrator(
-        session=test_session,
-        corpus_dir=corpus_dir,
-    )
+    orchestrator = _hermetic_orchestrator()
 
     thread_id = "test-thread-abc-123"
     admin_scope = ACLScope.restricted(
@@ -88,9 +71,6 @@ async def test_three_turn_thread_pronoun_resolution_and_traces(test_session: Asy
     trace_id_2 = turn_2_state.get("trace_id")
     citations_2 = [ev.chunk_id for ev in turn_2_state.get("evidence", [])]
     rewritten_2 = turn_2_state["rewritten_query"]
-    print(f"\nDEBUG rewritten_2: '{rewritten_2}'")
-    print(f"DEBUG citations_1: {citations_1}")
-    print(f"DEBUG citations_2: {citations_2}")
 
     # Assertion 1: Pronoun resolution
     assert "they" not in rewritten_2.lower()
@@ -130,19 +110,14 @@ async def test_three_turn_thread_pronoun_resolution_and_traces(test_session: Asy
 
 
 @pytest.mark.anyio
-async def test_multiturn_golden_dataset_rewrite_accuracy(test_session: AsyncSession) -> None:
+async def test_multiturn_golden_dataset_rewrite_accuracy() -> None:
     """Verify golden multi-turn dataset evaluates rewrite accuracy separately."""
     repo_root = Path(__file__).resolve().parents[3]
-    corpus_dir = repo_root / "corpus"
     multiturn_file = repo_root / "evals" / "golden" / "multi_turn.jsonl"
 
     assert multiturn_file.exists()
 
-    orchestrator = await EvaluationRunner.setup_corpus_and_orchestrator(
-        session=test_session,
-        corpus_dir=corpus_dir,
-    )
-
+    orchestrator = _hermetic_orchestrator()
     dataset = GoldenDataset.load_from_jsonl(multiturn_file)
     assert len(dataset) == 10
 
