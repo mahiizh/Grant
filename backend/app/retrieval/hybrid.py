@@ -33,11 +33,12 @@ class HybridRetriever:
         dense_retriever: DenseRetriever | None = None,
         bm25_retriever: BM25Retriever | None = None,
         rrf_k: int = 60,
+        reranker: Any | None = None,
     ) -> None:
         self.dense = dense_retriever or DenseRetriever()
         self.sparse = bm25_retriever or BM25Retriever()
         self.rrf_k = rrf_k
-        self.reranker = get_reranker()
+        self.reranker = reranker or get_reranker()
 
     async def search(
         self,
@@ -78,6 +79,10 @@ class HybridRetriever:
         for chunk_id, rrf_score in fused[: top_k * 2]:
             payload = payloads.get(chunk_id)
             if not payload:
+                continue
+            # Defense-in-depth: never build Evidence from a payload the filter denies,
+            # even if a retriever upstream forgot to apply the ACL predicate.
+            if filter_criteria is not None and not filter_criteria.permits_payload(payload):
                 continue
 
             tier_val = payload.get("source_tier", 1)

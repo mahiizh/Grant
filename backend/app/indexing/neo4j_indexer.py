@@ -9,6 +9,20 @@ from app.core.config import get_settings
 logger = logging.getLogger(__name__)
 
 
+def _acl_props(acl_scope: dict[str, Any] | None) -> dict[str, Any]:
+    """Flatten an ACL scope into scalar Neo4j properties for Cypher predicates.
+
+    Missing scopes default to deny (``is_public=False``) rather than public.
+    """
+    scope = acl_scope or {}
+    return {
+        "acl_tenant_id": scope.get("tenant_id", "default"),
+        "acl_is_public": bool(scope.get("is_public", False)),
+        "acl_allowed_roles": list(scope.get("allowed_roles", []) or []),
+        "acl_allowed_groups": list(scope.get("allowed_groups", []) or []),
+    }
+
+
 class Neo4jIndexer:
     """Production Neo4j indexer managing knowledge graph nodes, edges, and chunks."""
 
@@ -33,6 +47,10 @@ class Neo4jIndexer:
         SET n.name = $name,
             n.entity_type = $entity_type,
             n.acl_scope = $acl_scope,
+            n.acl_tenant_id = $acl_tenant_id,
+            n.acl_is_public = $acl_is_public,
+            n.acl_allowed_roles = $acl_allowed_roles,
+            n.acl_allowed_groups = $acl_allowed_groups,
             n.valid_from = $valid_from,
             n.valid_to = $valid_to,
             n.doc_id = $doc_id
@@ -49,6 +67,7 @@ class Neo4jIndexer:
                 valid_from=temp.get("valid_from", "1970-01-01T00:00:00Z"),
                 valid_to=temp.get("valid_to"),
                 doc_id=props.get("doc_id", ""),
+                **_acl_props(acl_scope),
             )
 
     async def merge_edge(
@@ -66,10 +85,22 @@ class Neo4jIndexer:
         )
         cypher = f"""
         MERGE (a:Entity {{id: $source_id}})
+        ON CREATE SET a.acl_tenant_id = $acl_tenant_id,
+                      a.acl_is_public = $acl_is_public,
+                      a.acl_allowed_roles = $acl_allowed_roles,
+                      a.acl_allowed_groups = $acl_allowed_groups
         MERGE (b:Entity {{id: $target_id}})
+        ON CREATE SET b.acl_tenant_id = $acl_tenant_id,
+                      b.acl_is_public = $acl_is_public,
+                      b.acl_allowed_roles = $acl_allowed_roles,
+                      b.acl_allowed_groups = $acl_allowed_groups
         MERGE (a)-[r:{rel_type_clean}]->(b)
         SET r.relation_type = $relation_type,
             r.acl_scope = $acl_scope,
+            r.acl_tenant_id = $acl_tenant_id,
+            r.acl_is_public = $acl_is_public,
+            r.acl_allowed_roles = $acl_allowed_roles,
+            r.acl_allowed_groups = $acl_allowed_groups,
             r.valid_from = $valid_from,
             r.valid_to = $valid_to,
             r.doc_id = $doc_id
@@ -87,6 +118,7 @@ class Neo4jIndexer:
                 valid_from=temp.get("valid_from", "1970-01-01T00:00:00Z"),
                 valid_to=temp.get("valid_to"),
                 doc_id=props.get("doc_id", ""),
+                **_acl_props(acl_scope),
             )
             record = await res.single()
             return str(record["rel_id"]) if record else f"{source_id}-{relation_type}->{target_id}"
@@ -105,6 +137,10 @@ class Neo4jIndexer:
         SET c.doc_id = $doc_id,
             c.text = $text,
             c.acl_scope = $acl_scope,
+            c.acl_tenant_id = $acl_tenant_id,
+            c.acl_is_public = $acl_is_public,
+            c.acl_allowed_roles = $acl_allowed_roles,
+            c.acl_allowed_groups = $acl_allowed_groups,
             c.valid_from = $valid_from,
             c.valid_to = $valid_to
         """
@@ -118,6 +154,7 @@ class Neo4jIndexer:
                 acl_scope=json.dumps(acl_scope or {}),
                 valid_from=temp.get("valid_from", "1970-01-01T00:00:00Z"),
                 valid_to=temp.get("valid_to"),
+                **_acl_props(acl_scope),
             )
 
     async def link_chunk_entity(self, chunk_id: str, entity_id: str) -> None:

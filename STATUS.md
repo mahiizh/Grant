@@ -20,9 +20,69 @@ sections below remain the Step 0 evidence.
 | 0. Single Docker Postgres + Alembic | **Done** | Docker PG on host `5433`; `make up` port guard; Alembic revision `a9cf8318b733`; clean re-ingest + 0 drift |
 | 1. Tooling cleanup | **Done** | `ruff check` + `ruff format` + `mypy` clean; eval writes redirected to temp dirs; `.env.example` updated |
 | 2. Eval items 1–5 | **Done** | Grounded 30-row dev/test golden set; chunk-level metrics per category; isolated clean-ingest `make eval`; hermetic gate; 65 tests pass |
-| 3. ACL items 7–9 | Pending | — |
-| 4. Item 6 honest baseline | Pending | — |
+| 3. ACL items 7–9 | **Done** | Qdrant payload pushdown; parameterized Cypher ACL on graph reads/paths; `/retrieval/compare` + `/graph` auth; deterministic default scope; 19 unit + 4 live leak tests |
+| 4. Item 6 honest baseline | Pending | 4-config comparison after item 3: dense / sparse / hybrid RRF / hybrid+graph+rerank (see §0.1) |
 | 5. Items 11–13 | Pending | — |
+
+### Item 4 — honest baseline across four retrieval configurations (plan; runs after item 3)
+
+Item 4 is not a write-up of item 2's numbers. After item 3 lands, re-run the isolated `make eval`
+against the same clean ingest (15 docs / 45 chunks), the `test` split, fresh exact/semantic caches,
+and a fresh per-config LLM cache, for four retrieval configurations:
+
+| config | dense | sparse | graph | rerank |
+| --- | --- | --- | --- | --- |
+| `dense` | yes | no | no | no |
+| `sparse` | no | yes | no | no |
+| `hybrid` | yes | yes | no | no (RRF only) |
+| `full` | yes | yes | yes | yes |
+
+Mechanics:
+
+- Add `--config {dense,sparse,hybrid,full}` to `backend/app/tools/eval_cli.py` and `CONFIG=...` to
+  `make eval`.
+- Add `RetrievalConfig` to the orchestrator; `run(..., retrieval_config=...)` bypasses the router and
+  forces the selected branch. `dense`/`sparse` call the corresponding retriever directly; `hybrid`
+  calls `HybridRetriever.search(rerank=False)`; `full` keeps today's graph+hybrid+rerank.
+- Add answer-level scoring to `EvaluationRunner`: `answer_f1` (normalized token F1 vs
+  `expected_answer`) and `answer_accuracy` (`f1 >= 0.5`; unanswerable rows are correct only when
+  `is_abstention`). Report raw F1 next to accuracy so the threshold is visible.
+- Clear exact/semantic caches and use a per-config `LLM_CACHE_DIR` before each config, so each
+  config pays its own generation cost and latency. Otherwise config 1 warms the disk cache and
+  configs 2–4 look artificially free and fast.
+- Compute p50/p95 latency over per-question wall time per config.
+- Add `make eval-compare` to run all four configs and print one combined table.
+
+Required output — one table, then stop:
+
+| category | dense | sparse | hybrid | full |
+| --- | --- | --- | --- | --- |
+| fact | r@5 / nDCG@10 / acc | ... | ... | ... |
+| global | ... | ... | ... | ... |
+| multi_hop | ... | ... | ... | ... |
+| multi_turn | ... | ... | ... | ... |
+| paraphrase | ... | ... | ... | ... |
+| unanswerable | ... | ... | ... | ... |
+| **all** | ... | ... | ... | ... |
+
+plus one operational row per config: `p50 ms`, `p95 ms`, `cost_usd`, `cache_hit_rate`.
+
+Rules: same corpus, same prompt/model, no threshold changes, no tuning on `test`, and no claim that
+hybrid beats dense unless the table shows it.
+
+### After item 5 — approved follow-on sequence (not scheduled)
+
+1. **Real OTel spans + `AsyncPostgresSaver`** — replace synthetic span dicts and `MemorySaver`;
+   persist traces/checkpoints in Postgres.
+2. **LLM extraction + wire entity resolution** — use the LLM extractor, resolve aliases, and emit
+   one canonical PostgreSQL node in Neo4j instead of per-document duplicates.
+3. **Indexing cost per document** — record embedding + extraction + graph cost per doc and expose it.
+4. **PDF upload → 415** — reject unsupported uploads explicitly instead of failing downstream.
+5. **FastEmbed `TextCrossEncoder`** — replace `sentence-transformers` with the FastEmbed cross-encoder.
+6. **Playwright e2e + axe in Chromium** — real browser e2e and accessibility checks.
+7. **Ask UI fixes** — citations, loading/error/empty states, scope display.
+8. **PPR button disabled until `ppr.py` exists** — no button that calls a missing implementation.
+9. **Canvas light mode** — theme-correct graph canvas.
 
 ### Item 0 — one PostgreSQL, one schema authority
 
@@ -250,6 +310,83 @@ JSON path when requested, and the LLM cache lives in gitignored `.llm_cache/`.
 
 > Known and deliberately not tuned here: router accuracy `0.6667`, multi-hop `chunk_ndcg@10 0.597`,
 > and multi-turn `rewrite_accuracy 0.8` are the honest baseline for item 6.
+
+### Item 3 — ACL items 7–9 (enforce, don't post-filter)
+
+Scope delivered: (7) ACL is enforced inside Qdrant and Neo4j, not after retrieval; (8) every read
+surface (`/query`, `/retrieval/compare`, `/graph`, `/graph/nodes/{id}/neighbors`, `/graph/path`)
+resolves the caller's identity and applies the same filter; (9) the default scope is deterministic
+and cannot silently widen access.
+
+**The old gaps were real.** Dense and sparse over-fetched `top_k * 3` and filtered in Python, so a
+restricted chunk could still win ANN and displace permitted results. The Cypher helper only checked
+`n.tenant_id = 'default'`, which treats every same-tenant node as allowed. `/retrieval/compare` and
+the `/graph` read endpoints had no authentication at all. Default scope came from iterating a
+`set`, so the same user could resolve to different scopes between processes.
+
+**Qdrant now prunes before ANN.** `backend/app/retrieval/filters.py:82` builds a payload filter with
+a mandatory tenant match plus a nested `should` over `is_public` / `allowed_roles` / `allowed_groups`,
+then adds `doc_ids` and bi-temporal range conditions. `dense.py:45` and `sparse.py:43` pass it as
+`query_filter` and fetch exactly `top_k` (no 3× oversample). `filters.py:41` still performs a
+default-deny Python check on the payload as defense-in-depth, and `hybrid.py` refuses to build
+`Evidence` from a payload that check rejects.
+
+**Neo4j now stores scalar ACL properties and predicates every hop.** `neo4j_indexer.py:12` flattens
+the ACL into `acl_tenant_id`, `acl_is_public`, `acl_allowed_roles`, `acl_allowed_groups` on
+`Entity`, `Chunk`, and relationships (the JSON `acl_scope` is kept). `filters.py:150` returns a
+parameterized Cypher predicate — no caller value is interpolated. `graph/retrievers.py:28` replaces
+`shortestPath(...) WHERE ALL(...)` (which only rejects the single shortest path) with bounded
+all-paths enumeration, ACL predicates on both endpoints, every path node, and every relationship,
+then `ORDER BY length(path) LIMIT 1`. `retrieve_path_evidence` filters `Chunk` ACL, and
+`search_entities` filters entities.
+
+**HTTP surfaces share one filter.** `api/routes/retrieval.py:35` requires `get_current_user`, builds
+`to_retrieval_filter(scope, as_of)`, passes it to dense and sparse, and re-checks every fused payload
+before scoring. `api/routes/graph.py:45` does the same for `/graph`, `/neighbors`, and `/path`.
+`core/auth.py:12` defines `DEFAULT_SCOPE_PRIORITY` and `resolve_scope` so the default is stable;
+`core/auth.py:64` exposes `to_retrieval_filter`.
+
+**Leak tests cover every path.** `tests/unit/test_acl_leaks.py` proves bob (`sre`) never sees the
+four data-platform documents through dense, sparse, hybrid+rerank, graph path/evidence, exact or
+semantic cache, or the full orchestrator; each retrieval test also asserts alice can retrieve those
+documents, so the assertion is not vacuous. `tests/unit/test_acl_filters.py` pins the Qdrant filter
+shape, parameterized Cypher, and default-deny payload behavior. `tests/unit/test_auth_scopes.py`
+pins deterministic default scopes and the 403 on an unauthorized explicit scope.
+
+Live-container proof (`pytest tests/integration/test_acl_live.py -v`, 4 passed in 6.23s), after
+`make ingest` rewrote 45 chunks / 17 entities / 95 edges:
+
+```text
+dense  bob   n=13 docs=[adv_01, adv_02, adv_03, cache_stampede, postmortem_inc_04, redis_sentinel] leaked=[]
+dense  alice n=18 docs=[... dual_write_consistency, rfc_001, rfc_004, team_directory_2026] leaked=[4 data-platform docs]
+sparse bob   n=13 docs=[adv_01, adv_02, adv_03, cache_stampede, postmortem_inc_04, redis_sentinel] leaked=[]
+sparse alice n=18 docs=[... dual_write_consistency, rfc_001, rfc_004, team_directory_2026] leaked=[4 data-platform docs]
+graph bob entities: ['CoreBanking', 'INC-2026-04']
+graph bob path Bob Kumar->INC-2026-04: None
+graph alice path Alice Chen->Data Platform Team: ['Alice Chen', 'LED_BY', 'Data Platform Team']
+graph bob INC-2026-04 evidence docs: ['doc_postmortem_inc_04']
+compare bob   docs=[adv_01, adv_02, adv_03, cache_stampede, postmortem_inc_04, redis_sentinel]
+compare alice docs=[... dual_write_consistency, rfc_001, rfc_004, team_directory_2026]
+/graph bob   nodes=['CoreBanking', 'INC-2026-04']
+/graph alice nodes=[14 data-platform entities]
+```
+
+**Verification:**
+
+```text
+uv run --directory backend ruff check app tests   -> All checks passed!
+uv run --directory backend ruff format --check app tests -> 121 files already formatted
+uv run --directory backend mypy app tests         -> Success: no issues found in 121 source files
+uv run --directory backend pytest                 -> 88 passed
+pytest tests/integration/test_acl_live.py -v      -> 4 passed in 6.23s
+```
+
+> Known limitation (deliberately not fixed here): entity ACLs are assigned by first document mention,
+> so shared entities such as `Bob Kumar` and `Redis` inherit `data-platform` from
+> `team_directory_2026.md` even when an sre document also mentions them. Bob's graph is therefore
+> conservative (only `CoreBanking` and `INC-2026-04`). Chunk-level ACL remains authoritative for
+> answer evidence, and the real fix is canonical entity resolution, which is in the approved
+> "After item 5" sequence.
 
 ---
 

@@ -40,7 +40,7 @@ class BM25Retriever:
         if not sparse_vec.indices:
             return []
 
-        oversample = top_k * 3
+        query_filter = filter_criteria.to_qdrant_filter() if filter_criteria is not None else None
         try:
             results = await self.client.query_points(
                 collection_name=self.collection_name,
@@ -49,7 +49,8 @@ class BM25Retriever:
                     values=sparse_vec.values,
                 ),
                 using="sparse",
-                limit=oversample,
+                query_filter=query_filter,
+                limit=top_k,
                 with_payload=True,
             )
         except Exception as e:

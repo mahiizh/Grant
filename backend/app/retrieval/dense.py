@@ -40,17 +40,17 @@ class DenseRetriever:
         top_k: int = 10,
         filter_criteria: RetrievalFilter | None = None,
     ) -> list[tuple[str, float, dict[str, Any]]]:
-        """Query Qdrant dense vector index and apply ACL/temporal payload filtering."""
+        """Query Qdrant dense vector index with ACL/temporal payload filtering."""
         dense_vec = self.embedding_service.embed_query_dense(query)
+        query_filter = filter_criteria.to_qdrant_filter() if filter_criteria is not None else None
 
-        # Retrieve candidates with oversampling for post-filtering
-        oversample = top_k * 3
         try:
             results = await self.client.query_points(
                 collection_name=self.collection_name,
                 query=dense_vec,
                 using="dense",
-                limit=oversample,
+                query_filter=query_filter,
+                limit=top_k,
                 with_payload=True,
             )
         except Exception as e:

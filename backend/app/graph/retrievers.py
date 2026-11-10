@@ -20,6 +20,11 @@ class GraphRetriever:
             auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),
         )
 
+    @staticmethod
+    def _criteria(filter_criteria: RetrievalFilter | None) -> RetrievalFilter:
+        """Default to a public-only filter when no caller identity is supplied."""
+        return filter_criteria or RetrievalFilter()
+
     async def find_path(
         self,
         start_entity_name: str,
@@ -27,21 +32,38 @@ class GraphRetriever:
         max_depth: int = 4,
         filter_criteria: RetrievalFilter | None = None,
     ) -> list[str] | None:
-        """Find the shortest valid path between two entities in Neo4j."""
+        """Find the shortest ACL-permitted path between two entities in Neo4j.
+
+        ``shortestPath(... ) WHERE ALL(...)`` would only reject the single shortest
+        path, not search for the shortest *allowed* one. The graph is small, so we
+        enumerate bounded paths, filter them, and take the shortest survivor.
+        """
+        criteria = self._criteria(filter_criteria)
+        node_pred, params = criteria.to_cypher_predicate("n")
+        rel_pred, _ = criteria.to_cypher_predicate("r")
+        start_pred, _ = criteria.to_cypher_predicate("a")
+        target_pred, _ = criteria.to_cypher_predicate("b")
+
         cypher = f"""
         MATCH (a:Entity), (b:Entity)
-        WHERE toLower(a.name) = toLower($start) AND toLower(b.name) = toLower($target)
-        MATCH path = shortestPath((a)-[*..{max_depth}]-(b))
-        WHERE ALL(n IN nodes(path) WHERE 'Entity' IN labels(n))
+        WHERE toLower(a.name) = toLower($start)
+          AND toLower(b.name) = toLower($target)
+          AND {start_pred}
+          AND {target_pred}
+        MATCH path = (a)-[*..{max_depth}]-(b)
+        WHERE ALL(n IN nodes(path) WHERE 'Entity' IN labels(n) AND {node_pred})
+          AND ALL(r IN relationships(path) WHERE {rel_pred})
         RETURN [n IN nodes(path) | n.name] AS node_names,
-               [r IN relationships(path) | type(r)] AS rel_types,
-               [n IN nodes(path) | n.acl_scope] AS acl_scopes
+               [r IN relationships(path) | type(r)] AS rel_types
+        ORDER BY length(path)
+        LIMIT 1
         """
         async with self.driver.session() as session:
             res = await session.run(
                 cypher,
                 start=start_entity_name.strip(),
                 target=target_entity_name.strip(),
+                **params,
             )
             record = await res.single()
             if not record:
@@ -49,17 +71,6 @@ class GraphRetriever:
 
             node_names = record["node_names"]
             rel_types = record["rel_types"]
-            acl_scopes = record["acl_scopes"]
-
-            # Filter path nodes by ACL if requested
-            if filter_criteria is not None:
-                for scope_str in acl_scopes:
-                    if (
-                        scope_str
-                        and "executive-audit" in scope_str
-                        and not bool(filter_criteria.user_roles & {"executive-audit"})
-                    ):
-                        return None
 
             # Interleave node names and relationship predicates: [A, REL, B, REL, C]
             path_tokens: list[str] = []
@@ -76,39 +87,37 @@ class GraphRetriever:
         top_k: int = 5,
         filter_criteria: RetrievalFilter | None = None,
     ) -> list[Evidence]:
-        """Fetch source chunks linked to the entities appearing in a reasoning path."""
+        """Fetch ACL-permitted source chunks linked to the entities in a reasoning path."""
         # Extract entity names (even positions)
         entity_names = [token for i, token in enumerate(path_tokens) if i % 2 == 0]
         if not entity_names:
             return []
 
-        cypher = """
+        criteria = self._criteria(filter_criteria)
+        chunk_pred, params = criteria.to_cypher_predicate("c")
+
+        cypher = f"""
         MATCH (c:Chunk)-[:MENTIONS]->(e:Entity)
         WHERE e.name IN $entity_names
+          AND {chunk_pred}
         RETURN DISTINCT c.chunk_id AS chunk_id,
                         c.doc_id AS doc_id,
-                        c.text AS text,
-                        c.acl_scope AS acl_scope,
-                        c.valid_from AS valid_from,
-                        c.valid_to AS valid_to
+                        c.text AS text
         LIMIT $limit
         """
         evidence_list: list[Evidence] = []
         async with self.driver.session() as session:
-            res = await session.run(cypher, entity_names=entity_names, limit=top_k * 2)
+            res = await session.run(
+                cypher,
+                entity_names=entity_names,
+                limit=top_k * 2,
+                **params,
+            )
             records = await res.data()
 
             # Group candidates by doc_id to ensure multi-doc diversity along reasoning path
             by_doc: dict[str, list[Evidence]] = {}
             for r in records:
-                # Apply ACL/temporal filtering
-                if filter_criteria is not None:
-                    scope_raw = r.get("acl_scope") or ""
-                    if "executive-audit" in scope_raw and not bool(
-                        filter_criteria.user_roles & {"executive-audit"}
-                    ):
-                        continue
-
                 prov = Provenance(
                     tier=SourceTier.TIER_1_DOCUMENT,
                     source_uri=r.get("doc_id", ""),
@@ -135,16 +144,24 @@ class GraphRetriever:
 
         return evidence_list
 
-    async def search_entities(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
-        """Search entities matching query string in Neo4j."""
-        cypher = """
+    async def search_entities(
+        self,
+        query: str,
+        top_k: int = 5,
+        filter_criteria: RetrievalFilter | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search ACL-permitted entities matching the query string in Neo4j."""
+        criteria = self._criteria(filter_criteria)
+        entity_pred, params = criteria.to_cypher_predicate("e")
+        cypher = f"""
         MATCH (e:Entity)
         WHERE toLower(e.name) CONTAINS toLower($q)
+          AND {entity_pred}
         RETURN e.id AS id, e.name AS name, e.entity_type AS type
         LIMIT $limit
         """
         async with self.driver.session() as session:
-            res = await session.run(cypher, q=query.strip(), limit=top_k)
+            res = await session.run(cypher, q=query.strip(), limit=top_k, **params)
             return await res.data()
 
     async def close(self) -> None:

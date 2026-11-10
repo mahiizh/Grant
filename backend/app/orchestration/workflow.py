@@ -208,7 +208,9 @@ class RAGOrchestrator:
             # Route to Graph if multi-hop detected
             if route == "graph":
                 discovered_path: list[str] | None = None
-                matched_entities = await self.graph_retriever.search_entities(query, top_k=5)
+                matched_entities = await self.graph_retriever.search_entities(
+                    query, top_k=5, filter_criteria=filter_criteria
+                )
                 if len(matched_entities) >= 2:
                     ent_a = matched_entities[0]["name"]
                     ent_b = matched_entities[1]["name"]

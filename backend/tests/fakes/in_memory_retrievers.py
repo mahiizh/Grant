@@ -128,6 +128,28 @@ class FakeBM25Retriever:
         return sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
 
 
+class FakeReranker:
+    """Deterministic reranker fake that records the candidates it was given."""
+
+    def __init__(self) -> None:
+        self.seen_chunk_ids: list[str] = []
+
+    def rerank_evidence(
+        self,
+        query: str,
+        candidates: Sequence[Evidence],
+        top_k: int | None = None,
+    ) -> list[Evidence]:
+        self.seen_chunk_ids = [c.chunk_id for c in candidates]
+        query_lower = query.lower()
+        ranked = sorted(
+            candidates,
+            key=lambda c: c.text.lower().count(query_lower),
+            reverse=True,
+        )
+        return ranked[:top_k] if top_k is not None else ranked
+
+
 class FakeHybridRetriever:
     """In-memory hybrid retriever combining dense and BM25 using RRF for tests."""
 
@@ -135,9 +157,11 @@ class FakeHybridRetriever:
         self,
         dense: FakeDenseRetriever | None = None,
         sparse: FakeBM25Retriever | None = None,
+        reranker: FakeReranker | None = None,
     ) -> None:
         self.dense = dense or FakeDenseRetriever()
         self.sparse = sparse or FakeBM25Retriever()
+        self.reranker = reranker
         self._chunks: dict[str, Chunk] = {}
 
     def index_chunks(self, chunks: Sequence[Chunk]) -> None:
@@ -160,7 +184,16 @@ class FakeHybridRetriever:
             rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0.0) + 1.0 / (k + rank + 1)
         for rank, (chunk_id, _) in enumerate(sparse_results):
             rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0.0) + 1.0 / (k + rank + 1)
-        ranked = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+        ranked = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
+        # Defense-in-depth: mirror the production payload check even if a fake
+        # retriever upstream forgot to apply the ACL predicate.
+        if filter_criteria is not None:
+            ranked = [
+                (chunk_id, score)
+                for chunk_id, score in ranked
+                if filter_criteria.permits_chunk(self._chunks[chunk_id])
+            ]
+        ranked = ranked[:top_k]
         evidence_list = AwaitableList()
         for chunk_id, score in ranked:
             chunk = self._chunks[chunk_id]
@@ -173,6 +206,10 @@ class FakeHybridRetriever:
                     retrieval_method="hybrid",
                     provenance=chunk.provenance,
                 )
+            )
+        if rerank and self.reranker is not None and evidence_list:
+            return AwaitableList(
+                self.reranker.rerank_evidence(query=query, candidates=evidence_list, top_k=top_k)
             )
         return evidence_list
 
@@ -202,12 +239,33 @@ class FakeGraphRetriever:
         if chunks:
             self._chunks = {c.chunk_id: c for c in chunks}
 
-    def search_entities(self, query: str, top_k: int = 5) -> AwaitableList:
+    @staticmethod
+    def _permits_entity(entity: Entity, filter_criteria: RetrievalFilter | None) -> bool:
+        if filter_criteria is None:
+            return True
+        if not entity.acl_scope.permits(
+            user_roles=filter_criteria.user_roles,
+            user_groups=filter_criteria.user_groups,
+            tenant_id=filter_criteria.acl_scope.tenant_id,
+            is_admin=filter_criteria.is_admin,
+        ):
+            return False
+        return not (
+            filter_criteria.as_of_time is not None
+            and not entity.temporal.is_valid_at(filter_criteria.as_of_time)
+        )
+
+    def search_entities(
+        self,
+        query: str,
+        top_k: int = 5,
+        filter_criteria: RetrievalFilter | None = None,
+    ) -> AwaitableList:
         q_lower = query.lower()
         matches = [
             {"name": e.name, "entity_type": e.entity_type}
             for e in self._entities.values()
-            if e.name.lower() in q_lower
+            if e.name.lower() in q_lower and self._permits_entity(e, filter_criteria)
         ]
         return AwaitableList(matches[:top_k])
 
@@ -222,6 +280,10 @@ class FakeGraphRetriever:
         tgt_id = self._name_to_id.get(normalize_entity_name(end_entity_name))
         if not src_id or not tgt_id:
             return None
+        if not self._permits_entity(self._entities[src_id], filter_criteria) or not (
+            self._permits_entity(self._entities[tgt_id], filter_criteria)
+        ):
+            return None
         queue: deque[tuple[str, list[str]]] = deque([(src_id, [self._entities[src_id].name])])
         visited = {src_id}
         while queue:
@@ -231,7 +293,9 @@ class FakeGraphRetriever:
             if len(path) // 2 >= max_depth:
                 continue
             for rel_type, next_id in self._adjacency.get(curr_id, []):
-                if next_id not in visited:
+                if next_id not in visited and self._permits_entity(
+                    self._entities[next_id], filter_criteria
+                ):
                     visited.add(next_id)
                     queue.append((next_id, path + [rel_type, self._entities[next_id].name]))
         return None

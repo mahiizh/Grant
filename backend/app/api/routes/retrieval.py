@@ -1,17 +1,27 @@
 import logging
+from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
 
 from app.api.schemas.retrieval import RetrievalCandidate, RetrievalCompareResponse
+from app.core.auth import AuthenticatedUser, get_current_user
 from app.retrieval.dense import DenseRetriever
 from app.retrieval.hybrid import reciprocal_rank_fusion
-from app.retrieval.reranker import get_reranker
+from app.retrieval.reranker import CrossEncoderReranker, get_reranker
 from app.retrieval.sparse import BM25Retriever
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/retrieval", tags=["retrieval"])
+
+
+def get_dense_retriever() -> DenseRetriever:
+    return DenseRetriever()
+
+
+def get_sparse_retriever() -> BM25Retriever:
+    return BM25Retriever()
 
 
 @router.get("/compare", response_model=RetrievalCompareResponse)
@@ -20,19 +30,27 @@ async def compare_retrieval(
     k: int = Query(60),
     vector_cutoff: float = Query(0.40),
     cross_encoder_cutoff: float = Query(0.0),
+    scope: str | None = Query(None),
+    as_of: datetime | None = Query(None),
+    current_user: AuthenticatedUser = Depends(get_current_user),
+    dense_retriever: DenseRetriever = Depends(get_dense_retriever),
+    sparse_retriever: BM25Retriever = Depends(get_sparse_retriever),
+    reranker: CrossEncoderReranker = Depends(get_reranker),
 ) -> RetrievalCompareResponse:
     """Compare candidate ranking across vector, sparse, RRF and cross-encoder rerankers."""
-    dense_retriever = DenseRetriever()
-    sparse_retriever = BM25Retriever()
-    reranker = get_reranker()
+    filter_criteria = current_user.to_retrieval_filter(scope, as_of_time=as_of)
 
     # 1. Fetch dense candidates from Qdrant
-    dense_candidates = await dense_retriever.search(query=query, top_k=15)
+    dense_candidates = await dense_retriever.search(
+        query=query, top_k=15, filter_criteria=filter_criteria
+    )
     dense_scores = {cid: score for cid, score, _ in dense_candidates}
     dense_ranked = [cid for cid, _, _ in dense_candidates]
 
     # 2. Fetch sparse candidates from Qdrant
-    sparse_candidates = await sparse_retriever.search(query=query, top_k=15)
+    sparse_candidates = await sparse_retriever.search(
+        query=query, top_k=15, filter_criteria=filter_criteria
+    )
     sparse_scores = {cid: score for cid, score, _ in sparse_candidates}
     sparse_ranked = [cid for cid, _, _ in sparse_candidates]
 
@@ -51,7 +69,12 @@ async def compare_retrieval(
     )
     fused_scores = dict(fused)
 
-    all_chunk_ids = list(fused_scores.keys())
+    # Defense-in-depth: even if a retriever regresses, never score a denied payload.
+    all_chunk_ids = [
+        cid
+        for cid in fused_scores
+        if cid in all_payloads and filter_criteria.permits_payload(all_payloads[cid])
+    ]
     if not all_chunk_ids:
         return RetrievalCompareResponse(
             query=query,
