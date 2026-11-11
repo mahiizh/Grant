@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import random
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -63,6 +64,30 @@ def _is_retryable(exc: Exception) -> bool:
             "temporarily",
         )
     )
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    """Read a provider-supplied retry delay, if one is present."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if headers is not None:
+        raw = headers.get("retry-after") or headers.get("Retry-After")
+        if raw is not None:
+            try:
+                return float(raw)
+            except (TypeError, ValueError):
+                pass
+
+    text = str(exc)
+    match = re.search(r"retry in ([\d.]+)s", text, re.IGNORECASE)
+    if match is None:
+        match = re.search(r'"retryDelay"\s*:\s*"([\d.]+)s"', text)
+    if match is not None:
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return None
+    return None
 
 
 class ModelGateway:
@@ -231,7 +256,7 @@ class ModelGateway:
 
         resp = None
         last_exc: Exception | None = None
-        max_attempts = 5
+        max_attempts = 7
         for attempt in range(max_attempts):
             try:
                 resp = await litellm.acompletion(
@@ -248,9 +273,14 @@ class ModelGateway:
             except Exception as e:
                 last_exc = e
                 if _is_retryable(e) and attempt < max_attempts - 1:
-                    # Exponential backoff with full jitter.
+                    # Exponential backoff with full jitter, but never retry
+                    # sooner than the provider asked (free tiers often return
+                    # a ~15-60s quota reset in Retry-After / retryDelay).
                     delay = min(8.0, 0.5 * (2**attempt))
-                    delay += random.uniform(0.0, delay * 0.5)
+                    provider_delay = _retry_after_seconds(e)
+                    if provider_delay is not None:
+                        delay = max(delay, min(provider_delay + 1.0, 60.0))
+                    delay += random.uniform(0.0, min(delay * 0.25, 2.0))
                     await asyncio.sleep(delay)
                     continue
                 raise RuntimeError(f"LiteLLM completion failed for {selected_model}: {e}") from e

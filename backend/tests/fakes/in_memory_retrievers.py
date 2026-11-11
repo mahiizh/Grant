@@ -169,6 +169,50 @@ class FakeHybridRetriever:
         self.dense.index_chunks(chunks)
         self.sparse.index_chunks(chunks)
 
+    def _evidence_from_scores(
+        self,
+        results: Sequence[tuple[str, float]],
+        method: str,
+        filter_criteria: RetrievalFilter | None,
+        top_k: int,
+    ) -> AwaitableList:
+        evidence = AwaitableList()
+        for chunk_id, score in results[:top_k]:
+            chunk = self._chunks.get(chunk_id)
+            if chunk is None:
+                continue
+            if filter_criteria is not None and not filter_criteria.permits_chunk(chunk):
+                continue
+            evidence.append(
+                Evidence(
+                    chunk_id=chunk.chunk_id,
+                    doc_id=chunk.doc_id,
+                    text=chunk.text,
+                    score=score,
+                    retrieval_method=method,
+                    provenance=chunk.provenance,
+                )
+            )
+        return evidence
+
+    def search_dense(
+        self,
+        query: str,
+        top_k: int = 10,
+        filter_criteria: RetrievalFilter | None = None,
+    ) -> AwaitableList:
+        results = self.dense.search(query, top_k=top_k, filter_criteria=filter_criteria)
+        return self._evidence_from_scores(results, "dense", filter_criteria, top_k)
+
+    def search_sparse(
+        self,
+        query: str,
+        top_k: int = 10,
+        filter_criteria: RetrievalFilter | None = None,
+    ) -> AwaitableList:
+        results = self.sparse.search(query, top_k=top_k, filter_criteria=filter_criteria)
+        return self._evidence_from_scores(results, "sparse", filter_criteria, top_k)
+
     def search(
         self,
         query: str,

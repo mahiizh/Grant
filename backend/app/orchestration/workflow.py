@@ -17,7 +17,7 @@ from app.llm.citations import verify_claim_citations
 from app.llm.gateway import ModelGateway
 from app.orchestration.condense import condense_query
 from app.orchestration.router import QueryRouter
-from app.orchestration.state import RAGState
+from app.orchestration.state import RAGState, RetrievalConfig
 from app.retrieval.filters import RetrievalFilter
 from app.retrieval.hybrid import HybridRetriever
 from app.security.injection import wrap_context_for_prompt
@@ -195,6 +195,7 @@ class RAGOrchestrator:
         async def retrieve_node(state: RAGState) -> dict[str, Any]:
             query = state.get("rewritten_query") or state["query"]
             route = state.get("route", "vector")
+            config = state.get("retrieval_config", "full")
             scope = state.get("acl_scope", ACLScope.public())
             spans = list(state.get("spans", []))
 
@@ -204,6 +205,67 @@ class RAGOrchestrator:
                 user_groups=scope.allowed_groups,
                 as_of_time=state.get("as_of_time"),
             )
+
+            # Ablation configs call exactly one retriever and never take the
+            # router's graph branch. The router decision is still recorded, so
+            # router accuracy remains comparable across configurations.
+            if config == "dense":
+                dense_evidence = await self.hybrid_retriever.search_dense(
+                    query=query,
+                    top_k=5,
+                    filter_criteria=filter_criteria,
+                )
+                spans.append(
+                    {
+                        "id": f"sp-{uuid.uuid4().hex[:6]}",
+                        "name": "Dense Retrieval: ANN only",
+                        "service": "DenseRetriever",
+                        "start_ms": 30.0,
+                        "duration_ms": 20.0,
+                        "status": "ok",
+                        "meta": f"Retrieved {len(dense_evidence)} candidates",
+                    }
+                )
+                return {"evidence": dense_evidence, "path": None, "spans": spans}
+
+            if config == "sparse":
+                sparse_evidence = await self.hybrid_retriever.search_sparse(
+                    query=query,
+                    top_k=5,
+                    filter_criteria=filter_criteria,
+                )
+                spans.append(
+                    {
+                        "id": f"sp-{uuid.uuid4().hex[:6]}",
+                        "name": "Sparse Retrieval: BM25 only",
+                        "service": "BM25Retriever",
+                        "start_ms": 30.0,
+                        "duration_ms": 18.0,
+                        "status": "ok",
+                        "meta": f"Retrieved {len(sparse_evidence)} candidates",
+                    }
+                )
+                return {"evidence": sparse_evidence, "path": None, "spans": spans}
+
+            if config == "hybrid":
+                hybrid_only = await self.hybrid_retriever.search(
+                    query=query,
+                    top_k=5,
+                    filter_criteria=filter_criteria,
+                    rerank=False,
+                )
+                spans.append(
+                    {
+                        "id": f"sp-{uuid.uuid4().hex[:6]}",
+                        "name": "Hybrid Retrieval: RRF k=60 (no rerank)",
+                        "service": "HybridRetriever",
+                        "start_ms": 30.0,
+                        "duration_ms": 26.0,
+                        "status": "ok",
+                        "meta": f"Retrieved {len(hybrid_only)} candidates",
+                    }
+                )
+                return {"evidence": hybrid_only, "path": None, "spans": spans}
 
             # Route to Graph if multi-hop detected
             if route == "graph":
@@ -488,6 +550,7 @@ class RAGOrchestrator:
         as_of_time: datetime | None = None,
         thread_id: str | None = None,
         thread_history: list[dict[str, Any]] | None = None,
+        retrieval_config: RetrievalConfig = "full",
     ) -> RAGState:
         """Execute the compiled LangGraph workflow end-to-end."""
         start_time = time.perf_counter()
@@ -504,6 +567,7 @@ class RAGOrchestrator:
             "trace_id": trace_id,
             "acl_scope": scope,
             "as_of_time": as_of_time,
+            "retrieval_config": retrieval_config,
             "route": "vector",
             "is_cached": False,
             "evidence": [],

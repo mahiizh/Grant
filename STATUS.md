@@ -21,54 +21,84 @@ sections below remain the Step 0 evidence.
 | 1. Tooling cleanup | **Done** | `ruff check` + `ruff format` + `mypy` clean; eval writes redirected to temp dirs; `.env.example` updated |
 | 2. Eval items 1–5 | **Done** | Grounded 30-row dev/test golden set; chunk-level metrics per category; isolated clean-ingest `make eval`; hermetic gate; 65 tests pass |
 | 3. ACL items 7–9 | **Done** | Qdrant payload pushdown; parameterized Cypher ACL on graph reads/paths; `/retrieval/compare` + `/graph` auth; deterministic default scope; 19 unit + 4 live leak tests |
-| 4. Item 6 honest baseline | Pending | 4-config comparison after item 3: dense / sparse / hybrid RRF / hybrid+graph+rerank (see §0.1) |
+| 4. Item 6 honest baseline | **Done** | 4-config comparison on the `test` split; sparse best answer accuracy, `full` best recall, `hybrid` RRF does **not** beat dense (see §0.1) |
 | 5. Items 11–13 | Pending | — |
 
-### Item 4 — honest baseline across four retrieval configurations (plan; runs after item 3)
+### Item 4 — honest baseline across four retrieval configurations
 
-Item 4 is not a write-up of item 2's numbers. After item 3 lands, re-run the isolated `make eval`
-against the same clean ingest (15 docs / 45 chunks), the `test` split, fresh exact/semantic caches,
-and a fresh per-config LLM cache, for four retrieval configurations:
+Measured after item 3 with the isolated harness: same corpus (15 docs / 45 chunks), same `test`
+split (15 rows), same prompt/model (`gemini/gemini-3.5-flash-lite`), same admin ACL scope, no
+threshold changes, no tuning on `test`. Each config got freshly cleared exact/semantic caches and a
+cold per-config `LLM_CACHE_DIR`, so every answer and every dollar belongs to that config.
 
-| config | dense | sparse | graph | rerank |
-| --- | --- | --- | --- | --- |
-| `dense` | yes | no | no | no |
-| `sparse` | no | yes | no | no |
-| `hybrid` | yes | yes | no | no (RRF only) |
-| `full` | yes | yes | yes | yes |
+Config definitions: `dense` = ANN only; `sparse` = BM25 only; `hybrid` = dense + BM25 RRF, **no
+rerank, no graph**; `full` = today's router-directed graph traversal + hybrid RRF + CrossEncoder.
 
-Mechanics:
-
-- Add `--config {dense,sparse,hybrid,full}` to `backend/app/tools/eval_cli.py` and `CONFIG=...` to
-  `make eval`.
-- Add `RetrievalConfig` to the orchestrator; `run(..., retrieval_config=...)` bypasses the router and
-  forces the selected branch. `dense`/`sparse` call the corresponding retriever directly; `hybrid`
-  calls `HybridRetriever.search(rerank=False)`; `full` keeps today's graph+hybrid+rerank.
-- Add answer-level scoring to `EvaluationRunner`: `answer_f1` (normalized token F1 vs
-  `expected_answer`) and `answer_accuracy` (`f1 >= 0.5`; unanswerable rows are correct only when
-  `is_abstention`). Report raw F1 next to accuracy so the threshold is visible.
-- Clear exact/semantic caches and use a per-config `LLM_CACHE_DIR` before each config, so each
-  config pays its own generation cost and latency. Otherwise config 1 warms the disk cache and
-  configs 2–4 look artificially free and fast.
-- Compute p50/p95 latency over per-question wall time per config.
-- Add `make eval-compare` to run all four configs and print one combined table.
-
-Required output — one table, then stop:
+Cell format: **chunk recall@5 / chunk nDCG@10 / answer accuracy** (token F1 ≥ 0.5; unanswerable rows
+count only when the pipeline abstained).
 
 | category | dense | sparse | hybrid | full |
 | --- | --- | --- | --- | --- |
-| fact | r@5 / nDCG@10 / acc | ... | ... | ... |
-| global | ... | ... | ... | ... |
-| multi_hop | ... | ... | ... | ... |
-| multi_turn | ... | ... | ... | ... |
-| paraphrase | ... | ... | ... | ... |
-| unanswerable | ... | ... | ... | ... |
-| **all** | ... | ... | ... | ... |
+| fact | 1.000 / 0.877 / 1.000 | 1.000 / 0.877 / 1.000 | 1.000 / 0.877 / 1.000 | 1.000 / 0.877 / 1.000 |
+| global | 1.000 / 0.631 / 0.000 | 1.000 / 0.631 / 0.000 | 1.000 / 0.631 / 0.000 | 1.000 / 1.000 / 0.000 |
+| multi_hop | 1.000 / 0.724 / 0.500 | 0.750 / 0.619 / 0.500 | 0.750 / 0.505 / 1.000 | 1.000 / 0.597 / 0.500 |
+| multi_turn | 0.500 / 0.361 / 0.200 | 0.700 / 0.553 / 0.400 | 0.500 / 0.361 / 0.000 | 0.700 / 0.505 / 0.400 |
+| paraphrase | 1.000 / 0.816 / 1.000 | 1.000 / 0.816 / 1.000 | 1.000 / 0.816 / 1.000 | 1.000 / 0.816 / 0.500 |
+| unanswerable | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 |
+| **overall** | 0.833 / 0.676 / 0.600 | **0.867 / 0.726 / 0.667** | 0.800 / 0.647 / 0.600 | **0.900 / 0.732 / 0.600** |
 
-plus one operational row per config: `p50 ms`, `p95 ms`, `cost_usd`, `cache_hit_rate`.
+Operational (whole split, `CONCURRENCY=1`):
 
-Rules: same corpus, same prompt/model, no threshold changes, no tuning on `test`, and no claim that
-hybrid beats dense unless the table shows it.
+| config | p50 ms | p95 ms | cost_usd | cache_hit_rate | answer_f1 |
+| --- | --- | --- | --- | --- | --- |
+| dense | 3849.0 | 12766.2 | $0.005337 | 0.133 | 0.595 |
+| sparse | 2884.1 | 9296.3 | $0.005607 | 0.133 | 0.611 |
+| hybrid | 3449.2 | 13721.4 | $0.005425 | 0.133 | 0.621 |
+| full | 5557.3 | 13153.6 | $0.005875 | 0.133 | 0.554 |
+
+**Honest reading.** No configuration dominates. Sparse has the best answer accuracy (0.667) and
+best p50; `full` has the best chunk recall (0.900) and nDCG@10 (0.732) because the graph branch finds
+multi-hop evidence that flat retrieval misses, but its extra graph evidence is interleaved into the
+top-5 and lowers multi-hop nDCG (0.597 vs dense 0.724). **Hybrid RRF without rerank does not beat
+dense**: overall recall 0.800 vs 0.833, nDCG 0.647 vs 0.676, accuracy tied at 0.600. The claim that
+"hybrid is better" is not supported by this table. Global answer accuracy is 0 for every config: the
+answers overlap the reference (F1 0.469) but sit just below the 0.5 threshold, which is a real
+answer-quality gap, not a retrieval win.
+
+**Mechanics landed.** `RetrievalConfig` and the four-name tuple live in
+`backend/app/orchestration/state.py:11`. `RAGOrchestrator.run(..., retrieval_config=...)` stores it
+in state (`workflow.py:553`, `:570`), and `retrieve_node` branches before the graph path
+(`workflow.py:198`): dense (`:213`), sparse (`:232`), hybrid with `rerank=False` (`:255`), otherwise
+the existing full path. The router decision is still recorded, so router accuracy stays comparable
+across configs. `HybridRetriever.search_dense` / `search_sparse` return `Evidence` and share the
+same ACL payload guard as fusion (`retrieval/hybrid.py:71`, `:90`, `:43`). Answer scoring is
+normalized token F1 in `backend/app/evaluation/answer_metrics.py`; `EvaluationRunner` adds
+`answer_f1`/`answer_accuracy` (`runner.py:169`), p50/p95 (`runner.py:27`), and a
+`retrieval_config` field on `BenchmarkReport` (`runner.py:48`). The CLI adds
+`--config`/`--fresh-llm-cache` and a per-config cache directory
+(`backend/app/tools/eval_cli.py:255`, `:271`, `:286`, `:342`); `make eval CONFIG=...` and
+`make eval-compare` are wired in `Makefile:64` and `Makefile:75`. The combined table is produced by
+`backend/app/tools/eval_compare.py:53`.
+
+**Free-tier quota fix.** The first comparison attempt aborted because the Gemini free tier allows 15
+requests/minute and the old gateway exhausted 5 retries in ~15s. `gateway.py:69` now reads
+`Retry-After` / `retryDelay` from the provider, and `gateway.py:280` waits at least that long (7
+attempts, 60s cap). Consequence for reading the table: p50/p95 include provider 429 backoff, so they
+are **not** a clean latency benchmark. The known ~9.9s query-latency issue is still open and was not
+optimized here.
+
+**Verification:**
+
+```text
+uv run --directory backend ruff check app tests        -> All checks passed!
+uv run --directory backend ruff format --check app tests -> 124 files already formatted
+uv run --directory backend mypy app tests              -> Success: no issues found in 124 source files
+uv run --directory backend pytest                      -> 97 passed
+make eval-compare CONCURRENCY=1                        -> exit 0; table above
+```
+
+Per-config JSON reports were written to a temp directory (`$env:TEMP\eval_compare_json`), not to a
+tracked path.
 
 ### After item 5 — approved follow-on sequence (not scheduled)
 

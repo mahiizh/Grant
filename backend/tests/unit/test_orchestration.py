@@ -128,6 +128,33 @@ async def test_orchestrator_vector_fact_execution() -> None:
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("config", "method"),
+    [
+        ("dense", "dense"),
+        ("sparse", "sparse"),
+        ("hybrid", "hybrid"),
+        ("full", "hybrid"),
+    ],
+)
+async def test_orchestrator_retrieval_configs(config: str, method: str) -> None:
+    orchestrator = build_test_orchestrator()
+    orchestrator.exact_cache.clear()
+    orchestrator.semantic_cache.clear()
+
+    state = await orchestrator.run(
+        query="Which database acts as the single source of truth?",
+        retrieval_config=config,  # type: ignore[arg-type]
+    )
+
+    assert state["retrieval_config"] == config
+    # The router decision is still recorded, so router accuracy stays comparable.
+    assert state["route"] == "vector"
+    assert state["evidence"]
+    assert {ev.retrieval_method for ev in state["evidence"]} == {method}
+
+
+@pytest.mark.anyio
 async def test_orchestrator_abstention_execution() -> None:
     orchestrator = build_test_orchestrator()
 

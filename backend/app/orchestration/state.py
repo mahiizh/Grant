@@ -1,8 +1,15 @@
 from datetime import datetime
-from typing import Any, TypedDict
+from typing import Any, Literal, TypedDict
 
 from app.core.acl import ACLScope
 from app.domain import Evidence
+
+# Retrieval ablation configurations used by the honest baseline (item 4).
+# ``full`` is the production pipeline: router-directed graph traversal plus
+# hybrid RRF retrieval plus CrossEncoder reranking. The other three bypass the
+# router's retrieval branch and call one retriever directly.
+RetrievalConfig = Literal["dense", "sparse", "hybrid", "full"]
+RETRIEVAL_CONFIGS: tuple[RetrievalConfig, ...] = ("dense", "sparse", "hybrid", "full")
 
 
 class RAGState(TypedDict, total=False):
@@ -16,6 +23,7 @@ class RAGState(TypedDict, total=False):
     trace_id: str
     acl_scope: ACLScope
     as_of_time: datetime | None
+    retrieval_config: RetrievalConfig
     route: str  # "cache", "vector", "graph", "hybrid", "abstain"
     is_cached: bool
     evidence: list[Evidence]

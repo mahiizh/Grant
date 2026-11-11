@@ -40,6 +40,72 @@ class HybridRetriever:
         self.rrf_k = rrf_k
         self.reranker = reranker or get_reranker()
 
+    def _to_evidence(
+        self,
+        chunk_id: str,
+        score: float,
+        payload: dict[str, Any],
+        method: str,
+        filter_criteria: RetrievalFilter | None,
+    ) -> Evidence | None:
+        """Build Evidence from a Qdrant payload, refusing denied payloads."""
+        if filter_criteria is not None and not filter_criteria.permits_payload(payload):
+            return None
+
+        tier_val = payload.get("source_tier", 1)
+        prov = Provenance(
+            tier=SourceTier(tier_val),
+            source_uri=payload.get("source_uri", payload.get("doc_id", "")),
+            confidence=1.0,
+            verified=True,
+        )
+        return Evidence(
+            chunk_id=chunk_id,
+            doc_id=payload.get("doc_id", ""),
+            text=payload.get("text", ""),
+            score=round(score, 5),
+            retrieval_method=method,
+            provenance=prov,
+        )
+
+    async def search_dense(
+        self,
+        query: str,
+        top_k: int = 10,
+        filter_criteria: RetrievalFilter | None = None,
+    ) -> list[Evidence]:
+        """Dense-only retrieval, used by the ``dense`` baseline configuration."""
+        candidates = await self.dense.search(
+            query=query,
+            top_k=top_k,
+            filter_criteria=filter_criteria,
+        )
+        evidence: list[Evidence] = []
+        for chunk_id, score, payload in candidates:
+            item = self._to_evidence(chunk_id, score, payload, "dense", filter_criteria)
+            if item is not None:
+                evidence.append(item)
+        return evidence
+
+    async def search_sparse(
+        self,
+        query: str,
+        top_k: int = 10,
+        filter_criteria: RetrievalFilter | None = None,
+    ) -> list[Evidence]:
+        """Sparse-only retrieval, used by the ``sparse`` baseline configuration."""
+        candidates = await self.sparse.search(
+            query=query,
+            top_k=top_k,
+            filter_criteria=filter_criteria,
+        )
+        evidence: list[Evidence] = []
+        for chunk_id, score, payload in candidates:
+            item = self._to_evidence(chunk_id, score, payload, "sparse", filter_criteria)
+            if item is not None:
+                evidence.append(item)
+        return evidence
+
     async def search(
         self,
         query: str,
@@ -82,27 +148,9 @@ class HybridRetriever:
                 continue
             # Defense-in-depth: never build Evidence from a payload the filter denies,
             # even if a retriever upstream forgot to apply the ACL predicate.
-            if filter_criteria is not None and not filter_criteria.permits_payload(payload):
-                continue
-
-            tier_val = payload.get("source_tier", 1)
-            prov = Provenance(
-                tier=SourceTier(tier_val),
-                source_uri=payload.get("source_uri", payload.get("doc_id", "")),
-                confidence=1.0,
-                verified=True,
-            )
-
-            evidence_list.append(
-                Evidence(
-                    chunk_id=chunk_id,
-                    doc_id=payload.get("doc_id", ""),
-                    text=payload.get("text", ""),
-                    score=round(rrf_score, 5),
-                    retrieval_method="hybrid",
-                    provenance=prov,
-                )
-            )
+            item = self._to_evidence(chunk_id, rrf_score, payload, "hybrid", filter_criteria)
+            if item is not None:
+                evidence_list.append(item)
 
         # 5. Optional Cross-Encoder reranking
         if rerank and evidence_list:

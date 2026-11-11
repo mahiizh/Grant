@@ -10,6 +10,7 @@ from app.llm import (
     ModelGateway,
     verify_claim_citations,
 )
+from app.llm.gateway import _retry_after_seconds
 from app.security import (
     detect_prompt_injection,
     redact_sensitive_data,
@@ -66,6 +67,19 @@ def test_sensitive_data_redaction() -> None:
     assert "[REDACTED_API_KEY]" in clean_log
     assert "4111-2222-3333-4444" not in clean_log
     assert "[REDACTED_CARD_NUMBER]" in clean_log
+
+
+def test_retry_after_seconds_reads_provider_hints() -> None:
+    class _Response:
+        headers = {"retry-after": "16.5"}
+
+    class _RateLimitError(Exception):
+        response = _Response()
+
+    assert _retry_after_seconds(_RateLimitError()) == 16.5
+    assert _retry_after_seconds(Exception("Please retry in 16.475182509s")) == 16.475182509
+    assert _retry_after_seconds(Exception('"retryDelay": "12s"')) == 12.0
+    assert _retry_after_seconds(Exception("no hint here")) is None
 
 
 @pytest.mark.anyio

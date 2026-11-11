@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -41,6 +42,7 @@ from app.evaluation.runner import BenchmarkReport, EvaluationRunner  # noqa: E40
 from app.indexing.outbox_worker import OutboxWorker  # noqa: E402
 from app.indexing.qdrant_indexer import QdrantIndexer  # noqa: E402
 from app.ingestion.pipeline import IngestionPipeline  # noqa: E402
+from app.orchestration.state import RETRIEVAL_CONFIGS, RetrievalConfig  # noqa: E402
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -196,17 +198,18 @@ def _load_dataset(existing_chunk_ids: set[str]) -> GoldenDataset:
 
 def _print_report(report: BenchmarkReport) -> None:
     print()
-    print("=" * 72)
-    print(f"Golden evaluation report (split={report.split})")
-    print("=" * 72)
+    print("=" * 88)
+    print(f"Golden evaluation report (config={report.retrieval_config}, split={report.split})")
+    print("=" * 88)
     print(f"Questions:        {report.total_questions}")
     print(f"Router accuracy:  {report.overall_router_accuracy:.4f}")
     print(f"Cache hit rate:   {report.cache_hit_rate:.4f}")
     print(f"Total cost:       ${report.total_cost_usd:.6f} / budget ${report.budget_usd:.4f}")
+    print(f"Latency p50/p95:  {report.p50_latency_ms:.1f} ms / {report.p95_latency_ms:.1f} ms")
     print()
     header = (
         f"{'category':12s} {'n':>3s} {'chunk_r@5':>10s} {'chunk_ndcg@10':>14s} "
-        f"{'chunk_mrr':>10s} {'hit@5':>7s} {'doc_ndcg@10':>12s} "
+        f"{'chunk_mrr':>10s} {'answer_f1':>10s} {'answer_acc':>10s} "
         f"{'latency_ms':>11s} {'cost_usd':>9s}"
     )
     print(header)
@@ -220,17 +223,18 @@ def _print_report(report: BenchmarkReport) -> None:
             f"{scores.get('chunk_recall@5', 0.0):10.3f} "
             f"{scores.get('chunk_ndcg@10', 0.0):14.3f} "
             f"{scores.get('chunk_mrr', 0.0):10.3f} "
-            f"{scores.get('chunk_hit_rate@5', 0.0):7.3f} "
-            f"{scores.get('doc_ndcg@10', 0.0):12.3f} "
+            f"{scores.get('answer_f1', 0.0):10.3f} "
+            f"{scores.get('answer_accuracy', 0.0):10.3f} "
             f"{ops.get('latency_ms', 0.0):11.1f} "
             f"{ops.get('cost_usd', 0.0):9.6f}"
         )
-    print("=" * 72)
+    print("=" * 88)
 
 
 def _write_json_report(report: BenchmarkReport, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
+        "retrieval_config": report.retrieval_config,
         "split": report.split,
         "total_questions": report.total_questions,
         "overall_router_accuracy": report.overall_router_accuracy,
@@ -239,6 +243,8 @@ def _write_json_report(report: BenchmarkReport, path: Path) -> None:
         "total_cost_usd": report.total_cost_usd,
         "budget_usd": report.budget_usd,
         "cache_hit_rate": report.cache_hit_rate,
+        "p50_latency_ms": report.p50_latency_ms,
+        "p95_latency_ms": report.p95_latency_ms,
         "summary": report.summary,
         "per_question": report.per_question,
     }
@@ -246,7 +252,24 @@ def _write_json_report(report: BenchmarkReport, path: Path) -> None:
     print(f"Wrote JSON report to {path}")
 
 
-async def _run(args: argparse.Namespace) -> int:
+def configure_llm_cache(config: RetrievalConfig, fresh: bool = False) -> Path:
+    """Point the gateway at a per-config cache directory.
+
+    The cache key already includes the full prompt, so configs cannot poison
+    each other. The separate directory makes it possible to prove a comparison
+    run was cold for every configuration.
+    """
+    base = Path(_BOOTSTRAP.LLM_CACHE_DIR)
+    cache_dir = base / f"eval-{config}"
+    if fresh and cache_dir.exists():
+        shutil.rmtree(cache_dir)
+    os.environ["LLM_CACHE_DIR"] = str(cache_dir)
+    get_settings.cache_clear()
+    return cache_dir
+
+
+async def prepare_eval() -> GoldenDataset:
+    """Recreate and ingest the isolated eval stores, then load the golden rows."""
     _check_isolation()
 
     print(f"Eval PostgreSQL database: {get_settings().POSTGRES_DB}")
@@ -257,21 +280,48 @@ async def _run(args: argparse.Namespace) -> int:
     await _reset_qdrant_collection()
     await _ingest_corpus()
     existing_chunk_ids = await _verify_ingest()
-    dataset = _load_dataset(existing_chunk_ids)
+    return _load_dataset(existing_chunk_ids)
 
-    split: SplitType | None = None if args.split == "all" else args.split
 
+async def run_config(
+    dataset: GoldenDataset,
+    config: RetrievalConfig,
+    split: SplitType | None,
+    budget_usd: float | None,
+    concurrency: int | None,
+) -> BenchmarkReport:
+    """Run one retrieval configuration against a freshly prepared dataset."""
     orchestrator = EvaluationRunner.build_production_orchestrator()
     orchestrator.exact_cache.clear()
     orchestrator.semantic_cache.clear()
-    print("Cleared exact and semantic caches; every answer must be earned.")
+    print(f"Cleared exact and semantic caches for config={config!r}.")
 
     runner = EvaluationRunner(
         orchestrator=orchestrator,
+        budget_usd=budget_usd,
+        concurrency=concurrency,
+        retrieval_config=config,
+    )
+    try:
+        return await runner.run_benchmark(dataset, split=split)
+    finally:
+        await orchestrator.graph_retriever.close()
+
+
+async def _run(args: argparse.Namespace) -> int:
+    cache_dir = configure_llm_cache(args.config, fresh=args.fresh_llm_cache)
+    print(f"LLM cache directory:      {cache_dir}")
+
+    dataset = await prepare_eval()
+    split: SplitType | None = None if args.split == "all" else args.split
+
+    report = await run_config(
+        dataset=dataset,
+        config=args.config,
+        split=split,
         budget_usd=args.budget_usd,
         concurrency=args.concurrency,
     )
-    report = await runner.run_benchmark(dataset, split=split)
     _print_report(report)
 
     if args.json_report:
@@ -289,6 +339,12 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Golden split to score (default: test, the CI gate split).",
     )
     parser.add_argument(
+        "--config",
+        choices=list(RETRIEVAL_CONFIGS),
+        default="full",
+        help="Retrieval ablation configuration to score (default: full).",
+    )
+    parser.add_argument(
         "--budget-usd",
         type=float,
         default=None,
@@ -299,6 +355,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=int,
         default=None,
         help="Max concurrent questions. Defaults to EVAL_CONCURRENCY.",
+    )
+    parser.add_argument(
+        "--fresh-llm-cache",
+        action="store_true",
+        help="Delete this config's on-disk LLM cache before running (cold baseline).",
     )
     parser.add_argument(
         "--json-report",

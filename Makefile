@@ -1,4 +1,4 @@
-.PHONY: help dev migrate test test-unit test-gate eval lint format typecheck check up down logs ps clean frontend-dev frontend-build
+.PHONY: help dev migrate test test-unit test-gate eval eval-compare lint format typecheck check up down logs ps clean frontend-dev frontend-build
 
 # Keep Compose and the backend on the same env file. Fall back to .env.example
 # so `make up` still works before the first `cp .env.example .env`.
@@ -13,6 +13,7 @@ help:
 	@echo "  make test           - Run all unit and CI eval gate tests"
 	@echo "  make test-gate      - Run CI evaluation gate against golden dataset"
 	@echo "  make eval           - Clean-ingest into an isolated DB/collection and score the golden test split"
+	@echo "  make eval-compare   - Run dense/sparse/hybrid/full on the same split and print one comparison table"
 	@echo "  make lint           - Run Ruff linter"
 	@echo "  make format         - Run Ruff code formatter"
 	@echo "  make typecheck      - Run Mypy static type checker"
@@ -58,13 +59,25 @@ reconcile: migrate
 	uv run --directory backend python -m app.indexing.reconciler $(if $(REPAIR),--repair,)
 
 # Isolated evaluation: dedicated PostgreSQL DB + Qdrant collection, clean ingest,
-# then the golden test split. Extra flags: SPLIT=dev|test|all BUDGET_USD=0.50
+# then the golden test split. Extra flags: SPLIT=dev|test|all CONFIG=dense|sparse|hybrid|full
+# BUDGET_USD=0.50 CONCURRENCY=2 JSON_REPORT=path
 eval:
 	uv run --directory backend python -m app.tools.eval_cli \
+		--config $(or $(CONFIG),full) \
 		--split $(or $(SPLIT),test) \
 		$(if $(BUDGET_USD),--budget-usd $(BUDGET_USD),) \
 		$(if $(CONCURRENCY),--concurrency $(CONCURRENCY),) \
+		$(if $(FRESH_LLM_CACHE),--fresh-llm-cache,) \
 		$(if $(JSON_REPORT),--json-report $(JSON_REPORT),)
+
+# Honest baseline: same corpus, prompt, model, and split; four retrieval configs
+# with a cold per-config LLM cache. Extra flags: SPLIT=... BUDGET_USD=... JSON_DIR=...
+eval-compare:
+	uv run --directory backend python -m app.tools.eval_compare \
+		--split $(or $(SPLIT),test) \
+		$(if $(BUDGET_USD),--budget-usd $(BUDGET_USD),) \
+		$(if $(CONCURRENCY),--concurrency $(CONCURRENCY),) \
+		$(if $(JSON_DIR),--json-dir $(JSON_DIR),)
 
 
 lint:

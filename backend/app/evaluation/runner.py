@@ -1,4 +1,5 @@
 import asyncio
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -6,6 +7,7 @@ from app.cache.exact import ExactCache
 from app.cache.semantic import SemanticCache
 from app.core.acl import ACLScope
 from app.core.config import get_settings
+from app.evaluation.answer_metrics import answer_accuracy
 from app.evaluation.datasets import GoldenDataset, GoldenQuestion, SplitType
 from app.evaluation.retrieval_metrics import (
     hit_rate_at_k,
@@ -17,9 +19,23 @@ from app.evaluation.retrieval_metrics import (
 from app.evaluation.router_regret import evaluate_router_decisions
 from app.graph.retrievers import GraphRetriever
 from app.llm.gateway import BudgetExceededError, ModelGateway
-from app.orchestration.state import RAGState
+from app.orchestration.state import RAGState, RetrievalConfig
 from app.orchestration.workflow import RAGOrchestrator
 from app.retrieval.hybrid import HybridRetriever
+
+
+def percentile(values: list[float], fraction: float) -> float:
+    """Return a linearly interpolated percentile (``fraction`` in ``[0, 1]``)."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * fraction
+    lower = math.floor(position)
+    upper = math.ceil(position)
+    if lower == upper:
+        return round(ordered[lower], 2)
+    weight = position - lower
+    return round(ordered[lower] + (ordered[upper] - ordered[lower]) * weight, 2)
 
 
 @dataclass
@@ -29,12 +45,15 @@ class BenchmarkReport:
     total_questions: int
     overall_router_accuracy: float
     split: str = "all"
+    retrieval_config: str = "full"
     category_scores: dict[str, dict[str, float]] = field(default_factory=dict)
     category_operational: dict[str, dict[str, float]] = field(default_factory=dict)
     per_question: list[dict[str, Any]] = field(default_factory=list)
     total_cost_usd: float = 0.0
     budget_usd: float = 0.0
     cache_hit_rate: float = 0.0
+    p50_latency_ms: float = 0.0
+    p95_latency_ms: float = 0.0
     summary: dict[str, Any] = field(default_factory=dict)
 
 
@@ -46,8 +65,10 @@ class EvaluationRunner:
         orchestrator: RAGOrchestrator | None = None,
         budget_usd: float | None = None,
         concurrency: int | None = None,
+        retrieval_config: RetrievalConfig = "full",
     ) -> None:
         self.orchestrator = orchestrator or RAGOrchestrator()
+        self.retrieval_config = retrieval_config
         settings = get_settings()
         self.budget_usd = budget_usd if budget_usd is not None else settings.LLM_MAX_BUDGET_PER_RUN
         self.concurrency = max(
@@ -140,6 +161,16 @@ class EvaluationRunner:
             "rewrite_accuracy": EvaluationRunner._rewrite_accuracy(question, rewritten),
         }
 
+        answer_f1, answer_correct = answer_accuracy(
+            prediction=state.get("answer", ""),
+            reference=question.expected_answer,
+            is_abstention=bool(state.get("is_abstention", False)),
+        )
+        answer_metrics = {
+            "answer_f1": answer_f1,
+            "answer_accuracy": answer_correct,
+        }
+
         return {
             "id": question.id,
             "category": question.category,
@@ -147,12 +178,14 @@ class EvaluationRunner:
             "route": state.get("route", "vector"),
             "optimal_strategy": question.optimal_strategy,
             "rewritten_query": rewritten,
+            "answer": state.get("answer", ""),
             "retrieved_chunk_ids": retrieved_chunk_ids,
             "retrieved_doc_ids": retrieved_doc_ids,
             "expected_chunk_ids": sorted(target_chunks),
             "expected_doc_ids": sorted(target_docs),
             "chunk_metrics": chunk_metrics,
             "doc_metrics": doc_metrics,
+            "answer_metrics": answer_metrics,
             "operational": operational,
         }
 
@@ -198,6 +231,7 @@ class EvaluationRunner:
                     query=question.query,
                     thread_history=question.thread_turns,
                     acl_scope=admin_scope,
+                    retrieval_config=self.retrieval_config,
                 )
                 return self._score_question(question, state)
 
@@ -221,7 +255,7 @@ class EvaluationRunner:
 
         for row in per_question:
             category = row["category"]
-            metrics = {**row["chunk_metrics"], **row["doc_metrics"]}
+            metrics = {**row["chunk_metrics"], **row["doc_metrics"], **row["answer_metrics"]}
             operational = dict(row["operational"])
             if category == "unanswerable":
                 metrics["abstention_rate"] = operational["is_abstention"]
@@ -259,19 +293,26 @@ class EvaluationRunner:
         cache_hits = sum(row["operational"]["is_cached"] for row in per_question)
         cache_hit_rate = round(cache_hits / total, 4) if total else 0.0
         total_cost = gateway.total_spent_usd
+        latencies = [row["operational"]["latency_ms"] for row in per_question]
+        p50_latency = percentile(latencies, 0.50)
+        p95_latency = percentile(latencies, 0.95)
 
         return BenchmarkReport(
             total_questions=total,
             overall_router_accuracy=router_report.accuracy,
             split=split or "all",
+            retrieval_config=self.retrieval_config,
             category_scores=category_scores,
             category_operational=category_operational,
             per_question=per_question,
             total_cost_usd=total_cost,
             budget_usd=self.budget_usd,
             cache_hit_rate=cache_hit_rate,
+            p50_latency_ms=p50_latency,
+            p95_latency_ms=p95_latency,
             summary={
                 "split": split or "all",
+                "retrieval_config": self.retrieval_config,
                 "router_accuracy": router_report.accuracy,
                 "strategy_distribution": router_report.strategy_distribution,
                 "category_scores": category_scores,
@@ -279,6 +320,8 @@ class EvaluationRunner:
                 "total_cost_usd": total_cost,
                 "budget_usd": self.budget_usd,
                 "cache_hit_rate": cache_hit_rate,
+                "p50_latency_ms": p50_latency,
+                "p95_latency_ms": p95_latency,
                 "gateway_calls": gateway.total_calls,
                 "gateway_cache_hits": gateway.cache_hits,
             },
