@@ -36,11 +36,17 @@ class RAGOrchestrator:
         semantic_cache: SemanticCache | None = None,
         model_gateway: ModelGateway | None = None,
         checkpointer: Any | None = None,
+        cache_enabled: bool = True,
     ) -> None:
         self.hybrid_retriever = hybrid_retriever or HybridRetriever()
         self.graph_retriever = graph_retriever or GraphRetriever()
-        self.exact_cache = exact_cache or ExactCache()
-        self.semantic_cache = semantic_cache or SemanticCache()
+        self.cache_enabled = cache_enabled
+        if cache_enabled:
+            self.exact_cache = exact_cache or ExactCache()
+            self.semantic_cache = semantic_cache or SemanticCache()
+        else:
+            self.exact_cache = ExactCache(enabled=False)
+            self.semantic_cache = SemanticCache(enabled=False)
         self.gateway = model_gateway or ModelGateway()
         self.checkpointer = checkpointer or MemorySaver()
         self.graph = self._build_graph()
@@ -125,6 +131,11 @@ class RAGOrchestrator:
         def cache_node(state: RAGState) -> dict[str, Any]:
             spans = list(state.get("spans", []))
 
+            # A comparison run can disable exact and semantic caching entirely:
+            # a hit would return an answer produced by a different config.
+            if not self.cache_enabled:
+                return {"is_cached": False, "spans": spans}
+
             # Temporal queries bypass live cache
             if state.get("as_of_time") is not None:
                 return {"is_cached": False, "spans": spans}
@@ -193,11 +204,19 @@ class RAGOrchestrator:
 
         # 4. Retrieval Node
         async def retrieve_node(state: RAGState) -> dict[str, Any]:
+            retrieval_start = time.perf_counter()
             query = state.get("rewritten_query") or state["query"]
             route = state.get("route", "vector")
             config = state.get("retrieval_config", "full")
             scope = state.get("acl_scope", ACLScope.public())
             spans = list(state.get("spans", []))
+
+            def done(payload: dict[str, Any]) -> dict[str, Any]:
+                """Attach retrieval-only time, excluding LLM and provider backoff."""
+                payload["retrieval_latency_ms"] = round(
+                    (time.perf_counter() - retrieval_start) * 1000.0, 2
+                )
+                return payload
 
             filter_criteria = RetrievalFilter(
                 acl_scope=scope,
@@ -226,7 +245,7 @@ class RAGOrchestrator:
                         "meta": f"Retrieved {len(dense_evidence)} candidates",
                     }
                 )
-                return {"evidence": dense_evidence, "path": None, "spans": spans}
+                return done({"evidence": dense_evidence, "path": None, "spans": spans})
 
             if config == "sparse":
                 sparse_evidence = await self.hybrid_retriever.search_sparse(
@@ -245,7 +264,7 @@ class RAGOrchestrator:
                         "meta": f"Retrieved {len(sparse_evidence)} candidates",
                     }
                 )
-                return {"evidence": sparse_evidence, "path": None, "spans": spans}
+                return done({"evidence": sparse_evidence, "path": None, "spans": spans})
 
             if config == "hybrid":
                 hybrid_only = await self.hybrid_retriever.search(
@@ -265,7 +284,7 @@ class RAGOrchestrator:
                         "meta": f"Retrieved {len(hybrid_only)} candidates",
                     }
                 )
-                return {"evidence": hybrid_only, "path": None, "spans": spans}
+                return done({"evidence": hybrid_only, "path": None, "spans": spans})
 
             # Route to Graph if multi-hop detected
             if route == "graph":
@@ -323,37 +342,17 @@ class RAGOrchestrator:
                     else []
                 )
 
-                hybrid_evidence = await self.hybrid_retriever.search(
+                # Fuse all branches first: dense + sparse RRF candidates plus
+                # graph path evidence. Rerank the combined, deduplicated pool
+                # once, and only then cut to top-k. Graph evidence must never be
+                # appended after the reranker.
+                combined_evidence = await self.hybrid_retriever.search(
                     query=query,
                     top_k=5,
                     filter_criteria=filter_criteria,
                     rerank=True,
+                    extra_candidates=graph_evidence,
                 )
-
-                combined_evidence = []
-                seen_chunk_ids = set()
-                for i in range(max(len(graph_evidence), len(hybrid_evidence))):
-                    if i < len(graph_evidence) and graph_evidence[i].chunk_id not in seen_chunk_ids:
-                        combined_evidence.append(graph_evidence[i])
-                        seen_chunk_ids.add(graph_evidence[i].chunk_id)
-                    if (
-                        i < len(hybrid_evidence)
-                        and hybrid_evidence[i].chunk_id not in seen_chunk_ids
-                    ):
-                        combined_evidence.append(hybrid_evidence[i])
-                        seen_chunk_ids.add(hybrid_evidence[i].chunk_id)
-
-                # Diversify by document in top results for multi-hop coverage
-                doc_diversified = []
-                seen_docs = set()
-                deferred = []
-                for ev in combined_evidence:
-                    if ev.doc_id not in seen_docs:
-                        doc_diversified.append(ev)
-                        seen_docs.add(ev.doc_id)
-                    else:
-                        deferred.append(ev)
-                doc_diversified.extend(deferred)
 
                 spans.append(
                     {
@@ -366,11 +365,13 @@ class RAGOrchestrator:
                         "meta": f"Path: {' -> '.join(discovered_path) if discovered_path else 'none'}",
                     }
                 )
-                return {
-                    "evidence": doc_diversified[:5],
-                    "path": discovered_path,
-                    "spans": spans,
-                }
+                return done(
+                    {
+                        "evidence": combined_evidence,
+                        "path": discovered_path,
+                        "spans": spans,
+                    }
+                )
 
             # Default to hybrid RRF search with CrossEncoder reranking
             evidence = await self.hybrid_retriever.search(
@@ -390,7 +391,7 @@ class RAGOrchestrator:
                     "meta": f"Retrieved {len(evidence)} candidates",
                 }
             )
-            return {"evidence": evidence, "path": None, "spans": spans}
+            return done({"evidence": evidence, "path": None, "spans": spans})
 
         # 5. Abstention Node
         def abstain_node(state: RAGState) -> dict[str, Any]:

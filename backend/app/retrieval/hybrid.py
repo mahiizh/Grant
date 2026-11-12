@@ -112,8 +112,14 @@ class HybridRetriever:
         top_k: int = 10,
         filter_criteria: RetrievalFilter | None = None,
         rerank: bool = False,
+        extra_candidates: Sequence[Evidence] | None = None,
     ) -> list[Evidence]:
-        """Perform hybrid retrieval over real Qdrant collection and return Evidence objects."""
+        """Perform hybrid retrieval over real Qdrant collection and return Evidence objects.
+
+        ``extra_candidates`` lets a caller add another retrieval branch (for
+        example graph path evidence) to the same rerank pool. The combined list
+        is deduplicated, reranked once, and only then cut to ``top_k``.
+        """
         # 1. Fetch dense candidates
         dense_candidates = await self.dense.search(
             query=query,
@@ -152,7 +158,17 @@ class HybridRetriever:
             if item is not None:
                 evidence_list.append(item)
 
-        # 5. Optional Cross-Encoder reranking
+        # 4b. Add candidates from any other branch (e.g. graph path evidence)
+        # to the same rerank pool. Deduplicate by chunk id so a chunk found by
+        # both branches is scored once.
+        if extra_candidates:
+            seen_chunk_ids = {item.chunk_id for item in evidence_list}
+            for item in extra_candidates:
+                if item.chunk_id not in seen_chunk_ids:
+                    evidence_list.append(item)
+                    seen_chunk_ids.add(item.chunk_id)
+
+        # 5. Optional Cross-Encoder reranking over the combined candidate pool
         if rerank and evidence_list:
             return self.reranker.rerank_evidence(query=query, candidates=evidence_list, top_k=top_k)
 

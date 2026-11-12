@@ -31,15 +31,19 @@ class SemanticCache:
         self,
         similarity_threshold: float = 0.85,
         redis_client: redis.Redis | None = None,
+        enabled: bool = True,
     ) -> None:
         self.threshold = similarity_threshold
         settings = get_settings()
+        self.enabled = enabled
         self._hits = 0
         self._misses = 0
         self._guard_rejections = 0
-        self.embedding_service = get_embedding_service()
         self._entries: list[SemanticCacheEntry] = []
         self.client: redis.Redis | None = None
+        self.embedding_service = get_embedding_service()
+        if not self.enabled:
+            return
 
         try:
             self.client = redis_client or redis.Redis.from_url(settings.redis_url)
@@ -116,6 +120,9 @@ class SemanticCache:
         index_version: int = 1,
     ) -> Answer | None:
         """Search for a semantically similar query, verified by entity/number guardrails."""
+        if not self.enabled:
+            self._misses += 1
+            return None
         if not self._entries:
             self._misses += 1
             return None
@@ -177,6 +184,8 @@ class SemanticCache:
         ttl_seconds: int = 3600,
     ) -> None:
         """Store query embedding and answer in the semantic cache and Redis."""
+        if not self.enabled:
+            return
         query_vec = self.embedding_service.embed_query_dense(query)
         entry = SemanticCacheEntry(
             query=query,
@@ -221,13 +230,15 @@ class SemanticCache:
 
     def invalidate_by_version(self, min_version: int) -> int:
         """Purge entries whose index_version < min_version."""
+        if not self.enabled:
+            return 0
         initial_len = len(self._entries)
         self._entries = [e for e in self._entries if e.index_version >= min_version]
         return initial_len - len(self._entries)
 
     def clear(self) -> None:
         self._entries.clear()
-        if self.client:
+        if self.enabled and self.client:
             for k in self.client.scan_iter("sem:*"):
                 self.client.delete(k)
         self._hits = 0

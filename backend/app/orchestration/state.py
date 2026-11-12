@@ -34,6 +34,7 @@ class RAGState(TypedDict, total=False):
     retry_count: int
     cost_usd: float
     latency_ms: float
+    retrieval_latency_ms: float
     start_time: float
     metadata: dict[str, Any]
     spans: list[dict[str, Any]]

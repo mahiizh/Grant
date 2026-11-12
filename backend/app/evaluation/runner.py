@@ -54,6 +54,8 @@ class BenchmarkReport:
     cache_hit_rate: float = 0.0
     p50_latency_ms: float = 0.0
     p95_latency_ms: float = 0.0
+    retrieval_p50_latency_ms: float = 0.0
+    retrieval_p95_latency_ms: float = 0.0
     summary: dict[str, Any] = field(default_factory=dict)
 
 
@@ -76,11 +78,13 @@ class EvaluationRunner:
         )
 
     @classmethod
-    def build_production_orchestrator(cls) -> RAGOrchestrator:
+    def build_production_orchestrator(cls, cache_enabled: bool = True) -> RAGOrchestrator:
         """Build the live orchestrator.
 
         Caches are deliberately *not* pre-seeded. The eval CLI clears them at the
         start of a run so every answer is earned by the pipeline under test.
+        Comparison runs pass ``cache_enabled=False`` so a hit cannot return an
+        answer produced by another retrieval configuration.
         """
         return RAGOrchestrator(
             hybrid_retriever=HybridRetriever(),
@@ -88,6 +92,7 @@ class EvaluationRunner:
             exact_cache=ExactCache(),
             semantic_cache=SemanticCache(similarity_threshold=0.75),
             model_gateway=ModelGateway(max_budget_per_run=get_settings().LLM_MAX_BUDGET_PER_RUN),
+            cache_enabled=cache_enabled,
         )
 
     @staticmethod
@@ -154,6 +159,7 @@ class EvaluationRunner:
         rewritten = state.get("rewritten_query", question.query)
         operational = {
             "latency_ms": float(state.get("latency_ms", 0.0)),
+            "retrieval_latency_ms": float(state.get("retrieval_latency_ms", 0.0)),
             "cost_usd": float(state.get("cost_usd", 0.0)),
             "is_cached": 1.0 if state.get("is_cached", False) else 0.0,
             "is_abstention": 1.0 if state.get("is_abstention", False) else 0.0,
@@ -296,6 +302,15 @@ class EvaluationRunner:
         latencies = [row["operational"]["latency_ms"] for row in per_question]
         p50_latency = percentile(latencies, 0.50)
         p95_latency = percentile(latencies, 0.95)
+        # Retrieval-only time: exclude cache hits (no retrieval ran) and never
+        # include LLM generation or provider 429 backoff.
+        retrieval_latencies = [
+            row["operational"]["retrieval_latency_ms"]
+            for row in per_question
+            if row["operational"]["retrieval_latency_ms"] > 0.0
+        ]
+        retrieval_p50 = percentile(retrieval_latencies, 0.50) if retrieval_latencies else 0.0
+        retrieval_p95 = percentile(retrieval_latencies, 0.95) if retrieval_latencies else 0.0
 
         return BenchmarkReport(
             total_questions=total,
@@ -310,6 +325,8 @@ class EvaluationRunner:
             cache_hit_rate=cache_hit_rate,
             p50_latency_ms=p50_latency,
             p95_latency_ms=p95_latency,
+            retrieval_p50_latency_ms=retrieval_p50,
+            retrieval_p95_latency_ms=retrieval_p95,
             summary={
                 "split": split or "all",
                 "retrieval_config": self.retrieval_config,
@@ -322,6 +339,8 @@ class EvaluationRunner:
                 "cache_hit_rate": cache_hit_rate,
                 "p50_latency_ms": p50_latency,
                 "p95_latency_ms": p95_latency,
+                "retrieval_p50_latency_ms": retrieval_p50,
+                "retrieval_p95_latency_ms": retrieval_p95,
                 "gateway_calls": gateway.total_calls,
                 "gateway_cache_hits": gateway.cache_hits,
             },

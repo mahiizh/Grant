@@ -3,8 +3,9 @@
 This is the item-4 baseline harness. It ingests the corpus once into the
 isolated eval stores, then runs ``dense``, ``sparse``, ``hybrid`` and ``full``
 against the same golden split, prompt, model, and ACL scope. Each configuration
-gets a cold on-disk LLM cache and freshly cleared exact/semantic caches so the
-comparison does not inherit a warm run from another configuration.
+gets a cold on-disk LLM cache and exact/semantic response caching is disabled
+for the whole run, so a cache hit cannot return an answer produced by another
+configuration.
 """
 
 import argparse
@@ -87,8 +88,10 @@ def _print_comparison(
     for config in RETRIEVAL_CONFIGS:
         report = reports[config]
         print(
-            f"  {config:7s} p50={report.p50_latency_ms:8.1f} ms  "
-            f"p95={report.p95_latency_ms:8.1f} ms  "
+            f"  {config:7s} retrieval_p50={report.retrieval_p50_latency_ms:7.1f} ms  "
+            f"retrieval_p95={report.retrieval_p95_latency_ms:7.1f} ms  "
+            f"e2e_p50={report.p50_latency_ms:8.1f} ms  "
+            f"e2e_p95={report.p95_latency_ms:8.1f} ms  "
             f"cost=${report.total_cost_usd:.6f}  "
             f"cache_hit={report.cache_hit_rate:.3f}  "
             f"answer_f1={_overall(report, 'answer_f1'):.3f}"
@@ -112,6 +115,8 @@ def _write_reports(
             "cache_hit_rate": report.cache_hit_rate,
             "p50_latency_ms": report.p50_latency_ms,
             "p95_latency_ms": report.p95_latency_ms,
+            "retrieval_p50_latency_ms": report.retrieval_p50_latency_ms,
+            "retrieval_p95_latency_ms": report.retrieval_p95_latency_ms,
             "summary": report.summary,
             "per_question": report.per_question,
         }
@@ -136,6 +141,7 @@ async def _run(args: argparse.Namespace) -> int:
             split=split,
             budget_usd=args.budget_usd,
             concurrency=args.concurrency,
+            cache_enabled=False,
         )
         reports[config] = report
         _print_report(report)

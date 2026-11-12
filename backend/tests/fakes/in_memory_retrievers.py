@@ -220,6 +220,7 @@ class FakeHybridRetriever:
         filter_criteria: RetrievalFilter | None = None,
         k: int = 60,
         rerank: bool = False,
+        extra_candidates: Sequence[Evidence] | None = None,
     ) -> AwaitableList:
         dense_results = self.dense.search(query, top_k=top_k * 2, filter_criteria=filter_criteria)
         sparse_results = self.sparse.search(query, top_k=top_k * 2, filter_criteria=filter_criteria)
@@ -252,6 +253,12 @@ class FakeHybridRetriever:
                 )
             )
         if rerank and self.reranker is not None and evidence_list:
+            if extra_candidates:
+                seen = {item.chunk_id for item in evidence_list}
+                for item in extra_candidates:
+                    if item.chunk_id not in seen:
+                        evidence_list.append(item)
+                        seen.add(item.chunk_id)
             return AwaitableList(
                 self.reranker.rerank_evidence(query=query, candidates=evidence_list, top_k=top_k)
             )

@@ -206,11 +206,15 @@ def _print_report(report: BenchmarkReport) -> None:
     print(f"Cache hit rate:   {report.cache_hit_rate:.4f}")
     print(f"Total cost:       ${report.total_cost_usd:.6f} / budget ${report.budget_usd:.4f}")
     print(f"Latency p50/p95:  {report.p50_latency_ms:.1f} ms / {report.p95_latency_ms:.1f} ms")
+    print(
+        f"Retrieval p50/p95:{report.retrieval_p50_latency_ms:9.1f} ms / "
+        f"{report.retrieval_p95_latency_ms:.1f} ms (excludes LLM and 429 backoff)"
+    )
     print()
     header = (
         f"{'category':12s} {'n':>3s} {'chunk_r@5':>10s} {'chunk_ndcg@10':>14s} "
         f"{'chunk_mrr':>10s} {'answer_f1':>10s} {'answer_acc':>10s} "
-        f"{'latency_ms':>11s} {'cost_usd':>9s}"
+        f"{'latency_ms':>11s} {'retr_ms':>8s} {'cost_usd':>9s}"
     )
     print(header)
     print("-" * len(header))
@@ -226,6 +230,7 @@ def _print_report(report: BenchmarkReport) -> None:
             f"{scores.get('answer_f1', 0.0):10.3f} "
             f"{scores.get('answer_accuracy', 0.0):10.3f} "
             f"{ops.get('latency_ms', 0.0):11.1f} "
+            f"{ops.get('retrieval_latency_ms', 0.0):8.1f} "
             f"{ops.get('cost_usd', 0.0):9.6f}"
         )
     print("=" * 88)
@@ -245,6 +250,8 @@ def _write_json_report(report: BenchmarkReport, path: Path) -> None:
         "cache_hit_rate": report.cache_hit_rate,
         "p50_latency_ms": report.p50_latency_ms,
         "p95_latency_ms": report.p95_latency_ms,
+        "retrieval_p50_latency_ms": report.retrieval_p50_latency_ms,
+        "retrieval_p95_latency_ms": report.retrieval_p95_latency_ms,
         "summary": report.summary,
         "per_question": report.per_question,
     }
@@ -289,12 +296,16 @@ async def run_config(
     split: SplitType | None,
     budget_usd: float | None,
     concurrency: int | None,
+    cache_enabled: bool = True,
 ) -> BenchmarkReport:
     """Run one retrieval configuration against a freshly prepared dataset."""
-    orchestrator = EvaluationRunner.build_production_orchestrator()
-    orchestrator.exact_cache.clear()
-    orchestrator.semantic_cache.clear()
-    print(f"Cleared exact and semantic caches for config={config!r}.")
+    orchestrator = EvaluationRunner.build_production_orchestrator(cache_enabled=cache_enabled)
+    if cache_enabled:
+        orchestrator.exact_cache.clear()
+        orchestrator.semantic_cache.clear()
+        print(f"Cleared exact and semantic caches for config={config!r}.")
+    else:
+        print(f"Exact and semantic caches disabled for config={config!r}.")
 
     runner = EvaluationRunner(
         orchestrator=orchestrator,
@@ -321,6 +332,7 @@ async def _run(args: argparse.Namespace) -> int:
         split=split,
         budget_usd=args.budget_usd,
         concurrency=args.concurrency,
+        cache_enabled=not args.no_cache,
     )
     _print_report(report)
 
@@ -360,6 +372,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--fresh-llm-cache",
         action="store_true",
         help="Delete this config's on-disk LLM cache before running (cold baseline).",
+    )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="Disable exact and semantic response caches for the whole run.",
     )
     parser.add_argument(
         "--json-report",

@@ -20,7 +20,7 @@ from tests.fakes.in_memory_retrievers import (
 )
 
 
-def build_test_orchestrator() -> RAGOrchestrator:
+def build_test_orchestrator(cache_enabled: bool = True) -> RAGOrchestrator:
     now = datetime(2026, 3, 1, tzinfo=UTC)
     prov = Provenance.from_document("corpus/rfc_001.md")
     acl = ACLScope.public()
@@ -82,6 +82,7 @@ def build_test_orchestrator() -> RAGOrchestrator:
     return RAGOrchestrator(
         hybrid_retriever=cast(RealHybridRetriever, hybrid),
         graph_retriever=cast(RealGraphRetriever, graph),
+        cache_enabled=cache_enabled,
     )
 
 
@@ -111,6 +112,8 @@ def test_query_router_classification() -> None:
 @pytest.mark.anyio
 async def test_orchestrator_vector_fact_execution() -> None:
     orchestrator = build_test_orchestrator()
+    orchestrator.exact_cache.clear()
+    orchestrator.semantic_cache.clear()
 
     state = await orchestrator.run(
         query="Which database acts as the single source of truth?",
@@ -125,6 +128,8 @@ async def test_orchestrator_vector_fact_execution() -> None:
     assert state["citations_valid"]
     assert state["cost_usd"] > 0.0
     assert state["latency_ms"] > 0.0
+    assert state["retrieval_latency_ms"] > 0.0
+    assert state["retrieval_latency_ms"] <= state["latency_ms"]
 
 
 @pytest.mark.anyio
@@ -192,6 +197,22 @@ async def test_orchestrator_cache_hit_execution() -> None:
     assert state["is_cached"]
     assert state["answer"] == "Precomputed cached answer [chunk_storage_01]"
     assert state["cost_usd"] == 0.0
+
+
+@pytest.mark.anyio
+async def test_orchestrator_no_cache_never_returns_cached_answer() -> None:
+    orchestrator = build_test_orchestrator(cache_enabled=False)
+    query = "Which database acts as the single source of truth?"
+
+    first = await orchestrator.run(query=query)
+    second = await orchestrator.run(query=query)
+
+    assert orchestrator.cache_enabled is False
+    assert not first["is_cached"]
+    assert not second["is_cached"]
+    assert first["cost_usd"] > 0.0
+    assert second["cost_usd"] > 0.0
+    assert second["retrieval_latency_ms"] > 0.0
 
 
 def test_fastapi_query_endpoint() -> None:

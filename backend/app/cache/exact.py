@@ -15,11 +15,14 @@ logger = logging.getLogger(__name__)
 class ExactCache:
     """Production Redis-backed exact-match response cache."""
 
-    def __init__(self, redis_client: redis.Redis | None = None) -> None:
+    def __init__(self, redis_client: redis.Redis | None = None, enabled: bool = True) -> None:
         settings = get_settings()
+        self.enabled = enabled
         self._hits = 0
         self._misses = 0
         self.client: redis.Redis | None = None
+        if not self.enabled:
+            return
         try:
             self.client = redis_client or redis.Redis.from_url(settings.redis_url)
         except Exception as e:
@@ -34,6 +37,9 @@ class ExactCache:
         prompt_version: str = "v1",
     ) -> Answer | None:
         """Retrieve cached Answer if exact key matches in Redis."""
+        if not self.enabled:
+            self._misses += 1
+            return None
         key = generate_exact_cache_key(
             query=query,
             acl_scope=acl_scope,
@@ -107,7 +113,7 @@ class ExactCache:
             index_version=index_version,
             prompt_version=prompt_version,
         )
-        if not self.client:
+        if not self.enabled or not self.client:
             return key
 
         try:
@@ -144,7 +150,7 @@ class ExactCache:
 
     def invalidate_tenant(self, tenant_id: str) -> int:
         """Purge cached responses for a tenant."""
-        if not self.client:
+        if not self.enabled or not self.client:
             return 0
         count = 0
         for k in self.client.scan_iter("exact:*"):
@@ -157,7 +163,7 @@ class ExactCache:
         return count
 
     def clear(self) -> None:
-        if self.client:
+        if self.enabled and self.client:
             for k in self.client.scan_iter("exact:*"):
                 self.client.delete(k)
         self._hits = 0
@@ -166,7 +172,7 @@ class ExactCache:
     @property
     def stats(self) -> dict[str, int]:
         count = 0
-        if self.client:
+        if self.enabled and self.client:
             with contextlib.suppress(Exception):
                 count = sum(1 for _ in self.client.scan_iter("exact:*"))
         return {
