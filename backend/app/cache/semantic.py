@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import redis
 
 from app.cache.guards import validate_cache_hit
+from app.cache.keys import generate_semantic_cache_key
 from app.core.acl import ACLScope
 from app.core.config import get_settings
 from app.domain import Answer, Evidence, Provenance, SourceTier
@@ -22,6 +23,8 @@ class SemanticCacheEntry:
     acl_scope: ACLScope
     index_version: int
     tenant_id: str
+    prompt_version: str = "v1"
+    as_of: str | None = None
 
 
 class SemanticCache:
@@ -108,6 +111,8 @@ class SemanticCache:
                         acl_scope=scope,
                         index_version=data.get("index_version", 1),
                         tenant_id=scope.tenant_id,
+                        prompt_version=data.get("prompt_version", "v1"),
+                        as_of=data.get("as_of"),
                     )
                 )
         except Exception as e:
@@ -118,6 +123,8 @@ class SemanticCache:
         query: str,
         acl_scope: ACLScope,
         index_version: int = 1,
+        prompt_version: str = "v1",
+        as_of: str | None = None,
     ) -> Answer | None:
         """Search for a semantically similar query, verified by entity/number guardrails."""
         if not self.enabled:
@@ -132,6 +139,8 @@ class SemanticCache:
 
         for entry in self._entries:
             if entry.tenant_id != acl_scope.tenant_id or entry.index_version != index_version:
+                continue
+            if entry.prompt_version != prompt_version or entry.as_of != as_of:
                 continue
 
             if not entry.acl_scope.permits(
@@ -182,6 +191,8 @@ class SemanticCache:
         acl_scope: ACLScope,
         index_version: int = 1,
         ttl_seconds: int = 3600,
+        prompt_version: str = "v1",
+        as_of: str | None = None,
     ) -> None:
         """Store query embedding and answer in the semantic cache and Redis."""
         if not self.enabled:
@@ -194,6 +205,8 @@ class SemanticCache:
             acl_scope=acl_scope,
             index_version=index_version,
             tenant_id=acl_scope.tenant_id,
+            prompt_version=prompt_version,
+            as_of=as_of,
         )
         self._entries.append(entry)
 
@@ -205,6 +218,8 @@ class SemanticCache:
                     "answer": answer.answer,
                     "is_abstention": answer.is_abstention,
                     "index_version": index_version,
+                    "prompt_version": prompt_version,
+                    "as_of": as_of,
                     "acl_scope": {
                         "tenant_id": acl_scope.tenant_id,
                         "allowed_roles": list(acl_scope.allowed_roles),
@@ -223,7 +238,13 @@ class SemanticCache:
                         for ev in answer.evidence
                     ],
                 }
-                k = f"sem:{hash(query)}"
+                k = generate_semantic_cache_key(
+                    query=query,
+                    acl_scope=acl_scope,
+                    index_version=index_version,
+                    prompt_version=prompt_version,
+                    as_of=as_of,
+                )
                 self.client.set(k, json.dumps(payload), ex=ttl_seconds)
             except Exception as e:
                 logger.error("Failed saving semantic entry to Redis: %s", e)
@@ -235,6 +256,34 @@ class SemanticCache:
         initial_len = len(self._entries)
         self._entries = [e for e in self._entries if e.index_version >= min_version]
         return initial_len - len(self._entries)
+
+    def invalidate_document(self, doc_id: str) -> int:
+        """Purge entries whose evidence cites ``doc_id`` from memory and Redis."""
+        if not self.enabled:
+            return 0
+        initial_len = len(self._entries)
+        self._entries = [
+            entry
+            for entry in self._entries
+            if not any(ev.doc_id == doc_id for ev in entry.answer.evidence)
+        ]
+        purged = initial_len - len(self._entries)
+
+        if self.client:
+            try:
+                for k in self.client.scan_iter("sem:*"):
+                    raw = self.client.get(k)
+                    if not raw:
+                        continue
+                    raw_str = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+                    data = json.loads(raw_str)
+                    evidence = data.get("evidence", [])
+                    if any(ev.get("doc_id") == doc_id for ev in evidence):
+                        self.client.delete(k)
+                        purged += 1
+            except Exception as e:
+                logger.error("Failed invalidating semantic entries for doc %s: %s", doc_id, e)
+        return purged
 
     def clear(self) -> None:
         self._entries.clear()

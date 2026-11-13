@@ -1,5 +1,5 @@
 from collections.abc import AsyncGenerator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -228,3 +228,150 @@ async def test_document_repository_delete_and_invalidation(test_session: AsyncSe
     del_types = {e.event_type for e in deletion_events}
     assert OutboxEventType.DOCUMENT_DELETED.value in del_types
     assert OutboxEventType.CACHE_INVALIDATED.value in del_types
+
+
+def _build_document(
+    *,
+    doc_id: str = "doc_idem",
+    content: str = "Section 1: Outbox pattern",
+    chunk_text: str = "Section 1: Outbox pattern",
+    chunk_id: str = "chk_idem_0001",
+) -> Document:
+    now = datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
+    temporal = TemporalBounds.current(valid_from=now)
+    prov = Provenance.from_document(source_uri="corpus/idempotency.md")
+    acl = ACLScope.restricted(allowed_roles={"platform_engineer"}, tenant_id="acme")
+    chunk = Chunk(
+        chunk_id=chunk_id,
+        doc_id=doc_id,
+        index=0,
+        text=chunk_text,
+        tokens=5,
+        acl_scope=acl,
+        temporal=temporal,
+        provenance=prov,
+    )
+    return Document(
+        doc_id=doc_id,
+        title="Idempotency Doc",
+        content=content,
+        chunks=[chunk],
+        acl_scope=acl,
+        temporal=temporal,
+        provenance=prov,
+        version=1,
+    )
+
+
+@pytest.mark.anyio
+async def test_resaving_unchanged_document_stages_no_events(
+    test_session: AsyncSession,
+) -> None:
+    doc = _build_document()
+    await DocumentRepository.save_document(session=test_session, document=doc)
+    await test_session.flush()
+
+    first_events = await OutboxService.fetch_pending_events(session=test_session, limit=10)
+    assert len(first_events) == 2  # 1 document + 1 chunk
+    for event in first_events:
+        await OutboxService.mark_processed(session=test_session, event_id=event.event_id)
+    await test_session.flush()
+
+    # Re-save the exact same content: no chunks replaced, no events staged.
+    await DocumentRepository.save_document(session=test_session, document=_build_document())
+    await test_session.flush()
+
+    assert await OutboxService.fetch_pending_events(session=test_session, limit=10) == []
+
+    retrieved = await DocumentRepository.get_document(session=test_session, doc_id="doc_idem")
+    assert retrieved is not None
+    assert len(retrieved.chunks) == 1
+
+
+@pytest.mark.anyio
+async def test_changed_document_stages_invalidation_and_upsert_events(
+    test_session: AsyncSession,
+) -> None:
+    await DocumentRepository.save_document(session=test_session, document=_build_document())
+    await test_session.flush()
+    first_events = await OutboxService.fetch_pending_events(session=test_session, limit=10)
+    for event in first_events:
+        await OutboxService.mark_processed(session=test_session, event_id=event.event_id)
+    await test_session.flush()
+
+    changed = _build_document(
+        content="Section 1: Outbox pattern\nSection 2: Cache invalidation",
+        chunk_text="Section 2: Cache invalidation",
+        chunk_id="chk_idem_0002",
+    )
+    await DocumentRepository.save_document(session=test_session, document=changed)
+    await test_session.flush()
+
+    pending = await OutboxService.fetch_pending_events(session=test_session, limit=10)
+    event_types = {e.event_type for e in pending}
+    assert OutboxEventType.CACHE_INVALIDATED.value in event_types
+    assert OutboxEventType.DOCUMENT_INGESTED.value in event_types
+    assert OutboxEventType.CHUNK_UPSERTED.value in event_types
+
+    retrieved = await DocumentRepository.get_document(session=test_session, doc_id="doc_idem")
+    assert retrieved is not None
+    assert [c.chunk_id for c in retrieved.chunks] == ["chk_idem_0002"]
+
+
+@pytest.mark.anyio
+async def test_outbox_reconcile_prunes_processed_and_compacts_pending(
+    test_session: AsyncSession,
+) -> None:
+    now = datetime(2026, 4, 10, 12, 0, 0, tzinfo=UTC)
+
+    old_processed = OutboxService.stage_event(
+        session=test_session,
+        event_type=OutboxEventType.DOCUMENT_INGESTED,
+        aggregate_type="document",
+        aggregate_id="doc_old",
+        payload={},
+    )
+    await test_session.flush()
+    await OutboxService.mark_processed(session=test_session, event_id=old_processed.event_id)
+    old_processed.processed_at = now - timedelta(days=10)
+
+    recent_processed = OutboxService.stage_event(
+        session=test_session,
+        event_type=OutboxEventType.DOCUMENT_INGESTED,
+        aggregate_type="document",
+        aggregate_id="doc_recent",
+        payload={},
+    )
+    await test_session.flush()
+    await OutboxService.mark_processed(session=test_session, event_id=recent_processed.event_id)
+    recent_processed.processed_at = now - timedelta(days=1)
+
+    # Two pending duplicates for the same aggregate, plus one distinct event.
+    for _ in range(2):
+        OutboxService.stage_event(
+            session=test_session,
+            event_type=OutboxEventType.CHUNK_UPSERTED,
+            aggregate_type="chunk",
+            aggregate_id="chk_dup",
+            payload={"chunk_id": "chk_dup"},
+        )
+    OutboxService.stage_event(
+        session=test_session,
+        event_type=OutboxEventType.CHUNK_UPSERTED,
+        aggregate_type="chunk",
+        aggregate_id="chk_unique",
+        payload={"chunk_id": "chk_unique"},
+    )
+    await test_session.flush()
+
+    stats = await OutboxService.reconcile(session=test_session, now=now)
+    await test_session.flush()
+
+    assert stats == {
+        "processed_pruned": 1,
+        "pending_compacted": 1,
+        "pending_remaining": 2,
+    }
+    remaining = await OutboxService.fetch_pending_events(session=test_session, limit=10)
+    assert len(remaining) == 2
+    assert {e.aggregate_id for e in remaining} == {"chk_dup", "chk_unique"}

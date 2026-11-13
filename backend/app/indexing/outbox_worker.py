@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.cache.invalidation import CacheInvalidator
 from app.db.models import OutboxEventRecord
 from app.db.outbox import OutboxEventType, OutboxService
 from app.db.postgres import get_session
@@ -20,9 +21,11 @@ class OutboxWorker:
         self,
         qdrant_indexer: QdrantIndexer | None = None,
         neo4j_indexer: Neo4jIndexer | None = None,
+        cache_invalidator: CacheInvalidator | None = None,
     ) -> None:
         self.qdrant = qdrant_indexer or QdrantIndexer()
         self.neo4j = neo4j_indexer or Neo4jIndexer()
+        self.cache_invalidator = cache_invalidator or CacheInvalidator()
 
     async def process_event(
         self,
@@ -89,7 +92,11 @@ class OutboxWorker:
                 await self.neo4j.delete_by_doc_id(doc_id)
 
             elif event_type == OutboxEventType.CACHE_INVALIDATED.value:
-                pass
+                summary = self.cache_invalidator.handle_outbox_event(
+                    event_type=event_type,
+                    payload=payload,
+                )
+                logger.info("Cache invalidation for doc %s: %s", payload.get("doc_id"), summary)
 
             elif event_type == OutboxEventType.DOCUMENT_INGESTED.value:
                 logger.info("Processed DOCUMENT_INGESTED milestone for doc: %s", event.aggregate_id)

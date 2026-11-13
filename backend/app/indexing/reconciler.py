@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import select
 
 from app.db.models import ChunkRecord
+from app.db.outbox import OutboxService
 from app.db.postgres import announce_database_identity, get_session, verify_schema
 from app.indexing.neo4j_indexer import Neo4jIndexer
 from app.indexing.qdrant_indexer import QdrantIndexer
@@ -21,6 +22,17 @@ async def run_reconciliation(repair: bool = False) -> int:
 
     await announce_database_identity()
     await verify_schema()
+
+    # 0. Keep the outbox bounded and free of duplicate pending work.
+    async with get_session() as session:
+        outbox_stats = await OutboxService.reconcile(session=session)
+        await session.commit()
+    print(
+        "Outbox reconciliation:        "
+        f"pruned {outbox_stats['processed_pruned']} processed, "
+        f"compacted {outbox_stats['pending_compacted']} pending duplicates, "
+        f"{outbox_stats['pending_remaining']} pending remain"
+    )
 
     # 1. Fetch from PostgreSQL
     async with get_session() as session:

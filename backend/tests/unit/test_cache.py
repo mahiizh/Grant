@@ -1,12 +1,17 @@
+import json
+from typing import Any, cast
+
 from app.cache import (
     CacheInvalidator,
     ExactCache,
     SemanticCache,
     generate_exact_cache_key,
+    generate_semantic_cache_key,
     validate_cache_hit,
 )
 from app.core.acl import ACLScope
 from app.domain import Answer, Evidence, Provenance
+from tests.fakes.fake_redis import FakeRedis
 
 
 def create_sample_answer(query: str, text: str) -> Answer:
@@ -39,6 +44,46 @@ def test_exact_cache_key_generation() -> None:
 
     key_diff_acl = generate_exact_cache_key("Which database is source of truth?", acl_restricted)
     assert key1 != key_diff_acl  # Security isolation works
+
+
+def test_semantic_cache_key_scopes_full_context() -> None:
+    acl = ACLScope.restricted(
+        allowed_roles={"sre"},
+        allowed_groups={"platform"},
+        tenant_id="acme",
+    )
+    base = generate_semantic_cache_key(
+        "Who owns Redis?",
+        acl,
+        index_version=1,
+        prompt_version="v1",
+        as_of=None,
+    )
+
+    assert base == generate_semantic_cache_key(
+        "  who owns REDIS? ",
+        acl,
+        index_version=1,
+        prompt_version="v1",
+        as_of=None,
+    )
+    assert base != generate_semantic_cache_key("Who owns Redis?", acl, index_version=2)
+    assert base != generate_semantic_cache_key("Who owns Redis?", acl, prompt_version="v2")
+    assert base != generate_semantic_cache_key(
+        "Who owns Redis?", acl, as_of="2026-04-01T00:00:00+00:00"
+    )
+    assert base != generate_semantic_cache_key(
+        "Who owns Redis?",
+        ACLScope.restricted(allowed_roles={"sre"}, allowed_groups={"platform"}, tenant_id="other"),
+    )
+    assert base != generate_semantic_cache_key(
+        "Who owns Redis?",
+        ACLScope.restricted(allowed_roles={"admin"}, allowed_groups={"platform"}, tenant_id="acme"),
+    )
+    assert base != generate_semantic_cache_key(
+        "Who owns Redis?",
+        ACLScope.restricted(allowed_roles={"sre"}, allowed_groups={"finance"}, tenant_id="acme"),
+    )
 
 
 def test_exact_cache_hit_and_metrics() -> None:
@@ -154,3 +199,49 @@ def test_outbox_cache_invalidation_lifecycle() -> None:
     # Query with new index version misses old cache
     assert exact.get(query, acl, index_version=2) is None
     assert sem.get(query, acl, index_version=2) is None
+
+
+def test_exact_cache_invalidate_document() -> None:
+    redis = FakeRedis()
+    cache = ExactCache(redis_client=cast(Any, redis))
+    acl = ACLScope.public(tenant_id="tenant_1")
+    query = "What is the reconciler schedule?"
+    ans = create_sample_answer(query, "02:00 UTC")
+
+    cache.set(query, ans, acl)
+    assert cache.get(query, acl) is not None
+
+    purged = cache.invalidate_document("doc_01")
+    assert purged == 1
+    assert cache.get(query, acl) is None
+
+
+def test_cache_invalidator_purges_exact_and_semantic_document_keys() -> None:
+    redis = FakeRedis()
+    exact_payload = {
+        "query": "q",
+        "answer": "a",
+        "evidence": [{"doc_id": "doc_01", "chunk_id": "chk_01"}],
+    }
+    other_payload = {
+        "query": "q2",
+        "answer": "a2",
+        "evidence": [{"doc_id": "doc_02", "chunk_id": "chk_02"}],
+    }
+    redis.seed("exact:cache:exact:t1:v1:v1:acl:q", json.dumps(exact_payload))
+    redis.seed("sem:abc", json.dumps(exact_payload))
+    redis.seed("exact:cache:exact:t1:v1:v1:acl:q2", json.dumps(other_payload))
+    redis.seed("sem:def", json.dumps(other_payload))
+
+    invalidator = CacheInvalidator(redis_client=cast(Any, redis))
+    summary = invalidator.handle_outbox_event(
+        event_type="CACHE_INVALIDATED",
+        payload={"doc_id": "doc_01", "reason": "document_deletion"},
+    )
+
+    assert summary["new_index_version"] == 2
+    assert summary["redis_keys_purged"] == 2
+    assert "exact:cache:exact:t1:v1:v1:acl:q" not in redis.store
+    assert "sem:abc" not in redis.store
+    assert "exact:cache:exact:t1:v1:v1:acl:q2" in redis.store
+    assert "sem:def" in redis.store

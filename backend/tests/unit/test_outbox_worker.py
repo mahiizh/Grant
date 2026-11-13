@@ -4,6 +4,7 @@ from typing import cast
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.cache.invalidation import CacheInvalidator
 from app.core.acl import ACLScope
 from app.db.models import Base
 from app.db.outbox import OutboxEventType, OutboxService, OutboxStatus
@@ -11,6 +12,13 @@ from app.db.postgres import DocumentRepository
 from app.domain import Chunk, Document, Provenance, TemporalBounds
 from app.indexing import Neo4jIndexer, OutboxWorker, QdrantIndexer
 from tests.fakes.in_memory_indexers import FakeNeo4jIndexer, FakeQdrantIndexer
+
+
+class _NoopInvalidator:
+    """Avoid a real Redis connection when exercising deletion events."""
+
+    def handle_outbox_event(self, event_type: str, payload: dict[str, object]) -> dict[str, object]:
+        return {"invalidated": True}
 
 
 @pytest.fixture
@@ -114,6 +122,7 @@ async def test_outbox_worker_processes_deletion(test_session: AsyncSession) -> N
     worker = OutboxWorker(
         qdrant_indexer=cast(QdrantIndexer, qdrant),
         neo4j_indexer=cast(Neo4jIndexer, neo4j),
+        cache_invalidator=cast(CacheInvalidator, _NoopInvalidator()),
     )
 
     # Process creation
@@ -158,3 +167,36 @@ async def test_outbox_worker_error_handling(test_session: AsyncSession) -> None:
     assert event.status == OutboxStatus.FAILED.value
     assert event.retry_count == 1
     assert "Qdrant service unreachable" in (event.last_error or "")
+
+
+@pytest.mark.anyio
+async def test_outbox_worker_handles_cache_invalidation(test_session: AsyncSession) -> None:
+    class RecordingInvalidator:
+        def __init__(self) -> None:
+            self.events: list[tuple[str, dict[str, object]]] = []
+
+        def handle_outbox_event(
+            self, event_type: str, payload: dict[str, object]
+        ) -> dict[str, object]:
+            self.events.append((event_type, payload))
+            return {"invalidated": True}
+
+    invalidator = RecordingInvalidator()
+    event = OutboxService.stage_event(
+        session=test_session,
+        event_type=OutboxEventType.CACHE_INVALIDATED,
+        aggregate_type="cache",
+        aggregate_id="doc_cache",
+        payload={"doc_id": "doc_cache", "reason": "document_deletion"},
+    )
+    await test_session.flush()
+
+    worker = OutboxWorker(cache_invalidator=cast(CacheInvalidator, invalidator))
+    success = await worker.process_event(session=test_session, event=event)
+    await test_session.flush()
+
+    assert success
+    assert event.status == OutboxStatus.PROCESSED.value
+    assert invalidator.events == [
+        ("CACHE_INVALIDATED", {"doc_id": "doc_cache", "reason": "document_deletion"})
+    ]

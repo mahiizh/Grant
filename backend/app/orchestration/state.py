@@ -23,6 +23,7 @@ class RAGState(TypedDict, total=False):
     trace_id: str
     acl_scope: ACLScope
     as_of_time: datetime | None
+    prompt_version: str
     retrieval_config: RetrievalConfig
     route: str  # "cache", "vector", "graph", "hybrid", "abstain"
     is_cached: bool

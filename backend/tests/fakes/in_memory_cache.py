@@ -93,6 +93,8 @@ class FakeSemanticCacheEntry:
     acl_scope: ACLScope
     index_version: int
     tenant_id: str
+    prompt_version: str = "v1"
+    as_of: str | None = None
 
 
 class FakeSemanticCache:
@@ -110,6 +112,8 @@ class FakeSemanticCache:
         query: str,
         acl_scope: ACLScope,
         index_version: int = 1,
+        prompt_version: str = "v1",
+        as_of: str | None = None,
     ) -> Answer | None:
         if not self._entries:
             self._misses += 1
@@ -121,6 +125,8 @@ class FakeSemanticCache:
 
         for entry in self._entries:
             if entry.tenant_id != acl_scope.tenant_id or entry.index_version != index_version:
+                continue
+            if entry.prompt_version != prompt_version or entry.as_of != as_of:
                 continue
 
             if not entry.acl_scope.permits(
@@ -166,6 +172,8 @@ class FakeSemanticCache:
         answer: Answer,
         acl_scope: ACLScope,
         index_version: int = 1,
+        prompt_version: str = "v1",
+        as_of: str | None = None,
     ) -> None:
         entry = FakeSemanticCacheEntry(
             query=query,
@@ -174,6 +182,8 @@ class FakeSemanticCache:
             acl_scope=acl_scope,
             index_version=index_version,
             tenant_id=acl_scope.tenant_id,
+            prompt_version=prompt_version,
+            as_of=as_of,
         )
         self._entries.append(entry)
 

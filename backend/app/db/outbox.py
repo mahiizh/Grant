@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any
 
@@ -128,3 +128,53 @@ class OutboxService:
         )
         result = await session.execute(stmt)
         return list(result.scalars().all())
+
+    @staticmethod
+    async def reconcile(
+        session: AsyncSession,
+        processed_retention_days: int = 7,
+        now: datetime | None = None,
+    ) -> dict[str, int]:
+        """Keep the outbox bounded and idempotent.
+
+        * Delete ``PROCESSED`` events older than the retention window so the
+          table does not grow without bound.
+        * Compact duplicate ``PENDING`` events for the same
+          ``(event_type, aggregate_type, aggregate_id)`` to the newest one, so a
+          retried or repeated ingest does not queue the same index mutation
+          twice.
+        """
+        current = now or datetime.now(UTC)
+        cutoff = current - timedelta(days=processed_retention_days)
+
+        processed_stmt = select(OutboxEventRecord).where(
+            OutboxEventRecord.status == OutboxStatus.PROCESSED.value,
+            OutboxEventRecord.processed_at.is_not(None),
+            OutboxEventRecord.processed_at < cutoff,
+        )
+        processed_events = list((await session.execute(processed_stmt)).scalars().all())
+        for event in processed_events:
+            await session.delete(event)
+
+        pending_stmt = (
+            select(OutboxEventRecord)
+            .where(OutboxEventRecord.status == OutboxStatus.PENDING.value)
+            .order_by(OutboxEventRecord.created_at.asc())
+        )
+        pending_events = list((await session.execute(pending_stmt)).scalars().all())
+
+        seen: dict[tuple[str, str, str], OutboxEventRecord] = {}
+        duplicates = 0
+        for event in pending_events:
+            key = (event.event_type, event.aggregate_type, event.aggregate_id)
+            if key in seen:
+                # Newer event supersedes the older pending duplicate.
+                await session.delete(seen[key])
+                duplicates += 1
+            seen[key] = event
+
+        return {
+            "processed_pruned": len(processed_events),
+            "pending_compacted": duplicates,
+            "pending_remaining": len(seen),
+        }

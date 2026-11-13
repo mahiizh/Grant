@@ -22,7 +22,7 @@ sections below remain the Step 0 evidence.
 | 2. Eval items 1–5 | **Done** | Grounded 30-row dev/test golden set; chunk-level metrics per category; isolated clean-ingest `make eval`; hermetic gate; 65 tests pass |
 | 3. ACL items 7–9 | **Done** | Qdrant payload pushdown; parameterized Cypher ACL on graph reads/paths; `/retrieval/compare` + `/graph` auth; deterministic default scope; 19 unit + 4 live leak tests |
 | 4. Item 6 honest baseline | **Done** | 4-config comparison on the `test` split with response caches disabled; `full` best retrieval, `hybrid` best answer accuracy, `hybrid` RRF does **not** beat dense on retrieval (see §0.1–§0.2) |
-| 5. Items 11–13 | Pending | — |
+| 5. Items 11–13 | In progress | Item 11 done: idempotent ingest + outbox reconciliation + document-scoped cache invalidation (see §0.4); items 12–13 pending |
 | 6. Eval power | Pending | 150–200 docs / 500+ chunks, 150+ golden rows (20+/category in test), calibrated LLM judge, bootstrap 95% CIs; token F1 secondary (see §0.3) |
 
 ### §0.1 Item 4 — honest baseline across four retrieval configurations
@@ -207,6 +207,41 @@ metric; primary evidence is judge correctness/faithfulness plus retrieval recall
    intervals do not overlap.
 5. **Reporting** — every comparison table carries CIs and the judge-agreement figure; no "X beats Y"
    claim without non-overlapping intervals.
+
+### §0.4 Item 11 — outbox-first idempotent ingest and cache invalidation
+
+**Idempotent ingest.** `DocumentRepository.save_document` now computes an effective content hash
+(`postgres.py:283`) and an index fingerprint over content plus tenant/roles/groups/visibility and
+temporal bounds (`postgres.py:303`). Re-saving a document with an unchanged fingerprint updates only
+display fields and returns early (`postgres.py:367`): no chunks are deleted/reinserted, and no
+`DOCUMENT_INGESTED`, `CHUNK_UPSERTED`, or `CACHE_INVALIDATED` events are staged. The fingerprint
+normalizes datetimes to aware UTC (`postgres.py:290`) because SQLite drops timezone info on
+round-trip. A changed fingerprint stages `CACHE_INVALIDATED` before the upsert events
+(`postgres.py:420`), so stale answers citing the old chunks are purged.
+
+**Outbox reconciliation.** `OutboxService.reconcile` (`outbox.py:133`) deletes `PROCESSED` events
+older than a retention window (default 7 days) and compacts duplicate `PENDING` events for the same
+`(event_type, aggregate_type, aggregate_id)` to the newest one. The reconciler runs it before drift
+analysis (`reconciler.py:28`) and prints pruned/compacted/pending counts, so a retry storm cannot
+grow the table without bound.
+
+**Cache invalidation.** `CACHE_INVALIDATED` is no longer a no-op in `OutboxWorker`
+(`outbox_worker.py:95`). `CacheInvalidator.handle_outbox_event` bumps the index version and purges
+both exact and semantic Redis keys whose stored evidence cites the deleted/changed `doc_id`
+(`invalidation.py:71`). `ExactCache.invalidate_document` (`exact.py:151`) and
+`SemanticCache.invalidate_document` (`semantic.py:260`) also purge in-process entries. Semantic keys
+are now scoped by tenant, roles, groups, index version, prompt version, and `as_of`
+(`keys.py:35`); the workflow passes `prompt_version` and `as_of` on every cache read/write
+(`workflow.py:149`, `:181`, `:509`).
+
+**Tests added (7):** unchanged re-save stages zero events; changed content stages invalidation plus
+upsert events and replaces chunks; `reconcile` prunes old processed events and compacts pending
+duplicates; semantic key isolation across tenant/roles/groups/version/prompt/as_of; exact-cache
+document invalidation; invalidator purges exact + semantic Redis keys and leaves unrelated docs;
+worker routes `CACHE_INVALIDATED` to the invalidator.
+
+**Verification at this commit:** `ruff check` clean, `ruff format --check` 125 files, `mypy` 125
+files, `pytest` 105 passed.
 
 ### After item 5 — approved follow-on sequence (not scheduled)
 

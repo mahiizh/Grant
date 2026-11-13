@@ -1,7 +1,9 @@
 import asyncio
+import hashlib
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager, suppress
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import delete, select, text
@@ -277,13 +279,58 @@ class DocumentRepository:
             metadata=record.metadata_json or {},
         )
 
+    @staticmethod
+    def _effective_content_hash(document: Document) -> str:
+        """Return the declared content hash, or derive one from the document body."""
+        if document.content_hash:
+            return document.content_hash
+        return hashlib.sha256(document.content.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _temporal_key(value: datetime | None) -> str | None:
+        """Normalize a datetime to an aware UTC ISO string for comparison.
+
+        SQLite drops timezone information on round-trip, so comparing raw
+        ``isoformat()`` output would report an unchanged document as changed.
+        """
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=UTC)
+        return value.astimezone(UTC).isoformat()
+
+    @staticmethod
+    def _index_fingerprint(document: Document) -> tuple[Any, ...]:
+        """Fields that change downstream index state when they change.
+
+        Chunk text is derived from content, and chunk ACL/temporal payloads are
+        derived from the document scope and bounds, so an unchanged fingerprint
+        means the existing chunks and index records are still valid.
+        """
+        return (
+            DocumentRepository._effective_content_hash(document),
+            document.acl_scope.tenant_id,
+            tuple(sorted(document.acl_scope.allowed_roles)),
+            tuple(sorted(document.acl_scope.allowed_groups)),
+            document.acl_scope.is_public,
+            DocumentRepository._temporal_key(document.temporal.valid_from),
+            DocumentRepository._temporal_key(document.temporal.valid_to),
+        )
+
     @classmethod
     async def save_document(
         cls,
         session: AsyncSession,
         document: Document,
     ) -> DocumentRecord:
-        """Atomically persist a document, replace chunks, and stage outbox events."""
+        """Atomically persist a document, replace chunks, and stage outbox events.
+
+        Re-saving a document whose content and index-relevant ACL/temporal fields
+        are unchanged is a no-op for chunks and downstream indexing: no
+        ``DOCUMENT_INGESTED``, ``CHUNK_UPSERTED``, or ``CACHE_INVALIDATED`` events
+        are staged, so retries and duplicate ingest jobs cannot flood the outbox
+        or re-embed identical chunks.
+        """
         stmt = (
             select(DocumentRecord)
             .options(selectinload(DocumentRecord.chunks))
@@ -292,13 +339,40 @@ class DocumentRepository:
         result = await session.execute(stmt)
         existing_doc = result.scalar_one_or_none()
 
+        if existing_doc is not None:
+            existing_fingerprint = (
+                existing_doc.content_hash
+                or hashlib.sha256(existing_doc.content.encode("utf-8")).hexdigest(),
+                existing_doc.acl_tenant_id,
+                tuple(sorted(existing_doc.acl_allowed_roles or [])),
+                tuple(sorted(existing_doc.acl_allowed_groups or [])),
+                existing_doc.acl_is_public,
+                cls._temporal_key(existing_doc.valid_from),
+                cls._temporal_key(existing_doc.valid_to),
+            )
+            if existing_fingerprint == cls._index_fingerprint(document):
+                # Content and index-relevant metadata are unchanged: keep chunks
+                # and outbox state untouched, but still persist display-only
+                # fields such as title, version, and metadata.
+                existing_doc.title = document.title
+                existing_doc.version = document.version
+                existing_doc.content_hash = cls._effective_content_hash(document)
+                existing_doc.metadata_json = document.metadata
+                existing_doc.source_version = document.temporal.source_version
+                existing_doc.source_tier = int(document.provenance.tier)
+                existing_doc.source_uri = document.provenance.source_uri
+                existing_doc.provenance_confidence = document.provenance.confidence
+                existing_doc.provenance_verified = document.provenance.verified
+                logger.debug("Document %s unchanged; skipping re-index", document.doc_id)
+                return existing_doc
+
         if existing_doc is None:
             doc_record = DocumentRecord(
                 doc_id=document.doc_id,
                 title=document.title,
                 content=document.content,
                 version=document.version,
-                content_hash=document.content_hash,
+                content_hash=cls._effective_content_hash(document),
                 acl_tenant_id=document.acl_scope.tenant_id,
                 acl_allowed_roles=list(document.acl_scope.allowed_roles),
                 acl_allowed_groups=list(document.acl_scope.allowed_groups),
@@ -319,7 +393,7 @@ class DocumentRepository:
             doc_record.title = document.title
             doc_record.content = document.content
             doc_record.version = document.version
-            doc_record.content_hash = document.content_hash
+            doc_record.content_hash = cls._effective_content_hash(document)
             doc_record.acl_tenant_id = document.acl_scope.tenant_id
             doc_record.acl_allowed_roles = list(document.acl_scope.allowed_roles)
             doc_record.acl_allowed_groups = list(document.acl_scope.allowed_groups)
@@ -340,6 +414,21 @@ class DocumentRepository:
         for chunk in document.chunks:
             chunk_rec = cls._chunk_to_record(chunk)
             session.add(chunk_rec)
+
+        # A changed document invalidates answers whose evidence cites it. Stage
+        # this before the upsert events so a worker can purge stale entries.
+        if existing_doc is not None:
+            OutboxService.stage_event(
+                session=session,
+                event_type=OutboxEventType.CACHE_INVALIDATED,
+                aggregate_type="cache",
+                aggregate_id=document.doc_id,
+                payload={
+                    "doc_id": document.doc_id,
+                    "reason": "document_content_changed",
+                    "tenant_id": document.acl_scope.tenant_id,
+                },
+            )
 
         # Stage DOCUMENT_INGESTED outbox event
         doc_payload: dict[str, Any] = {

@@ -148,6 +148,25 @@ class ExactCache:
 
         return key
 
+    def invalidate_document(self, doc_id: str) -> int:
+        """Purge cached answers whose evidence cites ``doc_id``."""
+        if not self.enabled or not self.client:
+            return 0
+        count = 0
+        try:
+            for k in self.client.scan_iter("exact:*"):
+                raw = self.client.get(k)
+                if not raw:
+                    continue
+                raw_str = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+                data = json.loads(raw_str)
+                if any(ev.get("doc_id") == doc_id for ev in data.get("evidence", [])):
+                    self.client.delete(k)
+                    count += 1
+        except Exception as e:
+            logger.error("Error invalidating exact cache for doc %s: %s", doc_id, e)
+        return count
+
     def invalidate_tenant(self, tenant_id: str) -> int:
         """Purge cached responses for a tenant."""
         if not self.enabled or not self.client:
