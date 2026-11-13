@@ -21,15 +21,18 @@ sections below remain the Step 0 evidence.
 | 1. Tooling cleanup | **Done** | `ruff check` + `ruff format` + `mypy` clean; eval writes redirected to temp dirs; `.env.example` updated |
 | 2. Eval items 1–5 | **Done** | Grounded 30-row dev/test golden set; chunk-level metrics per category; isolated clean-ingest `make eval`; hermetic gate; 65 tests pass |
 | 3. ACL items 7–9 | **Done** | Qdrant payload pushdown; parameterized Cypher ACL on graph reads/paths; `/retrieval/compare` + `/graph` auth; deterministic default scope; 19 unit + 4 live leak tests |
-| 4. Item 6 honest baseline | **Done** | 4-config comparison on the `test` split; sparse best answer accuracy, `full` best recall, `hybrid` RRF does **not** beat dense (see §0.1) |
+| 4. Item 6 honest baseline | **Done** | 4-config comparison on the `test` split with response caches disabled; `full` best retrieval, `hybrid` best answer accuracy, `hybrid` RRF does **not** beat dense on retrieval (see §0.1–§0.2) |
 | 5. Items 11–13 | Pending | — |
+| 6. Eval power | Pending | 150–200 docs / 500+ chunks, 150+ golden rows (20+/category in test), calibrated LLM judge, bootstrap 95% CIs; token F1 secondary (see §0.3) |
 
-### Item 4 — honest baseline across four retrieval configurations
+### §0.1 Item 4 — honest baseline across four retrieval configurations
 
 Measured after item 3 with the isolated harness: same corpus (15 docs / 45 chunks), same `test`
 split (15 rows), same prompt/model (`gemini/gemini-3.5-flash-lite`), same admin ACL scope, no
-threshold changes, no tuning on `test`. Each config got freshly cleared exact/semantic caches and a
-cold per-config `LLM_CACHE_DIR`, so every answer and every dollar belongs to that config.
+threshold changes, no tuning on `test`. Exact and semantic response caches are **disabled**, not
+merely cleared (`cache_enabled=False` in `eval_compare.py:144`), and each config gets a cold
+per-config `LLM_CACHE_DIR`, so a hit from another config cannot produce an answer or a dollar in
+this table.
 
 Config definitions: `dense` = ANN only; `sparse` = BM25 only; `hybrid` = dense + BM25 RRF, **no
 rerank, no graph**; `full` = today's router-directed graph traversal + hybrid RRF + CrossEncoder.
@@ -39,36 +42,47 @@ count only when the pipeline abstained).
 
 | category | dense | sparse | hybrid | full |
 | --- | --- | --- | --- | --- |
-| fact | 1.000 / 0.877 / 1.000 | 1.000 / 0.877 / 1.000 | 1.000 / 0.877 / 1.000 | 1.000 / 0.877 / 1.000 |
+| fact | 1.000 / 0.877 / 1.000 | 1.000 / 0.877 / 1.000 | 1.000 / 0.877 / 0.667 | 1.000 / 0.877 / 1.000 |
 | global | 1.000 / 0.631 / 0.000 | 1.000 / 0.631 / 0.000 | 1.000 / 0.631 / 0.000 | 1.000 / 1.000 / 0.000 |
-| multi_hop | 1.000 / 0.724 / 0.500 | 0.750 / 0.619 / 0.500 | 0.750 / 0.505 / 1.000 | 1.000 / 0.597 / 0.500 |
-| multi_turn | 0.500 / 0.361 / 0.200 | 0.700 / 0.553 / 0.400 | 0.500 / 0.361 / 0.000 | 0.700 / 0.505 / 0.400 |
-| paraphrase | 1.000 / 0.816 / 1.000 | 1.000 / 0.816 / 1.000 | 1.000 / 0.816 / 1.000 | 1.000 / 0.816 / 0.500 |
+| multi_hop | 1.000 / 0.724 / 0.500 | 0.750 / 0.619 / 1.000 | 0.750 / 0.505 / 1.000 | 1.000 / 0.597 / 0.500 |
+| multi_turn | 0.500 / 0.361 / 0.400 | 0.700 / 0.579 / 0.000 | 0.500 / 0.347 / 0.000 | 0.700 / 0.514 / 0.200 |
+| paraphrase | 1.000 / 0.816 / 1.000 | 1.000 / 0.816 / 1.000 | 1.000 / 0.816 / 1.000 | 1.000 / 0.816 / 1.000 |
 | unanswerable | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 | 1.000 / 1.000 / 1.000 |
-| **overall** | 0.833 / 0.676 / 0.600 | **0.867 / 0.726 / 0.667** | 0.800 / 0.647 / 0.600 | **0.900 / 0.732 / 0.600** |
+| **overall** | 0.833 / 0.676 / **0.667** | **0.867 / 0.735** / 0.600 | 0.800 / 0.643 / 0.533 | **0.900 / 0.735** / 0.600 |
 
 Operational (whole split, `CONCURRENCY=1`):
 
-| config | p50 ms | p95 ms | cost_usd | cache_hit_rate | answer_f1 |
-| --- | --- | --- | --- | --- | --- |
-| dense | 3849.0 | 12766.2 | $0.005337 | 0.133 | 0.595 |
-| sparse | 2884.1 | 9296.3 | $0.005607 | 0.133 | 0.611 |
-| hybrid | 3449.2 | 13721.4 | $0.005425 | 0.133 | 0.621 |
-| full | 5557.3 | 13153.6 | $0.005875 | 0.133 | 0.554 |
+| config | retrieval p50 ms | retrieval p95 ms | e2e p50 ms | e2e p95 ms | cost_usd | cache_hit_rate | answer_f1 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| dense | 98.3 | 122.5 | 1642.2 | 16303.3 | $0.005786 | 0.000 | 0.640 |
+| sparse | 14.5 | 21.9 | 1957.3 | 14436.5 | $0.006038 | 0.000 | 0.594 |
+| hybrid | 123.3 | 173.3 | 1537.0 | 13469.0 | $0.006322 | 0.000 | 0.599 |
+| full | 1503.9 | 1720.8 | 2939.7 | 12992.1 | $0.005976 | 0.000 | 0.628 |
 
-**Honest reading.** No configuration dominates. Sparse has the best answer accuracy (0.667) and
-best p50; `full` has the best chunk recall (0.900) and nDCG@10 (0.732) because the graph branch finds
-multi-hop evidence that flat retrieval misses, but its extra graph evidence is interleaved into the
-top-5 and lowers multi-hop nDCG (0.597 vs dense 0.724). **Hybrid RRF without rerank does not beat
-dense**: overall recall 0.800 vs 0.833, nDCG 0.647 vs 0.676, accuracy tied at 0.600. The claim that
-"hybrid is better" is not supported by this table. Global answer accuracy is 0 for every config: the
+**Honest reading.** No configuration dominates. `full` has the best chunk recall (0.900) and
+nDCG@10 (0.735) but ties sparse on answer accuracy (0.600) and pays ~1.5 s p50 retrieval time for
+the CrossEncoder. `dense` has the best answer accuracy (0.667) and beats `hybrid` on every retrieval
+metric (recall 0.833 vs 0.800, nDCG 0.676 vs 0.643). `hybrid` is worst on accuracy (0.533) in this
+run. **Hybrid RRF without rerank does not beat dense**, and the claim that "hybrid is better" is not
+supported by this table. Sparse has the best retrieval latency (14.5 ms p50) and the best nDCG
+(0.735, tied with `full`), with recall 0.867. Global answer accuracy is 0 for every config: the
 answers overlap the reference (F1 0.469) but sit just below the 0.5 threshold, which is a real
 answer-quality gap, not a retrieval win.
 
+**Run-to-run answer noise.** A first cache-disabled run and this confirmation run produce identical
+multi-hop retrieval metrics (dense 0.724, sparse 0.619, hybrid 0.505, full 0.597) but different
+answer accuracy on the same rows (for example sparse multi-hop 0.500 → 1.000, dense overall
+0.600 → 0.667). Retrieval latency also varies with machine load: the first run measured 7.5 / 20.8 /
+31.2 / 239.0 ms p50, this one 14.5 / 98.3 / 123.3 / 1503.9 ms; the ordering is stable, the absolute
+values are not. This is precisely why item 6 adds an LLM judge, hand-label calibration, and bootstrap
+confidence intervals before any difference is called real. End-to-end p50/p95 include LLM latency and
+provider 429 backoff and are **not** a retrieval benchmark; retrieval-only p50/p95 are the first two
+columns.
+
 **Mechanics landed.** `RetrievalConfig` and the four-name tuple live in
 `backend/app/orchestration/state.py:11`. `RAGOrchestrator.run(..., retrieval_config=...)` stores it
-in state (`workflow.py:553`, `:570`), and `retrieve_node` branches before the graph path
-(`workflow.py:198`): dense (`:213`), sparse (`:232`), hybrid with `rerank=False` (`:255`), otherwise
+in state (`workflow.py:554`, `:571`), and `retrieve_node` branches before the graph path
+(`workflow.py:206`): dense (`:231`), sparse (`:250`), hybrid with `rerank=False` (`:269`), otherwise
 the existing full path. The router decision is still recorded, so router accuracy stays comparable
 across configs. `HybridRetriever.search_dense` / `search_sparse` return `Evidence` and share the
 same ACL payload guard as fusion (`retrieval/hybrid.py:71`, `:90`, `:43`). Answer scoring is
@@ -93,12 +107,106 @@ optimized here.
 uv run --directory backend ruff check app tests        -> All checks passed!
 uv run --directory backend ruff format --check app tests -> 124 files already formatted
 uv run --directory backend mypy app tests              -> Success: no issues found in 124 source files
-uv run --directory backend pytest                      -> 97 passed
+uv run --directory backend pytest                      -> 98 passed
 make eval-compare CONCURRENCY=1                        -> exit 0; table above
 ```
 
-Per-config JSON reports were written to a temp directory (`$env:TEMP\eval_compare_json`), not to a
-tracked path.
+The confirmation run recreated `graphrag_lab_eval` / `grant_chunks_eval`, ingested 15 docs / 45
+chunks, ran all four configs with `cache_enabled=False`, and wrote per-config JSON to
+`$env:TEMP\eval_compare_json_nocache`; the first run's JSON is preserved at
+`$env:TEMP\eval_compare_json_preinvestigation`. Neither is tracked.
+
+### §0.2 Retrieval-anomaly investigation (item 4 follow-up)
+
+Scope: **report-only**; no RRF `k` or prefetch tuning. Measured on the isolated eval stores
+(`graphrag_lab_eval` / `grant_chunks_eval`, 15 docs / 45 chunks), `test` split (15 rows), one
+admin-equivalent ACL scope, `as_of_time=None`, response caches disabled. Per-row and per-category
+JSON from the cache-disabled run is the evidence base.
+
+**1. Why hybrid multi-hop nDCG is 0.505 vs dense 0.724 and sparse 0.619.** The category has two
+rows. On `multi_hop_002`, dense nDCG is 0.571, sparse 0.850, hybrid 0.624: dense's top-1 is the
+non-expected Redis runbook, sparse's top-1 is the expected team directory, and RRF ranks the runbook
+first because it appears in both lists. On `multi_hop_004`, dense is 0.877, sparse 0.387, hybrid
+0.387: dense rank 1 is the expected spec chunk
+`chk_doc_payment_gateway_spec_0001_c961dd8efb`, but that chunk is absent from sparse's top-10
+(sparse top-5: postmortem `0000`, team directory `0003`, postmortem `0001`, SLA v1 `0000`, SLA v2
+`0000`). RRF gives a dense-only rank-1 chunk `1/(60+1) = 0.01639`, while a chunk at rank 5 in both
+lists gets `2/(60+5) = 0.03077`; the spec chunk therefore falls to fused rank 9 and is cut at
+top-5. This is RRF behaving as designed. The deficit is sparse recall plus the absence of a reranker
+in the `hybrid` ablation, not an RRF implementation bug. The arithmetic matches the observed fused
+order; nothing was tuned.
+
+**2. Sparse-vector quality.** The `multi_hop_004` query vector has 9 terms, all weight 1.652. The
+expected spec chunk overlaps 1/9 query terms (dot 2.612, rank 19/45); the postmortem chunk overlaps
+6/9 (dot 15.955, rank 1). Stored and recomputed sparse vectors match for all 45 chunks, so the index
+is not stale: the sparse encoder simply under-weights the spec vocabulary. Any fusion that trusts
+BM25 ranks will bury that chunk.
+
+**3. ACL/temporal filter uniformity.** Dense and sparse both call `to_qdrant_filter()`
+(`retrieval/dense.py:45`, `retrieval/sparse.py:43`) and both re-check `permits_payload()`
+(`dense.py:65`, `sparse.py:65`), implemented in `retrieval/filters.py:82` and `:41`. The runner uses
+one admin-equivalent `ACLScope.restricted(...)` (`evaluation/runner.py:213`) and `as_of_time=None`,
+so no branch sees a different corpus. The gap is not filter skew.
+
+**4. Actual `full` order, target order, and why the table does not exercise the graph.**
+- Before the fix, graph evidence was appended **after** reranking and then the list was cut, so graph
+  chunks could never be reranked and could only displace nothing.
+- Target order now: dense + sparse candidates (`retrieval/hybrid.py:126`, `:135`) → RRF (`:144`) →
+  dedupe graph evidence into the same pool (`orchestration/workflow.py:349-355`;
+  `hybrid.py:164-169`) → one CrossEncoder pass over the combined list (`hybrid.py:173`) → final cut
+  (`hybrid.py:175`).
+- Evidence: `workflow.py:337` builds `graph_evidence`; `workflow.py:349` calls
+  `search(..., rerank=True, extra_candidates=graph_evidence)`; `hybrid.py:164` dedupes by chunk id;
+  `hybrid.py:173` reranks the combined pool with `top_k`; `hybrid.py:175` cuts.
+- Measurement caveat: in this baseline **both multi-hop rows route `vector`**
+  (`orchestration/router.py:27-33`, match at `:72`), so `full` never entered the graph branch and
+  the fix is exercised by unit tests, not by this table. Router recall on multi-hop is 0/2. That is a
+  separate finding; changing the patterns would change the config definition, so it was not done in
+  this investigation. Document diversification was removed from the full graph path; no separate
+  graph boost remains.
+
+**5. Paraphrase accuracy drop 1.0 → 0.5.** The cause was **exact-cache inheritance**, not retrieval.
+With caches cleared but not disabled, `paraphrase_002` and `paraphrase_004` were served from the
+`depends_on` fact rows (`is_cached=1`, cost 0, answer bytes identical to `fact_004`/`fact_006`).
+`full`'s inherited `fact_004` answer was verbose (token F1 0.4348 < 0.5 → accuracy 0); dense's fresh
+`fact_004` answer was concise (F1 0.7407). With `--no-cache` (`tools/eval_cli.py:377`) and
+`cache_enabled=False` (`tools/eval_compare.py:144`), every paraphrase cell is
+1.000 / 0.816 / 1.000 and `cache_hit_rate` is 0.000, while retrieval metrics are unchanged. That is
+the proof. It is also why comparisons must **disable** caches, not merely clear them.
+
+**6. Retrieval-only vs end-to-end latency.** `retrieval_latency_ms` is measured around
+`retrieve_node` (`orchestration/workflow.py:207-219`), excluding LLM and provider backoff; the runner
+emits it per row (`evaluation/runner.py:162`) and aggregates p50/p95 (`runner.py:312-313`). In the
+confirmation run, retrieval p50 is 14.5 ms (sparse), 98.3 ms (dense), 123.3 ms (hybrid), 1503.9 ms
+(full, CrossEncoder); the earlier no-cache run measured 7.5 / 20.8 / 31.2 / 239.0 ms on the same
+code. The ordering is stable, the absolute values move with machine load. End-to-end p50 is 1.5–2.9 s
+and is dominated by the LLM and free-tier 429 backoff. The earlier ~9.9 s figure was end-to-end, not
+retrieval.
+
+**7. Bugs fixed (commit `3aa3e50`).** `--no-cache` plus `enabled` short-circuits in the exact and
+semantic caches; `cache_enabled=False` for every `eval-compare` config; retrieval-latency
+instrumentation; graph evidence moved into the rerank pool via `extra_candidates`. Tests cover:
+no-cache never returns a cached answer; retrieval latency is > 0 and ≤ end-to-end; the vector-fact
+test clears caches; the fake reranker records the combined candidate pool. The graph-rerank fix and
+the investigation instrumentation landed in one commit because they were verified together; splitting
+after the fact would rewrite a clean commit. One-item-per-commit resumes with the next item.
+
+### §0.3 Eval power (item 6 — approved follow-on)
+
+Goal: make differences statistically meaningful before acting on them. Token F1 becomes a secondary
+metric; primary evidence is judge correctness/faithfulness plus retrieval recall/nDCG with intervals.
+
+1. **Corpus scale and hardness** — expand the synthetic corpus to ~150–200 docs / 500+ chunks, with
+   near-duplicate distractors, conflicting document versions, and more cross-team ownership chains.
+   Keep it synthetic and document the generator, provenance, and version conflicts.
+2. **Golden set** — ≥150 questions, with ≥20 per category in the `test` split. Preserve the
+   dev/test separation and never tune thresholds on `test`.
+3. **LLM judge** — Ragas or DeepEval for correctness and faithfulness. Calibrate on 30 hand-labelled
+   answers (the user labels them) and report agreement (raw agreement and Cohen's kappa).
+4. **Confidence intervals** — bootstrap 95% CIs per cell. Only call a difference real when the
+   intervals do not overlap.
+5. **Reporting** — every comparison table carries CIs and the judge-agreement figure; no "X beats Y"
+   claim without non-overlapping intervals.
 
 ### After item 5 — approved follow-on sequence (not scheduled)
 
