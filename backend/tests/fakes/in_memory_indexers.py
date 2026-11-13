@@ -35,11 +35,17 @@ class FakeQdrantIndexer:
             del self._store[cid]
         return len(to_delete)
 
+    async def get_all_chunk_ids(self) -> set[str]:
+        return set(self._store)
+
     def count(self) -> int:
         return len(self._store)
 
     def get_chunk(self, chunk_id: str) -> dict[str, Any] | None:
         return self._store.get(chunk_id)
+
+    async def close(self) -> None:
+        return None
 
 
 class FakeNeo4jIndexer:
@@ -116,6 +122,10 @@ class FakeNeo4jIndexer:
 
     async def delete_by_doc_id(self, doc_id: str) -> int:
         deleted_count = 0
+        chunks_to_del = [cid for cid, data in self._chunks.items() if data.get("doc_id") == doc_id]
+        for cid in chunks_to_del:
+            del self._chunks[cid]
+            deleted_count += 1
         nodes_to_del = [
             nid
             for nid, data in self._nodes.items()
@@ -125,6 +135,12 @@ class FakeNeo4jIndexer:
             del self._nodes[nid]
             deleted_count += 1
         return deleted_count
+
+    async def get_all_chunk_ids(self) -> set[str]:
+        return set(self._chunks)
+
+    def get_chunk_ids(self) -> set[str]:
+        return set(self._chunks)
 
     def count_nodes(self) -> int:
         return len(self._nodes)
@@ -137,3 +153,6 @@ class FakeNeo4jIndexer:
 
     def get_edge(self, edge_id: str) -> dict[str, Any] | None:
         return self._edges.get(edge_id)
+
+    async def close(self) -> None:
+        return None

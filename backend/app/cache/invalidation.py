@@ -48,11 +48,11 @@ class CacheInvalidator:
             self.semantic_cache.invalidate_by_version(min_version=self._current_index_version)
         return self._current_index_version
 
-    def _purge_redis_document(self, doc_id: str) -> int:
-        """Delete exact and semantic Redis keys whose evidence cites ``doc_id``."""
+    def _document_keys(self, doc_id: str) -> list[str]:
+        """Return exact and semantic Redis keys whose evidence cites ``doc_id``."""
         if self._redis is None:
-            return 0
-        count = 0
+            return []
+        keys: list[str] = []
         try:
             for prefix in ("exact:*", "sem:*"):
                 for k in self._redis.scan_iter(prefix):
@@ -62,11 +62,27 @@ class CacheInvalidator:
                     raw_str = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
                     data = json.loads(raw_str)
                     if any(ev.get("doc_id") == doc_id for ev in data.get("evidence", [])):
-                        self._redis.delete(k)
-                        count += 1
+                        keys.append(k)
         except Exception as e:
-            logger.error("Failed purging Redis cache for doc %s: %s", doc_id, e)
-        return count
+            logger.error("Failed scanning Redis cache for doc %s: %s", doc_id, e)
+        return keys
+
+    def _purge_redis_document(self, doc_id: str) -> int:
+        """Delete exact and semantic Redis keys whose evidence cites ``doc_id``."""
+        keys = self._document_keys(doc_id)
+        for key in keys:
+            self._redis.delete(key)  # type: ignore[union-attr]
+        return len(keys)
+
+    def count_document_keys(self, doc_id: str) -> int:
+        """Count cache entries that still cite ``doc_id``.
+
+        Deletion verification uses this to prove no answer can still be served
+        from Redis for the removed document.
+        """
+        if self._redis is None:
+            return 0
+        return len(self._document_keys(doc_id))
 
     def handle_outbox_event(self, event_type: str, payload: dict[str, Any]) -> dict[str, Any]:
         """Handle a CACHE_INVALIDATED or DOCUMENT_DELETED event from the outbox."""

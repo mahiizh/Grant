@@ -47,7 +47,19 @@ class DocumentImpactResponse(BaseModel):
     blast_radius_score: float = 0.0
 
 
+class StoreDeleteResult(BaseModel):
+    """Per-store outcome for a verified document delete."""
+
+    store: str
+    remaining: int = 0
+    cleared: bool = False
+    error: str | None = None
+
+
 class DocumentDeleteResponse(BaseModel):
     document_id: str
     success: bool
+    verified: bool = False
+    stores: list[StoreDeleteResult] = Field(default_factory=list)
+    # Kept for the existing frontend, which only renders the cleared names.
     stores_cleared: list[str] = Field(default_factory=list)

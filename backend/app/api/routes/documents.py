@@ -11,11 +11,16 @@ from app.api.schemas.documents import (
     DocumentsResponse,
     DocumentStatusResponse,
     DocumentUploadResponse,
+    StoreDeleteResult,
 )
+from app.cache.invalidation import CacheInvalidator
 from app.db.models import DocumentRecord as DBDocumentRecord
 from app.db.models import OutboxEventRecord
 from app.db.postgres import DocumentRepository, get_session
+from app.indexing.deletion import verify_document_deleted
+from app.indexing.neo4j_indexer import Neo4jIndexer
 from app.indexing.outbox_worker import OutboxWorker
+from app.indexing.qdrant_indexer import QdrantIndexer
 from app.ingestion.pipeline import IngestionPipeline
 
 logger = logging.getLogger(__name__)
@@ -149,18 +154,61 @@ async def get_document_impact(document_id: str) -> DocumentImpactResponse:
 
 @router.delete("/{document_id}", response_model=DocumentDeleteResponse)
 async def delete_document(document_id: str) -> DocumentDeleteResponse:
-    """Cascade delete document across PostgreSQL, Qdrant, Neo4j and Redis."""
+    """Cascade delete a document and verify that every store is actually clean."""
     async with get_session() as session:
-        deleted = await DocumentRepository.delete_document(session=session, doc_id=document_id)
-        if not deleted:
+        stmt = (
+            select(DBDocumentRecord)
+            .options(selectinload(DBDocumentRecord.chunks))
+            .where(DBDocumentRecord.doc_id == document_id)
+        )
+        doc = (await session.execute(stmt)).scalar_one_or_none()
+        if doc is None:
             raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found.")
+        # Snapshot the chunk IDs before the row disappears; verification checks
+        # that none of these still exist downstream.
+        chunk_ids = [chunk.chunk_id for chunk in doc.chunks]
+        await DocumentRepository.delete_document(session=session, doc_id=document_id)
 
-    # Process outbox events (delete from Qdrant and Neo4j)
-    worker = OutboxWorker()
-    await worker.drain()
+    qdrant = QdrantIndexer()
+    neo4j = Neo4jIndexer()
+    invalidator = CacheInvalidator()
+    try:
+        # Process outbox events (delete from Qdrant and Neo4j, purge caches).
+        worker = OutboxWorker(
+            qdrant_indexer=qdrant,
+            neo4j_indexer=neo4j,
+            cache_invalidator=invalidator,
+        )
+        await worker.drain()
 
+        async with get_session() as session:
+            results = await verify_document_deleted(
+                session=session,
+                doc_id=document_id,
+                chunk_ids=chunk_ids,
+                qdrant=qdrant,
+                neo4j=neo4j,
+                invalidator=invalidator,
+            )
+    finally:
+        await qdrant.close()
+        await neo4j.close()
+
+    stores = [
+        StoreDeleteResult(
+            store=result.store,
+            remaining=result.remaining,
+            cleared=result.cleared,
+            error=result.error,
+        )
+        for result in results
+    ]
+    cleared = [result.store for result in results if result.cleared]
+    verified = all(result.cleared for result in results)
     return DocumentDeleteResponse(
         document_id=document_id,
-        success=True,
-        stores_cleared=["PostgreSQL", "Qdrant", "Neo4j", "Redis"],
+        success=verified,
+        verified=verified,
+        stores=stores,
+        stores_cleared=cleared,
     )
