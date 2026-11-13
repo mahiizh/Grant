@@ -1,3 +1,5 @@
+import time
+from datetime import UTC, datetime
 from typing import Any
 
 import redis.asyncio as aioredis
@@ -13,7 +15,7 @@ from app.db.postgres import get_engine
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 _settings_state: dict[str, Any] = {
-    "default_as_of_date": "2026-04-12",
+    "default_as_of_date": datetime.now(UTC).date().isoformat(),
     "canvas_theme": "dark",
 }
 
@@ -38,26 +40,35 @@ async def get_system_settings() -> SettingsResponse:
     stores: dict[str, StoreStatus] = {}
 
     # 1. Postgres
+    started = time.perf_counter()
     try:
         engine = get_engine()
         async with engine.connect() as conn:
             await conn.execute(text("SELECT 1"))
-        stores["postgres"] = StoreStatus(status="healthy", latency_ms=1.2, configured=True)
+        latency = (time.perf_counter() - started) * 1000
+        stores["postgres"] = StoreStatus(
+            status="healthy", latency_ms=round(latency, 2), configured=True
+        )
     except Exception:
         stores["postgres"] = StoreStatus(status="unhealthy", latency_ms=0.0, configured=True)
 
     # 2. Qdrant
+    started = time.perf_counter()
     try:
         qdrant = AsyncQdrantClient(
             url=f"http://{settings.QDRANT_HOST}:{settings.QDRANT_PORT}", check_compatibility=False
         )
         await qdrant.get_collections()
         await qdrant.close()
-        stores["qdrant"] = StoreStatus(status="healthy", latency_ms=2.1, configured=True)
+        latency = (time.perf_counter() - started) * 1000
+        stores["qdrant"] = StoreStatus(
+            status="healthy", latency_ms=round(latency, 2), configured=True
+        )
     except Exception:
         stores["qdrant"] = StoreStatus(status="unhealthy", latency_ms=0.0, configured=True)
 
     # 3. Neo4j
+    started = time.perf_counter()
     try:
         driver = AsyncGraphDatabase.driver(
             settings.NEO4J_URI, auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
@@ -65,16 +76,23 @@ async def get_system_settings() -> SettingsResponse:
         async with driver.session() as s:
             await s.run("RETURN 1")
         await driver.close()
-        stores["neo4j"] = StoreStatus(status="healthy", latency_ms=1.8, configured=True)
+        latency = (time.perf_counter() - started) * 1000
+        stores["neo4j"] = StoreStatus(
+            status="healthy", latency_ms=round(latency, 2), configured=True
+        )
     except Exception:
         stores["neo4j"] = StoreStatus(status="unhealthy", latency_ms=0.0, configured=True)
 
     # 4. Redis
+    started = time.perf_counter()
     try:
         r = aioredis.from_url(settings.redis_url)
         await r.ping()
         await r.aclose()
-        stores["redis"] = StoreStatus(status="healthy", latency_ms=0.8, configured=True)
+        latency = (time.perf_counter() - started) * 1000
+        stores["redis"] = StoreStatus(
+            status="healthy", latency_ms=round(latency, 2), configured=True
+        )
     except Exception:
         stores["redis"] = StoreStatus(status="unhealthy", latency_ms=0.0, configured=True)
 
