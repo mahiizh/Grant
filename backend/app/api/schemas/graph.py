@@ -5,25 +5,27 @@ class GraphNode(BaseModel):
     id: str
     name: str
     type: str
-    pagerank: float = 0.05
-    community: int = 0
-    cluster: str = "core"
-    valid_from: str = "2026-01-01"
+    # Analytics that Neo4j does not currently store or compute are ``None``.
+    # Clients may compute them from the returned topology.
+    pagerank: float | None = None
+    community: int | None = None
+    cluster: str | None = None
+    valid_from: str | None = None
     valid_to: str | None = None
-    tx_time: str = "2026-01-01T00:00:00Z"
-    chunk_hash: str = "sha256:0000"
-    degree: int = 1
+    tx_time: str | None = None
+    chunk_hash: str | None = None
+    degree: int = 0
 
 
 class GraphLink(BaseModel):
     source: str
     target: str
     label: str = "RELATES_TO"
-    tier: int = 1
-    valid_from: str = "2026-01-01"
+    tier: int | None = None
+    valid_from: str | None = None
     valid_to: str | None = None
-    tx_time: str = "2026-01-01T00:00:00Z"
-    chunk_hash: str = "sha256:0000"
+    tx_time: str | None = None
+    chunk_hash: str | None = None
 
 
 class GraphResponse(BaseModel):

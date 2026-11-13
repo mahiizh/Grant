@@ -60,7 +60,8 @@ async def get_graph(
             MATCH (n:Entity)
             WHERE {node_pred}
             RETURN n.id AS id, n.name AS name, n.entity_type AS type,
-                   n.valid_from AS valid_from, n.valid_to AS valid_to
+                   n.valid_from AS valid_from, n.valid_to AS valid_to,
+                   count {{ (n)--() }} AS degree
             LIMIT $limit
             """
             res_nodes = await session.run(node_cypher, limit=limit, **params)
@@ -74,14 +75,9 @@ async def get_graph(
                         id=r["id"],
                         name=r["name"],
                         type=r["type"] or "CONCEPT",
-                        pagerank=0.08,
-                        community=0,
-                        cluster="core",
-                        valid_from=r["valid_from"] or "2026-01-01",
+                        valid_from=r.get("valid_from"),
                         valid_to=r.get("valid_to"),
-                        tx_time="2026-01-01T00:00:00Z",
-                        chunk_hash=f"sha256:{r['id'][:8]}",
-                        degree=2,
+                        degree=int(r.get("degree") or 0),
                     )
                 )
 
@@ -102,11 +98,8 @@ async def get_graph(
                         source=r["source"],
                         target=r["target"],
                         label=r["label"],
-                        tier=1,
-                        valid_from=r.get("valid_from") or "2026-01-01",
+                        valid_from=r.get("valid_from"),
                         valid_to=r.get("valid_to"),
-                        tx_time="2026-01-01T00:00:00Z",
-                        chunk_hash=f"sha256:{r['source'][:6]}_{r['target'][:6]}",
                     )
                 )
 
@@ -145,7 +138,9 @@ async def get_node_neighbors(
             center_cypher = f"""
             MATCH (n:Entity)
             WHERE (n.id = $id OR toLower(n.name) = toLower($id)) AND {center_pred}
-            RETURN n.id AS id, n.name AS name, n.entity_type AS type
+            RETURN n.id AS id, n.name AS name, n.entity_type AS type,
+                   n.valid_from AS valid_from, n.valid_to AS valid_to,
+                   count {{ (n)--() }} AS degree
             """
             center_res = await session.run(center_cypher, id=node_id, **params)
             center = await center_res.single()
@@ -158,8 +153,9 @@ async def get_node_neighbors(
                     id=c_id,
                     name=center["name"],
                     type=center["type"] or "CONCEPT",
-                    pagerank=0.15,
-                    degree=4,
+                    valid_from=center.get("valid_from"),
+                    valid_to=center.get("valid_to"),
+                    degree=int(center.get("degree") or 0),
                 )
             )
 
@@ -168,6 +164,8 @@ async def get_node_neighbors(
             MATCH (a:Entity)-[r]-(b:Entity)
             WHERE a.id = $id AND {neighbor_pred} AND {rel_pred}
             RETURN b.id AS id, b.name AS name, b.entity_type AS type,
+                   b.valid_from AS valid_from, b.valid_to AS valid_to,
+                   count {{ (b)--() }} AS degree,
                    startNode(r).id AS source, endNode(r).id AS target, type(r) AS label
             LIMIT 30
             """
@@ -183,8 +181,9 @@ async def get_node_neighbors(
                             id=row["id"],
                             name=row["name"],
                             type=row["type"] or "CONCEPT",
-                            pagerank=0.06,
-                            degree=1,
+                            valid_from=row.get("valid_from"),
+                            valid_to=row.get("valid_to"),
+                            degree=int(row.get("degree") or 0),
                         )
                     )
                 links.append(
