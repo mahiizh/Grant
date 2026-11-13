@@ -14,9 +14,11 @@ class OverviewMetricsResponse(BaseModel):
     chunks_indexed: int
     entities_indexed: int
     relations_indexed: int
-    golden_set_accuracy: float
-    p95_latency_ms: int
-    cache_hit_rate: float
-    cache_wrong_hit_rate: float
-    cost_per_correct_answer_usd: float
+    # ``None`` means the pipeline does not measure the value. Clients must render
+    # an empty state instead of treating it as zero.
+    golden_set_accuracy: float | None = None
+    p95_latency_ms: int | None = None
+    cache_hit_rate: float | None = None
+    cache_wrong_hit_rate: float | None = None
+    cost_per_correct_answer_usd: float | None = None
     unverified_facts_pending: int
