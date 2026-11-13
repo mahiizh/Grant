@@ -1,13 +1,11 @@
 import logging
-from datetime import UTC, datetime
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 
 from app.api.schemas.cache import (
     CacheInvalidationRecord,
     CacheInvalidationsResponse,
-    CachePoint,
     CacheStatsResponse,
 )
 from app.db.models import OutboxEventRecord
@@ -22,17 +20,18 @@ router = APIRouter(prefix="/cache", tags=["cache"])
 async def get_cache_stats(
     window: str = Query("24h"),
 ) -> CacheStatsResponse:
-    """Retrieve telemetry time series for exact and semantic cache performance."""
-    now_iso = datetime.now(UTC).isoformat()
-    return CacheStatsResponse(
-        window=window,
-        total_requests=42,
-        overall_hit_rate=0.64,
-        wrong_hit_rate=0.0,
-        p95_savings_ms=184.5,
-        series=[
-            CachePoint(timestamp=now_iso, hits=27, misses=15, wrong_hits=0, hit_rate=0.64),
-        ],
+    """Retrieve telemetry time series for exact and semantic cache performance.
+
+    Cache hits/misses are counted in process memory only and are never exported,
+    so a cross-process time series cannot be reconstructed. Returning 501 is
+    preferable to inventing a hit rate.
+    """
+    raise HTTPException(
+        status_code=status.HTTP_501_NOT_IMPLEMENTED,
+        detail=(
+            "Cache telemetry is not implemented: hit/miss counters are not persisted "
+            "or exported, so no per-window time series exists."
+        ),
     )
 
 
