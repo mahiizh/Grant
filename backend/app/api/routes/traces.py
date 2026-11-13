@@ -78,9 +78,11 @@ async def list_traces(
                 latency_ms=int(total_dur),
                 status=first_span.status_code or "ok",
                 timestamp=first_span.created_at.isoformat(),
-                tokens=120,
-                cost_usd=0.00003,
-                cached=False,
+                # Span-only traces may not carry usage; report zero instead of
+                # inventing a plausible token count and cost.
+                tokens=int(meta.get("tokens", 0) or 0),
+                cost_usd=float(meta.get("cost_usd", 0.0) or 0.0),
+                cached=bool(meta.get("cached", False)),
             )
         )
 
@@ -142,19 +144,23 @@ async def get_trace(trace_id: str) -> TraceDetail:
     )
     timestamp = (msg.created_at if msg else db_spans[0].created_at).isoformat()
     answer = msg.content if msg else ""
-    tokens = msg.tokens if msg and msg.tokens else 100
-    cost = float(msg.cost_usd if msg and msg.cost_usd else 0.0)
+    tokens = int(msg.tokens) if msg and msg.tokens else 0
+    cost = float(msg.cost_usd) if msg and msg.cost_usd else 0.0
 
     chunk_ids = []
     if msg and msg.citations:
         chunk_ids = [c.get("chunk_id", "") for c in msg.citations if "chunk_id" in c]
+
+    status = "ok"
+    if db_spans:
+        status = db_spans[0].status_code or "ok"
 
     return TraceDetail(
         id=trace_id,
         query=query,
         route=route,
         latency_ms=latency,
-        status="ok",
+        status=status,
         timestamp=timestamp,
         tokens=tokens,
         cost_usd=cost,
