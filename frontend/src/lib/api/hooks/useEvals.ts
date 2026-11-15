@@ -29,7 +29,7 @@ export function useAddGoldenPair() {
       complexity: string;
     }) => {
       const { data, error } = await apiClient.POST("/evals/golden/dataset", {
-        body: payload,
+        body: { ...payload, split: "dev" },
       });
       if (error) throw new Error(formatApiError(error, "Failed to add golden pair"));
       return data;
@@ -49,6 +49,7 @@ export function useRunGoldenEval() {
         body: {
           dataset_id: options?.dataset_id ?? "default",
           sample_size: options?.sample_size,
+          split: "test",
         },
       });
       if (error) throw new Error(formatApiError(error, "Failed to run golden evaluation"));

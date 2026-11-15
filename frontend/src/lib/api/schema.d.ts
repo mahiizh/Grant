@@ -4,15 +4,15 @@
  */
 
 export interface paths {
-    "/api/v1/health/live": {
+    "/health/": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Liveness */
-        get: operations["liveness_api_v1_health_live_get"];
+        /** System Health */
+        get: operations["system_health_api_v1_health__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -21,15 +21,15 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/health/ready": {
+    "/health": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Readiness */
-        get: operations["readiness_api_v1_health_ready_get"];
+        /** System Health */
+        get: operations["system_health_api_v1_health_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -46,7 +46,7 @@ export interface paths {
             cookie?: never;
         };
         /** Liveness */
-        get: operations["liveness_health_live_get"];
+        get: operations["liveness_api_v1_health_live_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -63,29 +63,9 @@ export interface paths {
             cookie?: never;
         };
         /** Readiness */
-        get: operations["readiness_health_ready_get"];
+        get: operations["readiness_api_v1_health_ready_get"];
         put?: never;
         post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/query": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Query Pipeline
-         * @description Execute end-to-end GraphRAG pipeline and return grounded answer with citations.
-         */
-        post: operations["query_pipeline_api_v1_query_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -105,67 +85,7 @@ export interface paths {
          * Query Pipeline
          * @description Execute end-to-end GraphRAG pipeline and return grounded answer with citations.
          */
-        post: operations["query_pipeline_query_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/graph": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Graph
-         * @description Retrieve filtered knowledge graph nodes and relationships.
-         */
-        get: operations["get_graph_api_v1_graph_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/graph/nodes/{node_id}/neighbors": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Node Neighbors
-         * @description Expand subgraph neighborhood centered on node_id.
-         */
-        get: operations["get_node_neighbors_api_v1_graph_nodes__node_id__neighbors_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/graph/path": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Graph Path
-         * @description Compute bi-temporal shortest path between two nodes.
-         */
-        get: operations["get_graph_path_api_v1_graph_path_get"];
-        put?: never;
-        post?: never;
+        post: operations["query_pipeline_api_v1_query_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -181,9 +101,9 @@ export interface paths {
         };
         /**
          * Get Graph
-         * @description Retrieve filtered knowledge graph nodes and relationships.
+         * @description Retrieve ACL-filtered knowledge graph nodes and relationships from Neo4j.
          */
-        get: operations["get_graph_graph_get"];
+        get: operations["get_graph_api_v1_graph_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -201,9 +121,9 @@ export interface paths {
         };
         /**
          * Get Node Neighbors
-         * @description Expand subgraph neighborhood centered on node_id.
+         * @description Expand an ACL-filtered subgraph neighborhood centered on node_id in Neo4j.
          */
-        get: operations["get_node_neighbors_graph_nodes__node_id__neighbors_get"];
+        get: operations["get_node_neighbors_api_v1_graph_nodes__node_id__neighbors_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -221,9 +141,9 @@ export interface paths {
         };
         /**
          * Get Graph Path
-         * @description Compute bi-temporal shortest path between two nodes.
+         * @description Compute the shortest ACL-permitted bi-temporal path between two nodes in Neo4j.
          */
-        get: operations["get_graph_path_graph_path_get"];
+        get: operations["get_graph_path_api_v1_graph_path_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -232,7 +152,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/documents": {
+    "/documents": {
         parameters: {
             query?: never;
             header?: never;
@@ -241,13 +161,13 @@ export interface paths {
         };
         /**
          * List Documents
-         * @description List all ingested documents in the corpus.
+         * @description List all ingested documents with tokens, cost, and extracted entity counts.
          */
         get: operations["list_documents_api_v1_documents_get"];
         put?: never;
         /**
          * Upload Document
-         * @description Upload document for multi-modal parsing, chunking and indexing.
+         * @description Upload document for parsing, chunking, outbox staging, and automatic indexing.
          */
         post: operations["upload_document_api_v1_documents_post"];
         delete?: never;
@@ -256,27 +176,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/documents/{document_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Delete Document
-         * @description Cascade delete document across PostgreSQL, Qdrant, Neo4j and Redis.
-         */
-        delete: operations["delete_document_api_v1_documents__document_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/documents/{document_id}/status": {
+    "/documents/{document_id}/status": {
         parameters: {
             query?: never;
             header?: never;
@@ -296,7 +196,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/documents/{document_id}/impact": {
+    "/documents/{document_id}/impact": {
         parameters: {
             query?: never;
             header?: never;
@@ -316,30 +216,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/documents": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Documents
-         * @description List all ingested documents in the corpus.
-         */
-        get: operations["list_documents_documents_get"];
-        put?: never;
-        /**
-         * Upload Document
-         * @description Upload document for multi-modal parsing, chunking and indexing.
-         */
-        post: operations["upload_document_documents_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/documents/{document_id}": {
         parameters: {
             query?: never;
@@ -352,89 +228,9 @@ export interface paths {
         post?: never;
         /**
          * Delete Document
-         * @description Cascade delete document across PostgreSQL, Qdrant, Neo4j and Redis.
+         * @description Cascade delete a document and verify that every store is actually clean.
          */
-        delete: operations["delete_document_documents__document_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/documents/{document_id}/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Document Status
-         * @description Get current ingestion pipeline progress for document.
-         */
-        get: operations["get_document_status_documents__document_id__status_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/documents/{document_id}/impact": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Document Impact
-         * @description Calculate blast radius before deleting a document.
-         */
-        get: operations["get_document_impact_documents__document_id__impact_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/traces": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Traces
-         * @description List execution traces with filtering.
-         */
-        get: operations["list_traces_api_v1_traces_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/traces/{trace_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Trace
-         * @description Retrieve full trace waterfall and span metadata.
-         */
-        get: operations["get_trace_api_v1_traces__trace_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
+        delete: operations["delete_document_api_v1_documents__document_id__delete"];
         options?: never;
         head?: never;
         patch?: never;
@@ -449,9 +245,9 @@ export interface paths {
         };
         /**
          * List Traces
-         * @description List execution traces with filtering.
+         * @description List execution traces from PostgreSQL.
          */
-        get: operations["list_traces_traces_get"];
+        get: operations["list_traces_api_v1_traces_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -469,29 +265,9 @@ export interface paths {
         };
         /**
          * Get Trace
-         * @description Retrieve full trace waterfall and span metadata.
+         * @description Retrieve full trace waterfall and span metadata from PostgreSQL.
          */
-        get: operations["get_trace_traces__trace_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/retrieval/compare": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Compare Retrieval
-         * @description Compare candidate ranking across vector, graph and cross-encoder rerankers.
-         */
-        get: operations["compare_retrieval_api_v1_retrieval_compare_get"];
+        get: operations["get_trace_api_v1_traces__trace_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -509,49 +285,9 @@ export interface paths {
         };
         /**
          * Compare Retrieval
-         * @description Compare candidate ranking across vector, graph and cross-encoder rerankers.
+         * @description Compare candidate ranking across vector, sparse, RRF and cross-encoder rerankers.
          */
-        get: operations["compare_retrieval_retrieval_compare_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/cache/stats": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Cache Stats
-         * @description Retrieve telemetry time series for semantic cache performance.
-         */
-        get: operations["get_cache_stats_api_v1_cache_stats_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/cache/invalidations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Cache Invalidations
-         * @description Audit log of semantic cache invalidations triggered by mutations.
-         */
-        get: operations["get_cache_invalidations_api_v1_cache_invalidations_get"];
+        get: operations["compare_retrieval_api_v1_retrieval_compare_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -569,9 +305,13 @@ export interface paths {
         };
         /**
          * Get Cache Stats
-         * @description Retrieve telemetry time series for semantic cache performance.
+         * @description Retrieve telemetry time series for exact and semantic cache performance.
+         *
+         *     Cache hits/misses are counted in process memory only and are never exported,
+         *     so a cross-process time series cannot be reconstructed. Returning 501 is
+         *     preferable to inventing a hit rate.
          */
-        get: operations["get_cache_stats_cache_stats_get"];
+        get: operations["get_cache_stats_api_v1_cache_stats_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -589,9 +329,9 @@ export interface paths {
         };
         /**
          * Get Cache Invalidations
-         * @description Audit log of semantic cache invalidations triggered by mutations.
+         * @description Audit log of semantic cache invalidations triggered by mutations in outbox.
          */
-        get: operations["get_cache_invalidations_cache_invalidations_get"];
+        get: operations["get_cache_invalidations_api_v1_cache_invalidations_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -600,27 +340,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/evals/golden": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Run Golden Evaluation
-         * @description Trigger an automated evaluation run against the golden dataset.
-         */
-        post: operations["run_golden_evaluation_api_v1_evals_golden_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/evals/golden/dataset": {
+    "/evals/golden/dataset": {
         parameters: {
             query?: never;
             header?: never;
@@ -657,55 +377,7 @@ export interface paths {
          * Run Golden Evaluation
          * @description Trigger an automated evaluation run against the golden dataset.
          */
-        post: operations["run_golden_evaluation_evals_golden_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/evals/golden/dataset": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Golden Dataset
-         * @description Fetch all test cases in the golden question benchmark.
-         */
-        get: operations["get_golden_dataset_evals_golden_dataset_get"];
-        put?: never;
-        /**
-         * Add Golden Pair
-         * @description Add a new verified question-answer ground truth pair to the dataset.
-         */
-        post: operations["add_golden_pair_evals_golden_dataset_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/experiments": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Experiments
-         * @description List active and historical A/B routing experiments.
-         */
-        get: operations["list_experiments_api_v1_experiments_get"];
-        put?: never;
-        /**
-         * Update Experiment
-         * @description Adjust live traffic allocation split between experimental variants.
-         */
-        post: operations["update_experiment_api_v1_experiments_post"];
+        post: operations["run_golden_evaluation_api_v1_evals_golden_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -721,55 +393,18 @@ export interface paths {
         };
         /**
          * List Experiments
-         * @description List active and historical A/B routing experiments.
+         * @description List retrieval experiments.
+         *
+         *     No experiment store exists, so this returns 501 rather than a hardcoded list
+         *     of runs with invented accuracy and latency numbers.
          */
-        get: operations["list_experiments_experiments_get"];
+        get: operations["list_experiments_api_v1_experiments_get"];
         put?: never;
         /**
          * Update Experiment
          * @description Adjust live traffic allocation split between experimental variants.
          */
-        post: operations["update_experiment_experiments_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/metrics/guardrails": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Guardrail Metrics
-         * @description Security and safety metrics for prompt injection, redaction, and hallucination gates.
-         */
-        get: operations["get_guardrail_metrics_api_v1_metrics_guardrails_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/metrics/overview": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Overview Metrics
-         * @description Aggregated KPIs for the overview dashboard.
-         */
-        get: operations["get_overview_metrics_api_v1_metrics_overview_get"];
-        put?: never;
-        post?: never;
+        post: operations["update_experiment_api_v1_experiments_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -786,8 +421,12 @@ export interface paths {
         /**
          * Get Guardrail Metrics
          * @description Security and safety metrics for prompt injection, redaction, and hallucination gates.
+         *
+         *     The pipeline does not persist guardrail counters or judge scores, so there is
+         *     no honest value to report. Returning fixed numbers made the dashboard look
+         *     healthy without measuring anything.
          */
-        get: operations["get_guardrail_metrics_metrics_guardrails_get"];
+        get: operations["get_guardrail_metrics_api_v1_metrics_guardrails_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -806,8 +445,13 @@ export interface paths {
         /**
          * Get Overview Metrics
          * @description Aggregated KPIs for the overview dashboard.
+         *
+         *     Counts come from PostgreSQL/Qdrant/Neo4j, and latency/cache rates come from
+         *     recorded assistant messages. Metrics the pipeline does not measure (golden-set
+         *     accuracy, wrong-hit rate, cost per correct answer) are returned as ``None``
+         *     rather than fabricated constants.
          */
-        get: operations["get_overview_metrics_metrics_overview_get"];
+        get: operations["get_overview_metrics_api_v1_metrics_overview_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -816,7 +460,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/settings": {
+    "/settings": {
         parameters: {
             query?: never;
             header?: never;
@@ -835,12 +479,12 @@ export interface paths {
         head?: never;
         /**
          * Update System Settings
-         * @description Update active scope, as-of time, or visual preferences.
+         * @description Update defaults (date, canvas theme). Note: active scope cannot be changed via settings.
          */
         patch: operations["update_system_settings_api_v1_settings_patch"];
         trace?: never;
     };
-    "/settings": {
+    "/threads": {
         parameters: {
             query?: never;
             header?: never;
@@ -848,20 +492,128 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Get System Settings
-         * @description Retrieve system settings, ACL scopes, store health, and defaults.
+         * List Threads
+         * @description List all threads ordered by updated_at descending.
          */
-        get: operations["get_system_settings_settings_get"];
+        get: operations["list_threads_api_v1_threads_get"];
         put?: never;
-        post?: never;
+        /**
+         * Create Thread
+         * @description Create a new conversation thread with optional title, ACL scope, and as-of time.
+         */
+        post: operations["create_thread_api_v1_threads_post"];
         delete?: never;
         options?: never;
         head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/threads/{thread_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
         /**
-         * Update System Settings
-         * @description Update active scope, as-of time, or visual preferences.
+         * Get Thread
+         * @description Retrieve thread details and full message history.
          */
-        patch: operations["update_system_settings_settings_patch"];
+        get: operations["get_thread_api_v1_threads__thread_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Thread
+         * @description Delete thread and cascade messages.
+         */
+        delete: operations["delete_thread_api_v1_threads__thread_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Thread
+         * @description Update thread title, ACL scope, or as-of date.
+         */
+        patch: operations["update_thread_api_v1_threads__thread_id__patch"];
+        trace?: never;
+    };
+    "/threads/{thread_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send Message
+         * @description Execute glass-box turn within conversation thread, supporting SSE streaming.
+         */
+        post: operations["send_message_api_v1_threads__thread_id__messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/threads/{thread_id}/messages/{msg_id}/feedback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Feedback
+         * @description Record upvote/downvote and optional notes on an assistant response.
+         */
+        post: operations["record_feedback_api_v1_threads__thread_id__messages__msg_id__feedback_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/threads/{thread_id}/messages/{msg_id}/golden": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add To Golden Dataset
+         * @description Export thread turn question, answer, and citations into candidate evaluation dataset.
+         */
+        post: operations["add_to_golden_dataset_api_v1_threads__thread_id__messages__msg_id__golden_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/threads/{thread_id}/messages/{msg_id}/regenerate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Regenerate Message
+         * @description Regenerate assistant response and archive prior generation.
+         */
+        post: operations["regenerate_message_api_v1_threads__thread_id__messages__msg_id__regenerate_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
 }
@@ -883,18 +635,30 @@ export interface components {
             /** Ground Truth Chunk Ids */
             ground_truth_chunk_ids?: string[];
             /**
+             * Split
+             * @default dev
+             */
+            split: string;
+            /** Depends On */
+            depends_on?: string[];
+            /**
              * Complexity
              * @default medium
              */
             complexity: string;
         };
+        /** AddToGoldenRequest */
+        AddToGoldenRequest: {
+            /**
+             * Category
+             * @default multi_turn
+             */
+            category: string;
+            /** Expected Answer */
+            expected_answer?: string | null;
+        };
         /** Body_upload_document_api_v1_documents_post */
         Body_upload_document_api_v1_documents_post: {
-            /** File */
-            file: string;
-        };
-        /** Body_upload_document_documents_post */
-        Body_upload_document_documents_post: {
             /** File */
             file: string;
         };
@@ -951,12 +715,61 @@ export interface components {
             /** Series */
             series?: components["schemas"]["CachePoint"][];
         };
+        /** CitationItem */
+        CitationItem: {
+            /** Chunk Id */
+            chunk_id: string;
+            /** Doc Id */
+            doc_id: string;
+            /** Text */
+            text: string;
+            /** Score */
+            score: number;
+            /** Retrieval Method */
+            retrieval_method: string;
+            /** Path */
+            path?: string[] | null;
+        };
+        /** ComponentHealth */
+        ComponentHealth: {
+            /**
+             * Status
+             * @default healthy
+             */
+            status: string;
+            /**
+             * Latency Ms
+             * @default 1
+             */
+            latency_ms: number;
+            /** Error */
+            error?: string | null;
+        };
+        /** CreateThreadRequest */
+        CreateThreadRequest: {
+            /** Title */
+            title?: string | null;
+            /**
+             * Acl Scope
+             * @default data-platform
+             */
+            acl_scope: string;
+            /** As Of Date */
+            as_of_date?: string | null;
+        };
         /** DocumentDeleteResponse */
         DocumentDeleteResponse: {
             /** Document Id */
             document_id: string;
             /** Success */
             success: boolean;
+            /**
+             * Verified
+             * @default false
+             */
+            verified: boolean;
+            /** Stores */
+            stores?: components["schemas"]["StoreDeleteResult"][];
             /** Stores Cleared */
             stores_cleared?: string[];
         };
@@ -1003,6 +816,16 @@ export interface components {
             target_node_id: string;
             /** Valid From */
             valid_from: string;
+            /**
+             * Tokens
+             * @default 0
+             */
+            tokens: number;
+            /**
+             * Cost Usd
+             * @default 0
+             */
+            cost_usd: number;
         };
         /** DocumentStatusResponse */
         DocumentStatusResponse: {
@@ -1104,6 +927,13 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** FeedbackRequest */
+        FeedbackRequest: {
+            /** Feedback */
+            feedback: string;
+            /** Note */
+            note?: string | null;
+        };
         /** GoldenDatasetResponse */
         GoldenDatasetResponse: {
             /** Questions */
@@ -1120,6 +950,12 @@ export interface components {
             dataset_id: string;
             /** Sample Size */
             sample_size?: number | null;
+            /**
+             * Split
+             * @default test
+             * @enum {string}
+             */
+            split: "dev" | "test" | "all";
         };
         /** GoldenEvalRunResponse */
         GoldenEvalRunResponse: {
@@ -1127,10 +963,39 @@ export interface components {
             run_id: string;
             /** Status */
             status: string;
+            /** Split */
+            split: string;
             /** Total Questions */
             total_questions: number;
             /** Accuracy */
             accuracy: number;
+            /** Category Scores */
+            category_scores?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /** Category Operational */
+            category_operational?: {
+                [key: string]: {
+                    [key: string]: number;
+                };
+            };
+            /**
+             * Total Cost Usd
+             * @default 0
+             */
+            total_cost_usd: number;
+            /**
+             * Budget Usd
+             * @default 0
+             */
+            budget_usd: number;
+            /**
+             * Cache Hit Rate
+             * @default 0
+             */
+            cache_hit_rate: number;
             /** Started At */
             started_at: string;
             /** Completed At */
@@ -1153,6 +1018,13 @@ export interface components {
             /** Ground Truth Chunk Ids */
             ground_truth_chunk_ids?: string[];
             /**
+             * Split
+             * @default dev
+             */
+            split: string;
+            /** Depends On */
+            depends_on?: string[];
+            /**
              * Complexity
              * @default medium
              */
@@ -1169,28 +1041,16 @@ export interface components {
              * @default RELATES_TO
              */
             label: string;
-            /**
-             * Tier
-             * @default 1
-             */
-            tier: number;
-            /**
-             * Valid From
-             * @default 2026-01-01
-             */
-            valid_from: string;
+            /** Tier */
+            tier?: number | null;
+            /** Valid From */
+            valid_from?: string | null;
             /** Valid To */
             valid_to?: string | null;
-            /**
-             * Tx Time
-             * @default 2026-01-01T00:00:00Z
-             */
-            tx_time: string;
-            /**
-             * Chunk Hash
-             * @default sha256:0000
-             */
-            chunk_hash: string;
+            /** Tx Time */
+            tx_time?: string | null;
+            /** Chunk Hash */
+            chunk_hash?: string | null;
         };
         /** GraphNeighborsResponse */
         GraphNeighborsResponse: {
@@ -1211,41 +1071,23 @@ export interface components {
             name: string;
             /** Type */
             type: string;
-            /**
-             * Pagerank
-             * @default 0.05
-             */
-            pagerank: number;
-            /**
-             * Community
-             * @default 0
-             */
-            community: number;
-            /**
-             * Cluster
-             * @default core
-             */
-            cluster: string;
-            /**
-             * Valid From
-             * @default 2026-01-01
-             */
-            valid_from: string;
+            /** Pagerank */
+            pagerank?: number | null;
+            /** Community */
+            community?: number | null;
+            /** Cluster */
+            cluster?: string | null;
+            /** Valid From */
+            valid_from?: string | null;
             /** Valid To */
             valid_to?: string | null;
-            /**
-             * Tx Time
-             * @default 2026-01-01T00:00:00Z
-             */
-            tx_time: string;
-            /**
-             * Chunk Hash
-             * @default sha256:0000
-             */
-            chunk_hash: string;
+            /** Tx Time */
+            tx_time?: string | null;
+            /** Chunk Hash */
+            chunk_hash?: string | null;
             /**
              * Degree
-             * @default 1
+             * @default 0
              */
             degree: number;
         };
@@ -1304,6 +1146,93 @@ export interface components {
              */
             status: string;
         };
+        /** MessageGeneration */
+        MessageGeneration: {
+            /** Generation Id */
+            generation_id: string;
+            /** Content */
+            content: string;
+            /** Rewritten Query */
+            rewritten_query?: string | null;
+            /** Route */
+            route?: string | null;
+            /** Cache Status */
+            cache_status?: string | null;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Cost Usd */
+            cost_usd?: number | null;
+            /** Tokens */
+            tokens?: number | null;
+            /** Trace Id */
+            trace_id?: string | null;
+            /**
+             * Citations
+             * @default []
+             */
+            citations: components["schemas"]["CitationItem"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** MessageItem */
+        MessageItem: {
+            /** Message Id */
+            message_id: string;
+            /** Thread Id */
+            thread_id: string;
+            /** Role */
+            role: string;
+            /** Content */
+            content: string;
+            /** Raw Query */
+            raw_query?: string | null;
+            /** Rewritten Query */
+            rewritten_query?: string | null;
+            /** Route */
+            route?: string | null;
+            /** Cache Status */
+            cache_status?: string | null;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Cost Usd */
+            cost_usd?: number | null;
+            /** Tokens */
+            tokens?: number | null;
+            /** Trace Id */
+            trace_id?: string | null;
+            /**
+             * Citations
+             * @default []
+             */
+            citations: components["schemas"]["CitationItem"][];
+            /**
+             * Pipeline Stages
+             * @default []
+             */
+            pipeline_stages: components["schemas"]["PipelineStageItem"][];
+            /**
+             * Subgraph Nodes
+             * @default []
+             */
+            subgraph_nodes: string[];
+            /** Feedback */
+            feedback?: string | null;
+            /** Feedback Note */
+            feedback_note?: string | null;
+            /**
+             * Generations
+             * @default []
+             */
+            generations: components["schemas"]["MessageGeneration"][];
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
         /** OverviewMetricsResponse */
         OverviewMetricsResponse: {
             /** Docs Indexed */
@@ -1315,36 +1244,44 @@ export interface components {
             /** Relations Indexed */
             relations_indexed: number;
             /** Golden Set Accuracy */
-            golden_set_accuracy: number;
+            golden_set_accuracy?: number | null;
             /** P95 Latency Ms */
-            p95_latency_ms: number;
+            p95_latency_ms?: number | null;
             /** Cache Hit Rate */
-            cache_hit_rate: number;
+            cache_hit_rate?: number | null;
             /** Cache Wrong Hit Rate */
-            cache_wrong_hit_rate: number;
+            cache_wrong_hit_rate?: number | null;
             /** Cost Per Correct Answer Usd */
-            cost_per_correct_answer_usd: number;
+            cost_per_correct_answer_usd?: number | null;
             /** Unverified Facts Pending */
             unverified_facts_pending: number;
         };
+        /** PipelineStageItem */
+        PipelineStageItem: {
+            /** Id */
+            id: string;
+            /** Label */
+            label: string;
+            /** Status */
+            status: string;
+            /** Duration Ms */
+            duration_ms?: number | null;
+            /** Detail */
+            detail?: string | null;
+        };
         /**
          * QueryRequest
-         * @description User query payload with optional authorization context and temporal filters.
+         * @description User query payload with optional requested scope and temporal filter.
          */
         QueryRequest: {
             /** Query */
             query: string;
-            /** User Roles */
-            user_roles?: string[];
-            /** User Groups */
-            user_groups?: string[];
-            /**
-             * Tenant Id
-             * @default default
-             */
-            tenant_id: string;
-            /** As Of Time */
-            as_of_time?: string | null;
+            /** Scope */
+            scope?: string | null;
+            /** As Of */
+            as_of?: string | null;
+            /** Thread Id */
+            thread_id?: string | null;
         };
         /**
          * QueryResponse
@@ -1424,6 +1361,27 @@ export interface components {
              */
             total_candidates: number;
         };
+        /** SendMessageRequest */
+        SendMessageRequest: {
+            /** Content */
+            content: string;
+            /** Acl Scope */
+            acl_scope?: string | null;
+            /** As Of Date */
+            as_of_date?: string | null;
+            /** Retrieval Mode */
+            retrieval_mode?: string | null;
+            /**
+             * Use Cache
+             * @default true
+             */
+            use_cache: boolean;
+            /**
+             * Use Rerank
+             * @default true
+             */
+            use_rerank: boolean;
+        };
         /** SettingsResponse */
         SettingsResponse: {
             /** Acl Scopes */
@@ -1469,6 +1427,26 @@ export interface components {
              */
             meta: string;
         };
+        /**
+         * StoreDeleteResult
+         * @description Per-store outcome for a verified document delete.
+         */
+        StoreDeleteResult: {
+            /** Store */
+            store: string;
+            /**
+             * Remaining
+             * @default 0
+             */
+            remaining: number;
+            /**
+             * Cleared
+             * @default false
+             */
+            cleared: boolean;
+            /** Error */
+            error?: string | null;
+        };
         /** StoreStatus */
         StoreStatus: {
             /** Status */
@@ -1483,6 +1461,81 @@ export interface components {
              * @default true
              */
             configured: boolean;
+        };
+        /** SystemHealthResponse */
+        SystemHealthResponse: {
+            /**
+             * Status
+             * @default ok
+             */
+            status: string;
+            /** Version */
+            version: string;
+            /** Environment */
+            environment: string;
+            /** Components */
+            components: {
+                [key: string]: components["schemas"]["ComponentHealth"];
+            };
+            /**
+             * Outbox Lag
+             * @default 0
+             */
+            outbox_lag: number;
+        };
+        /** ThreadDetail */
+        ThreadDetail: {
+            /** Thread Id */
+            thread_id: string;
+            /** Title */
+            title: string;
+            /** Acl Scope */
+            acl_scope: string;
+            /** As Of Date */
+            as_of_date?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * Messages
+             * @default []
+             */
+            messages: components["schemas"]["MessageItem"][];
+        };
+        /** ThreadSummary */
+        ThreadSummary: {
+            /** Thread Id */
+            thread_id: string;
+            /** Title */
+            title: string;
+            /** Acl Scope */
+            acl_scope: string;
+            /** As Of Date */
+            as_of_date?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /**
+             * Message Count
+             * @default 0
+             */
+            message_count: number;
+            /** Preview */
+            preview?: string | null;
         };
         /** TraceDetail */
         TraceDetail: {
@@ -1558,12 +1611,19 @@ export interface components {
         };
         /** UpdateSettingsRequest */
         UpdateSettingsRequest: {
-            /** Default Scope */
-            default_scope?: string | null;
             /** Default As Of Date */
             default_as_of_date?: string | null;
             /** Canvas Theme */
             canvas_theme?: string | null;
+        };
+        /** UpdateThreadRequest */
+        UpdateThreadRequest: {
+            /** Title */
+            title?: string | null;
+            /** Acl Scope */
+            acl_scope?: string | null;
+            /** As Of Date */
+            as_of_date?: string | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -1587,6 +1647,46 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    system_health_api_v1_health__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemHealthResponse"];
+                };
+            };
+        };
+    };
+    system_health_api_v1_health_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SystemHealthResponse"];
+                };
+            };
+        };
+    };
     liveness_api_v1_health_live_get: {
         parameters: {
             query?: never;
@@ -1627,83 +1727,12 @@ export interface operations {
             };
         };
     };
-    liveness_health_live_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LivenessResponse"];
-                };
-            };
-        };
-    };
-    readiness_health_ready_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReadinessResponse"];
-                };
-            };
-        };
-    };
     query_pipeline_api_v1_query_post: {
         parameters: {
             query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["QueryRequest"];
+            header?: {
+                "X-Dev-User"?: string | null;
             };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["QueryResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    query_pipeline_query_post: {
-        parameters: {
-            query?: never;
-            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -1736,11 +1765,13 @@ export interface operations {
     get_graph_api_v1_graph_get: {
         parameters: {
             query?: {
-                scope?: string;
+                scope?: string | null;
                 as_of?: string | null;
                 limit?: number;
             };
-            header?: never;
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1770,8 +1801,12 @@ export interface operations {
         parameters: {
             query?: {
                 depth?: number;
+                scope?: string | null;
+                as_of?: string | null;
             };
-            header?: never;
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
             path: {
                 node_id: string;
             };
@@ -1804,110 +1839,12 @@ export interface operations {
             query: {
                 from: string;
                 to: string;
-                scope?: string;
+                scope?: string | null;
                 as_of?: string | null;
             };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GraphPathResponse"];
-                };
+            header?: {
+                "X-Dev-User"?: string | null;
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_graph_graph_get: {
-        parameters: {
-            query?: {
-                scope?: string;
-                as_of?: string | null;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GraphResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_node_neighbors_graph_nodes__node_id__neighbors_get: {
-        parameters: {
-            query?: {
-                depth?: number;
-            };
-            header?: never;
-            path: {
-                node_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GraphNeighborsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_graph_path_graph_path_get: {
-        parameters: {
-            query: {
-                from: string;
-                to: string;
-                scope?: string;
-                as_of?: string | null;
-            };
-            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -1967,43 +1904,12 @@ export interface operations {
         };
         responses: {
             /** @description Successful Response */
-            200: {
+            202: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentUploadResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_document_api_v1_documents__document_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                document_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DocumentDeleteResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2079,60 +1985,7 @@ export interface operations {
             };
         };
     };
-    list_documents_documents_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DocumentsResponse"];
-                };
-            };
-        };
-    };
-    upload_document_documents_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "multipart/form-data": components["schemas"]["Body_upload_document_documents_post"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DocumentUploadResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_document_documents__document_id__delete: {
+    delete_document_api_v1_documents__document_id__delete: {
         parameters: {
             query?: never;
             header?: never;
@@ -2150,68 +2003,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["DocumentDeleteResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_document_status_documents__document_id__status_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                document_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DocumentStatusResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_document_impact_documents__document_id__impact_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                document_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DocumentImpactResponse"];
                 };
             };
             /** @description Validation Error */
@@ -2289,70 +2080,6 @@ export interface operations {
             };
         };
     };
-    list_traces_traces_get: {
-        parameters: {
-            query?: {
-                route?: string | null;
-                min_latency?: number | null;
-                status?: string | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TracesResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_trace_traces__trace_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                trace_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TraceDetail"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     compare_retrieval_api_v1_retrieval_compare_get: {
         parameters: {
             query?: {
@@ -2360,42 +2087,12 @@ export interface operations {
                 k?: number;
                 vector_cutoff?: number;
                 cross_encoder_cutoff?: number;
+                scope?: string | null;
+                as_of?: string | null;
             };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["RetrievalCompareResponse"];
-                };
+            header?: {
+                "X-Dev-User"?: string | null;
             };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    compare_retrieval_retrieval_compare_get: {
-        parameters: {
-            query?: {
-                query?: string;
-                k?: number;
-                vector_cutoff?: number;
-                cross_encoder_cutoff?: number;
-            };
-            header?: never;
             path?: never;
             cookie?: never;
         };
@@ -2472,90 +2169,6 @@ export interface operations {
             };
         };
     };
-    get_cache_stats_cache_stats_get: {
-        parameters: {
-            query?: {
-                window?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CacheStatsResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_cache_invalidations_cache_invalidations_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["CacheInvalidationsResponse"];
-                };
-            };
-        };
-    };
-    run_golden_evaluation_api_v1_evals_golden_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["GoldenEvalRunRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoldenEvalRunResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_golden_dataset_api_v1_evals_golden_dataset_get: {
         parameters: {
             query?: never;
@@ -2609,7 +2222,7 @@ export interface operations {
             };
         };
     };
-    run_golden_evaluation_evals_golden_post: {
+    run_golden_evaluation_api_v1_evals_golden_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -2629,59 +2242,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GoldenEvalRunResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_golden_dataset_evals_golden_dataset_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoldenDatasetResponse"];
-                };
-            };
-        };
-    };
-    add_golden_pair_evals_golden_dataset_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["AddGoldenPairRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GoldenPair"];
                 };
             };
             /** @description Validation Error */
@@ -2716,59 +2276,6 @@ export interface operations {
         };
     };
     update_experiment_api_v1_experiments_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdateExperimentRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExperimentRun"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_experiments_experiments_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExperimentsResponse"];
-                };
-            };
-        };
-    };
-    update_experiment_experiments_post: {
         parameters: {
             query?: never;
             header?: never;
@@ -2841,46 +2348,6 @@ export interface operations {
             };
         };
     };
-    get_guardrail_metrics_metrics_guardrails_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["GuardrailsMetricsResponse"];
-                };
-            };
-        };
-    };
-    get_overview_metrics_metrics_overview_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["OverviewMetricsResponse"];
-                };
-            };
-        };
-    };
     get_system_settings_api_v1_settings_get: {
         parameters: {
             query?: never;
@@ -2934,7 +2401,7 @@ export interface operations {
             };
         };
     };
-    get_system_settings_settings_get: {
+    list_threads_api_v1_threads_get: {
         parameters: {
             query?: never;
             header?: never;
@@ -2949,21 +2416,122 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SettingsResponse"];
+                    "application/json": components["schemas"]["ThreadSummary"][];
                 };
             };
         };
     };
-    update_system_settings_settings_patch: {
+    create_thread_api_v1_threads_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["UpdateSettingsRequest"];
+                "application/json": components["schemas"]["CreateThreadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThreadDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_thread_api_v1_threads__thread_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ThreadDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_thread_api_v1_threads__thread_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_thread_api_v1_threads__thread_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateThreadRequest"];
             };
         };
         responses: {
@@ -2973,7 +2541,150 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SettingsResponse"];
+                    "application/json": components["schemas"]["ThreadDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_message_api_v1_threads__thread_id__messages_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
+            path: {
+                thread_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_feedback_api_v1_threads__thread_id__messages__msg_id__feedback_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+                msg_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["FeedbackRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_to_golden_dataset_api_v1_threads__thread_id__messages__msg_id__golden_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+                msg_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddToGoldenRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    regenerate_message_api_v1_threads__thread_id__messages__msg_id__regenerate_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                thread_id: string;
+                msg_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageItem"];
                 };
             };
             /** @description Validation Error */

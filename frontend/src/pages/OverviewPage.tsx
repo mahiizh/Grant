@@ -15,6 +15,16 @@ import {
 import { useOverviewMetrics } from "../lib/api/hooks/useMetrics";
 import { QueryState } from "../components/ui/QueryState";
 
+const NOT_MEASURED = "Not measured";
+
+function isUnmeasured(value: number | null | undefined): value is null | undefined {
+  return value === null || value === undefined;
+}
+
+function percent(value: number | null | undefined): string {
+  return isUnmeasured(value) ? NOT_MEASURED : `${(value * 100).toFixed(1)}%`;
+}
+
 export function OverviewPage() {
   const navigate = useNavigate();
   const { data: metrics, isLoading, error, refetch } = useOverviewMetrics();
@@ -29,7 +39,7 @@ export function OverviewPage() {
             GraphRAG Intelligence Lab Overview
           </h1>
           <p className="text-xs text-zinc-400 mt-1">
-            Real-time telemetry and service-level indicators for bi-temporal retrieval, semantic caching, and claim faithfulness.
+            Telemetry and service-level indicators for bi-temporal retrieval, semantic caching, and claim faithfulness.
           </p>
         </div>
 
@@ -64,60 +74,58 @@ export function OverviewPage() {
             {
               title: "Documents Indexed",
               value: `${data.docs_indexed} Documents`,
-              subtext: `${data.chunks_indexed} total chunks · ${data.entities_indexed} entities · ${data.relations_indexed} links`,
+              subtext: `${data.chunks_indexed} chunks · ${data.entities_indexed} entities · ${data.relations_indexed} links`,
               icon: FileText,
-              trend: "+1 this week",
-              trendType: "neutral" as const,
               color: "text-sky-400",
               target: "/documents",
             },
             {
               title: "Golden-Set Accuracy",
-              value: `${(data.golden_set_accuracy * 100).toFixed(1)}%`,
-              subtext: "20 / 20 regression benchmark queries verified",
+              value: percent(data.golden_set_accuracy),
+              subtext: isUnmeasured(data.golden_set_accuracy)
+                ? "Run the golden-set eval to record accuracy"
+                : "Latest recorded evaluation run",
               icon: ShieldCheck,
-              trend: "0 regressions",
-              trendType: "positive" as const,
               color: "text-emerald-400",
               target: "/golden-set",
             },
             {
               title: "P95 Pipeline Latency",
-              value: `${data.p95_latency_ms} ms`,
-              subtext: "Target SLA: 850ms (passing with -27% headroom)",
+              value: isUnmeasured(data.p95_latency_ms)
+                ? NOT_MEASURED
+                : `${data.p95_latency_ms} ms`,
+              subtext: isUnmeasured(data.p95_latency_ms)
+                ? "No completed query traces recorded yet"
+                : "Computed from stored assistant messages",
               icon: Clock,
-              trend: "-85ms faster",
-              trendType: "positive" as const,
               color: "text-amber-400",
               target: "/traces",
             },
             {
-              title: "Cache Hit / Wrong-Hit Rate",
-              value: `${(data.cache_hit_rate * 100).toFixed(1)}% / ${(data.cache_wrong_hit_rate * 100).toFixed(1)}%`,
-              subtext: "624 hits · 3 wrong-hits intercepted by guardrail",
+              title: "Cache Hit Rate",
+              value: percent(data.cache_hit_rate),
+              subtext: isUnmeasured(data.cache_hit_rate)
+                ? "No cache-tagged messages recorded yet"
+                : "Exact + semantic hits from stored messages",
               icon: Zap,
-              trend: "+12.1% hits",
-              trendType: "positive" as const,
               color: "text-emerald-400",
               target: "/cache",
             },
             {
               title: "Cost Per Correct Answer",
-              value: `$${data.cost_per_correct_answer_usd.toFixed(4)}`,
-              subtext: "Avg 340 generation tokens + RRF candidate pruning",
+              value: isUnmeasured(data.cost_per_correct_answer_usd)
+                ? NOT_MEASURED
+                : `$${data.cost_per_correct_answer_usd!.toFixed(4)}`,
+              subtext: "The pipeline does not persist per-answer cost",
               icon: Coins,
-              trend: "-$0.0012 (-28%)",
-              trendType: "positive" as const,
               color: "text-emerald-400",
               target: "/experiments",
             },
             {
               title: "Unverified Facts Pending",
               value: `${data.unverified_facts_pending} Claims`,
-              subtext: "100% extracted claims grounded in Tier 1–2 evidence",
+              subtext: "Chunks whose provenance is not marked verified",
               icon: CheckCircle2,
-              trend: "Faithfulness 0.958",
-              trendType: "positive" as const,
               color: "text-sky-400",
               target: "/retrieval",
             },
@@ -147,17 +155,12 @@ export function OverviewPage() {
                         {kpi.value}
                       </div>
                       <div className="flex items-center justify-between text-[11px] font-mono pt-1 border-t border-zinc-800/60">
-                        <span className="text-zinc-500 truncate max-w-[190px]">{kpi.subtext}</span>
-                        <Badge
-                          variant="outline"
-                          className={`text-[9px] shrink-0 ${
-                            kpi.trendType === "positive"
-                              ? "border-emerald-500/30 text-emerald-400 bg-emerald-500/10"
-                              : "border-zinc-800 text-zinc-400"
-                          }`}
-                        >
-                          {kpi.trend}
-                        </Badge>
+                        <span className="text-zinc-500 truncate max-w-[220px]">{kpi.subtext}</span>
+                        {kpi.value === NOT_MEASURED && (
+                          <Badge variant="outline" className="text-[9px] shrink-0 border-zinc-800 text-zinc-500">
+                            No data
+                          </Badge>
+                        )}
                       </div>
                     </CardContent>
                   </Card>
@@ -179,7 +182,7 @@ export function OverviewPage() {
             <ArrowRight className="h-3.5 w-3.5" />
           </div>
           <p className="text-xs text-zinc-400 leading-relaxed">
-            Inspect the 36-entity bi-temporal topology, Louvain community clusters, and active reasoning particle paths.
+            Inspect entities and relationships with client-computed PageRank, communities, and degree.
           </p>
         </div>
 
@@ -192,7 +195,7 @@ export function OverviewPage() {
             <ArrowRight className="h-3.5 w-3.5" />
           </div>
           <p className="text-xs text-zinc-400 leading-relaxed">
-            Tune Reciprocal Rank Fusion constant k, vector similarity floors, and cross-encoder score cutoffs with live rank-shifts.
+            Compare dense, sparse, hybrid, and full retrieval with live rank shifts.
           </p>
         </div>
 
@@ -201,11 +204,11 @@ export function OverviewPage() {
           className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/80 hover:border-zinc-700 transition-all cursor-pointer space-y-1.5 group"
         >
           <div className="flex items-center justify-between text-xs font-semibold text-zinc-200 group-hover:text-amber-400">
-            <span>Distributed Spans & Waterfall</span>
+            <span>Distributed Spans &amp; Waterfall</span>
             <ArrowRight className="h-3.5 w-3.5" />
           </div>
           <p className="text-xs text-zinc-400 leading-relaxed">
-            Review OpenTelemetry semantic traces across LangGraph orchestrator, Redis cache, Qdrant vectors, and Neo4j.
+            Review recorded pipeline spans and per-stage latency.
           </p>
         </div>
       </div>

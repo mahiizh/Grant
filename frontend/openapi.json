@@ -5,7 +5,49 @@
     "version": "0.1.0"
   },
   "paths": {
-    "/api/v1/health/live": {
+    "/health/": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "System Health",
+        "operationId": "system_health_api_v1_health__get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemHealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "summary": "System Health",
+        "operationId": "system_health_api_v1_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SystemHealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/live": {
       "get": {
         "tags": [
           "health"
@@ -26,7 +68,7 @@
         }
       }
     },
-    "/api/v1/health/ready": {
+    "/health/ready": {
       "get": {
         "tags": [
           "health"
@@ -47,90 +89,6 @@
         }
       }
     },
-    "/health/live": {
-      "get": {
-        "tags": [
-          "health"
-        ],
-        "summary": "Liveness",
-        "operationId": "liveness_health_live_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/LivenessResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/health/ready": {
-      "get": {
-        "tags": [
-          "health"
-        ],
-        "summary": "Readiness",
-        "operationId": "readiness_health_ready_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReadinessResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/query": {
-      "post": {
-        "tags": [
-          "query"
-        ],
-        "summary": "Query Pipeline",
-        "description": "Execute end-to-end GraphRAG pipeline and return grounded answer with citations.",
-        "operationId": "query_pipeline_api_v1_query_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/QueryRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/QueryResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/query": {
       "post": {
         "tags": [
@@ -138,16 +96,34 @@
         ],
         "summary": "Query Pipeline",
         "description": "Execute end-to-end GraphRAG pipeline and return grounded answer with citations.",
-        "operationId": "query_pipeline_query_post",
+        "operationId": "query_pipeline_api_v1_query_post",
+        "parameters": [
+          {
+            "name": "X-Dev-User",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-User"
+            }
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/QueryRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -156,207 +132,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/QueryResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/graph": {
-      "get": {
-        "tags": [
-          "graph"
-        ],
-        "summary": "Get Graph",
-        "description": "Retrieve filtered knowledge graph nodes and relationships.",
-        "operationId": "get_graph_api_v1_graph_get",
-        "parameters": [
-          {
-            "name": "scope",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "data-platform",
-              "title": "Scope"
-            }
-          },
-          {
-            "name": "as_of",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "As Of"
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "default": 100,
-              "title": "Limit"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GraphResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/graph/nodes/{node_id}/neighbors": {
-      "get": {
-        "tags": [
-          "graph"
-        ],
-        "summary": "Get Node Neighbors",
-        "description": "Expand subgraph neighborhood centered on node_id.",
-        "operationId": "get_node_neighbors_api_v1_graph_nodes__node_id__neighbors_get",
-        "parameters": [
-          {
-            "name": "node_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Node Id"
-            }
-          },
-          {
-            "name": "depth",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "default": 1,
-              "title": "Depth"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GraphNeighborsResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/graph/path": {
-      "get": {
-        "tags": [
-          "graph"
-        ],
-        "summary": "Get Graph Path",
-        "description": "Compute bi-temporal shortest path between two nodes.",
-        "operationId": "get_graph_path_api_v1_graph_path_get",
-        "parameters": [
-          {
-            "name": "from",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "From"
-            }
-          },
-          {
-            "name": "to",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "To"
-            }
-          },
-          {
-            "name": "scope",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "data-platform",
-              "title": "Scope"
-            }
-          },
-          {
-            "name": "as_of",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "As Of"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GraphPathResponse"
                 }
               }
             }
@@ -380,16 +155,22 @@
           "graph"
         ],
         "summary": "Get Graph",
-        "description": "Retrieve filtered knowledge graph nodes and relationships.",
-        "operationId": "get_graph_graph_get",
+        "description": "Retrieve ACL-filtered knowledge graph nodes and relationships from Neo4j.",
+        "operationId": "get_graph_api_v1_graph_get",
         "parameters": [
           {
             "name": "scope",
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "default": "data-platform",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "Scope"
             }
           },
@@ -417,6 +198,22 @@
               "type": "integer",
               "default": 100,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Dev-User",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-User"
             }
           }
         ],
@@ -450,8 +247,8 @@
           "graph"
         ],
         "summary": "Get Node Neighbors",
-        "description": "Expand subgraph neighborhood centered on node_id.",
-        "operationId": "get_node_neighbors_graph_nodes__node_id__neighbors_get",
+        "description": "Expand an ACL-filtered subgraph neighborhood centered on node_id in Neo4j.",
+        "operationId": "get_node_neighbors_api_v1_graph_nodes__node_id__neighbors_get",
         "parameters": [
           {
             "name": "node_id",
@@ -470,6 +267,54 @@
               "type": "integer",
               "default": 1,
               "title": "Depth"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          },
+          {
+            "name": "X-Dev-User",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-User"
             }
           }
         ],
@@ -503,8 +348,8 @@
           "graph"
         ],
         "summary": "Get Graph Path",
-        "description": "Compute bi-temporal shortest path between two nodes.",
-        "operationId": "get_graph_path_graph_path_get",
+        "description": "Compute the shortest ACL-permitted bi-temporal path between two nodes in Neo4j.",
+        "operationId": "get_graph_path_api_v1_graph_path_get",
         "parameters": [
           {
             "name": "from",
@@ -529,8 +374,14 @@
             "in": "query",
             "required": false,
             "schema": {
-              "type": "string",
-              "default": "data-platform",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "Scope"
             }
           },
@@ -548,6 +399,22 @@
                 }
               ],
               "title": "As Of"
+            }
+          },
+          {
+            "name": "X-Dev-User",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-User"
             }
           }
         ],
@@ -575,13 +442,13 @@
         }
       }
     },
-    "/api/v1/documents": {
+    "/documents": {
       "get": {
         "tags": [
           "documents"
         ],
         "summary": "List Documents",
-        "description": "List all ingested documents in the corpus.",
+        "description": "List all ingested documents with tokens, cost, and extracted entity counts.",
         "operationId": "list_documents_api_v1_documents_get",
         "responses": {
           "200": {
@@ -601,7 +468,7 @@
           "documents"
         ],
         "summary": "Upload Document",
-        "description": "Upload document for multi-modal parsing, chunking and indexing.",
+        "description": "Upload document for parsing, chunking, outbox staging, and automatic indexing.",
         "operationId": "upload_document_api_v1_documents_post",
         "requestBody": {
           "content": {
@@ -614,7 +481,7 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
@@ -637,50 +504,7 @@
         }
       }
     },
-    "/api/v1/documents/{document_id}": {
-      "delete": {
-        "tags": [
-          "documents"
-        ],
-        "summary": "Delete Document",
-        "description": "Cascade delete document across PostgreSQL, Qdrant, Neo4j and Redis.",
-        "operationId": "delete_document_api_v1_documents__document_id__delete",
-        "parameters": [
-          {
-            "name": "document_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Document Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DocumentDeleteResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/documents/{document_id}/status": {
+    "/documents/{document_id}/status": {
       "get": {
         "tags": [
           "documents"
@@ -723,7 +547,7 @@
         }
       }
     },
-    "/api/v1/documents/{document_id}/impact": {
+    "/documents/{document_id}/impact": {
       "get": {
         "tags": [
           "documents"
@@ -766,76 +590,14 @@
         }
       }
     },
-    "/documents": {
-      "get": {
-        "tags": [
-          "documents"
-        ],
-        "summary": "List Documents",
-        "description": "List all ingested documents in the corpus.",
-        "operationId": "list_documents_documents_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DocumentsResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "documents"
-        ],
-        "summary": "Upload Document",
-        "description": "Upload document for multi-modal parsing, chunking and indexing.",
-        "operationId": "upload_document_documents_post",
-        "requestBody": {
-          "content": {
-            "multipart/form-data": {
-              "schema": {
-                "$ref": "#/components/schemas/Body_upload_document_documents_post"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DocumentUploadResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/documents/{document_id}": {
       "delete": {
         "tags": [
           "documents"
         ],
         "summary": "Delete Document",
-        "description": "Cascade delete document across PostgreSQL, Qdrant, Neo4j and Redis.",
-        "operationId": "delete_document_documents__document_id__delete",
+        "description": "Cascade delete a document and verify that every store is actually clean.",
+        "operationId": "delete_document_api_v1_documents__document_id__delete",
         "parameters": [
           {
             "name": "document_id",
@@ -871,225 +633,14 @@
         }
       }
     },
-    "/documents/{document_id}/status": {
-      "get": {
-        "tags": [
-          "documents"
-        ],
-        "summary": "Get Document Status",
-        "description": "Get current ingestion pipeline progress for document.",
-        "operationId": "get_document_status_documents__document_id__status_get",
-        "parameters": [
-          {
-            "name": "document_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Document Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DocumentStatusResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/documents/{document_id}/impact": {
-      "get": {
-        "tags": [
-          "documents"
-        ],
-        "summary": "Get Document Impact",
-        "description": "Calculate blast radius before deleting a document.",
-        "operationId": "get_document_impact_documents__document_id__impact_get",
-        "parameters": [
-          {
-            "name": "document_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Document Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/DocumentImpactResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/traces": {
-      "get": {
-        "tags": [
-          "traces"
-        ],
-        "summary": "List Traces",
-        "description": "List execution traces with filtering.",
-        "operationId": "list_traces_api_v1_traces_get",
-        "parameters": [
-          {
-            "name": "route",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Route"
-            }
-          },
-          {
-            "name": "min_latency",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Min Latency"
-            }
-          },
-          {
-            "name": "status",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Status"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TracesResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/traces/{trace_id}": {
-      "get": {
-        "tags": [
-          "traces"
-        ],
-        "summary": "Get Trace",
-        "description": "Retrieve full trace waterfall and span metadata.",
-        "operationId": "get_trace_api_v1_traces__trace_id__get",
-        "parameters": [
-          {
-            "name": "trace_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Trace Id"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TraceDetail"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/traces": {
       "get": {
         "tags": [
           "traces"
         ],
         "summary": "List Traces",
-        "description": "List execution traces with filtering.",
-        "operationId": "list_traces_traces_get",
+        "description": "List execution traces from PostgreSQL.",
+        "operationId": "list_traces_api_v1_traces_get",
         "parameters": [
           {
             "name": "route",
@@ -1170,8 +721,8 @@
           "traces"
         ],
         "summary": "Get Trace",
-        "description": "Retrieve full trace waterfall and span metadata.",
-        "operationId": "get_trace_traces__trace_id__get",
+        "description": "Retrieve full trace waterfall and span metadata from PostgreSQL.",
+        "operationId": "get_trace_api_v1_traces__trace_id__get",
         "parameters": [
           {
             "name": "trace_id",
@@ -1207,13 +758,13 @@
         }
       }
     },
-    "/api/v1/retrieval/compare": {
+    "/retrieval/compare": {
       "get": {
         "tags": [
           "retrieval"
         ],
         "summary": "Compare Retrieval",
-        "description": "Compare candidate ranking across vector, graph and cross-encoder rerankers.",
+        "description": "Compare candidate ranking across vector, sparse, RRF and cross-encoder rerankers.",
         "operationId": "compare_retrieval_api_v1_retrieval_compare_get",
         "parameters": [
           {
@@ -1242,7 +793,7 @@
             "required": false,
             "schema": {
               "type": "number",
-              "default": 0.75,
+              "default": 0.4,
               "title": "Vector Cutoff"
             }
           },
@@ -1252,8 +803,57 @@
             "required": false,
             "schema": {
               "type": "number",
-              "default": 0.85,
+              "default": 0.0,
               "title": "Cross Encoder Cutoff"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          },
+          {
+            "name": "X-Dev-User",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-User"
             }
           }
         ],
@@ -1274,146 +874,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/retrieval/compare": {
-      "get": {
-        "tags": [
-          "retrieval"
-        ],
-        "summary": "Compare Retrieval",
-        "description": "Compare candidate ranking across vector, graph and cross-encoder rerankers.",
-        "operationId": "compare_retrieval_retrieval_compare_get",
-        "parameters": [
-          {
-            "name": "query",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "Transactional Outbox postgres failure",
-              "title": "Query"
-            }
-          },
-          {
-            "name": "k",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
-              "default": 60,
-              "title": "K"
-            }
-          },
-          {
-            "name": "vector_cutoff",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "number",
-              "default": 0.75,
-              "title": "Vector Cutoff"
-            }
-          },
-          {
-            "name": "cross_encoder_cutoff",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "number",
-              "default": 0.85,
-              "title": "Cross Encoder Cutoff"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RetrievalCompareResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/cache/stats": {
-      "get": {
-        "tags": [
-          "cache"
-        ],
-        "summary": "Get Cache Stats",
-        "description": "Retrieve telemetry time series for semantic cache performance.",
-        "operationId": "get_cache_stats_api_v1_cache_stats_get",
-        "parameters": [
-          {
-            "name": "window",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "string",
-              "default": "24h",
-              "title": "Window"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CacheStatsResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/cache/invalidations": {
-      "get": {
-        "tags": [
-          "cache"
-        ],
-        "summary": "Get Cache Invalidations",
-        "description": "Audit log of semantic cache invalidations triggered by mutations.",
-        "operationId": "get_cache_invalidations_api_v1_cache_invalidations_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/CacheInvalidationsResponse"
                 }
               }
             }
@@ -1427,8 +887,8 @@
           "cache"
         ],
         "summary": "Get Cache Stats",
-        "description": "Retrieve telemetry time series for semantic cache performance.",
-        "operationId": "get_cache_stats_cache_stats_get",
+        "description": "Retrieve telemetry time series for exact and semantic cache performance.\n\nCache hits/misses are counted in process memory only and are never exported,\nso a cross-process time series cannot be reconstructed. Returning 501 is\npreferable to inventing a hit rate.",
+        "operationId": "get_cache_stats_api_v1_cache_stats_get",
         "parameters": [
           {
             "name": "window",
@@ -1471,8 +931,8 @@
           "cache"
         ],
         "summary": "Get Cache Invalidations",
-        "description": "Audit log of semantic cache invalidations triggered by mutations.",
-        "operationId": "get_cache_invalidations_cache_invalidations_get",
+        "description": "Audit log of semantic cache invalidations triggered by mutations in outbox.",
+        "operationId": "get_cache_invalidations_api_v1_cache_invalidations_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1487,49 +947,7 @@
         }
       }
     },
-    "/api/v1/evals/golden": {
-      "post": {
-        "tags": [
-          "evals"
-        ],
-        "summary": "Run Golden Evaluation",
-        "description": "Trigger an automated evaluation run against the golden dataset.",
-        "operationId": "run_golden_evaluation_api_v1_evals_golden_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/GoldenEvalRunRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GoldenEvalRunResponse"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/evals/golden/dataset": {
+    "/evals/golden/dataset": {
       "get": {
         "tags": [
           "evals"
@@ -1598,7 +1016,7 @@
         ],
         "summary": "Run Golden Evaluation",
         "description": "Trigger an automated evaluation run against the golden dataset.",
-        "operationId": "run_golden_evaluation_evals_golden_post",
+        "operationId": "run_golden_evaluation_api_v1_evals_golden_post",
         "requestBody": {
           "content": {
             "application/json": {
@@ -1633,75 +1051,13 @@
         }
       }
     },
-    "/evals/golden/dataset": {
-      "get": {
-        "tags": [
-          "evals"
-        ],
-        "summary": "Get Golden Dataset",
-        "description": "Fetch all test cases in the golden question benchmark.",
-        "operationId": "get_golden_dataset_evals_golden_dataset_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GoldenDatasetResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "evals"
-        ],
-        "summary": "Add Golden Pair",
-        "description": "Add a new verified question-answer ground truth pair to the dataset.",
-        "operationId": "add_golden_pair_evals_golden_dataset_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/AddGoldenPairRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GoldenPair"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/experiments": {
+    "/experiments": {
       "get": {
         "tags": [
           "experiments"
         ],
         "summary": "List Experiments",
-        "description": "List active and historical A/B routing experiments.",
+        "description": "List retrieval experiments.\n\nNo experiment store exists, so this returns 501 rather than a hardcoded list\nof runs with invented accuracy and latency numbers.",
         "operationId": "list_experiments_api_v1_experiments_get",
         "responses": {
           "200": {
@@ -1757,120 +1113,14 @@
         }
       }
     },
-    "/experiments": {
-      "get": {
-        "tags": [
-          "experiments"
-        ],
-        "summary": "List Experiments",
-        "description": "List active and historical A/B routing experiments.",
-        "operationId": "list_experiments_experiments_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ExperimentsResponse"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "experiments"
-        ],
-        "summary": "Update Experiment",
-        "description": "Adjust live traffic allocation split between experimental variants.",
-        "operationId": "update_experiment_experiments_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/UpdateExperimentRequest"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ExperimentRun"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "Validation Error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/metrics/guardrails": {
-      "get": {
-        "tags": [
-          "metrics"
-        ],
-        "summary": "Get Guardrail Metrics",
-        "description": "Security and safety metrics for prompt injection, redaction, and hallucination gates.",
-        "operationId": "get_guardrail_metrics_api_v1_metrics_guardrails_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/GuardrailsMetricsResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/metrics/overview": {
-      "get": {
-        "tags": [
-          "metrics"
-        ],
-        "summary": "Get Overview Metrics",
-        "description": "Aggregated KPIs for the overview dashboard.",
-        "operationId": "get_overview_metrics_api_v1_metrics_overview_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OverviewMetricsResponse"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/metrics/guardrails": {
       "get": {
         "tags": [
           "metrics"
         ],
         "summary": "Get Guardrail Metrics",
-        "description": "Security and safety metrics for prompt injection, redaction, and hallucination gates.",
-        "operationId": "get_guardrail_metrics_metrics_guardrails_get",
+        "description": "Security and safety metrics for prompt injection, redaction, and hallucination gates.\n\nThe pipeline does not persist guardrail counters or judge scores, so there is\nno honest value to report. Returning fixed numbers made the dashboard look\nhealthy without measuring anything.",
+        "operationId": "get_guardrail_metrics_api_v1_metrics_guardrails_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1891,8 +1141,8 @@
           "metrics"
         ],
         "summary": "Get Overview Metrics",
-        "description": "Aggregated KPIs for the overview dashboard.",
-        "operationId": "get_overview_metrics_metrics_overview_get",
+        "description": "Aggregated KPIs for the overview dashboard.\n\nCounts come from PostgreSQL/Qdrant/Neo4j, and latency/cache rates come from\nrecorded assistant messages. Metrics the pipeline does not measure (golden-set\naccuracy, wrong-hit rate, cost per correct answer) are returned as ``None``\nrather than fabricated constants.",
+        "operationId": "get_overview_metrics_api_v1_metrics_overview_get",
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -1907,7 +1157,7 @@
         }
       }
     },
-    "/api/v1/settings": {
+    "/settings": {
       "get": {
         "tags": [
           "settings"
@@ -1933,7 +1183,7 @@
           "settings"
         ],
         "summary": "Update System Settings",
-        "description": "Update active scope, as-of time, or visual preferences.",
+        "description": "Update defaults (date, canvas theme). Note: active scope cannot be changed via settings.",
         "operationId": "update_system_settings_api_v1_settings_patch",
         "requestBody": {
           "content": {
@@ -1969,21 +1219,126 @@
         }
       }
     },
-    "/settings": {
+    "/threads": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "Create Thread",
+        "description": "Create a new conversation thread with optional title, ACL scope, and as-of time.",
+        "operationId": "create_thread_api_v1_threads_post",
+        "parameters": [
+          {
+            "name": "X-Dev-User",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-User"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateThreadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "get": {
         "tags": [
-          "settings"
+          "threads"
         ],
-        "summary": "Get System Settings",
-        "description": "Retrieve system settings, ACL scopes, store health, and defaults.",
-        "operationId": "get_system_settings_settings_get",
+        "summary": "List Threads",
+        "description": "List all threads ordered by updated_at descending.",
+        "operationId": "list_threads_api_v1_threads_get",
         "responses": {
           "200": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SettingsResponse"
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ThreadSummary"
+                  },
+                  "title": "Response List Threads Api V1 Threads Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/threads/{thread_id}": {
+      "get": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "Get Thread",
+        "description": "Retrieve thread details and full message history.",
+        "operationId": "get_thread_api_v1_threads__thread_id__get",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ThreadDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -1992,20 +1347,31 @@
       },
       "patch": {
         "tags": [
-          "settings"
+          "threads"
         ],
-        "summary": "Update System Settings",
-        "description": "Update active scope, as-of time, or visual preferences.",
-        "operationId": "update_system_settings_settings_patch",
+        "summary": "Update Thread",
+        "description": "Update thread title, ACL scope, or as-of date.",
+        "operationId": "update_thread_api_v1_threads__thread_id__patch",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
         "requestBody": {
+          "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/UpdateSettingsRequest"
+                "$ref": "#/components/schemas/UpdateThreadRequest"
               }
             }
-          },
-          "required": true
+          }
         },
         "responses": {
           "200": {
@@ -2013,7 +1379,297 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SettingsResponse"
+                  "$ref": "#/components/schemas/ThreadDetail"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "Delete Thread",
+        "description": "Delete thread and cascade messages.",
+        "operationId": "delete_thread_api_v1_threads__thread_id__delete",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Delete Thread Api V1 Threads  Thread Id  Delete"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/threads/{thread_id}/messages": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "Send Message",
+        "description": "Execute glass-box turn within conversation thread, supporting SSE streaming.",
+        "operationId": "send_message_api_v1_threads__thread_id__messages_post",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "X-Dev-User",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-User"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "title": "Response Send Message Api V1 Threads  Thread Id  Messages Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/threads/{thread_id}/messages/{msg_id}/feedback": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "Record Feedback",
+        "description": "Record upvote/downvote and optional notes on an assistant response.",
+        "operationId": "record_feedback_api_v1_threads__thread_id__messages__msg_id__feedback_post",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "msg_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Msg Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageItem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/threads/{thread_id}/messages/{msg_id}/golden": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "Add To Golden Dataset",
+        "description": "Export thread turn question, answer, and citations into candidate evaluation dataset.",
+        "operationId": "add_to_golden_dataset_api_v1_threads__thread_id__messages__msg_id__golden_post",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "msg_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Msg Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddToGoldenRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Add To Golden Dataset Api V1 Threads  Thread Id  Messages  Msg Id  Golden Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/threads/{thread_id}/messages/{msg_id}/regenerate": {
+      "post": {
+        "tags": [
+          "threads"
+        ],
+        "summary": "Regenerate Message",
+        "description": "Regenerate assistant response and archive prior generation.",
+        "operationId": "regenerate_message_api_v1_threads__thread_id__messages__msg_id__regenerate_post",
+        "parameters": [
+          {
+            "name": "thread_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Thread Id"
+            }
+          },
+          {
+            "name": "msg_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Msg Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageItem"
                 }
               }
             }
@@ -2066,6 +1722,18 @@
             "type": "array",
             "title": "Ground Truth Chunk Ids"
           },
+          "split": {
+            "type": "string",
+            "title": "Split",
+            "default": "dev"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Depends On"
+          },
           "complexity": {
             "type": "string",
             "title": "Complexity",
@@ -2081,6 +1749,28 @@
         ],
         "title": "AddGoldenPairRequest"
       },
+      "AddToGoldenRequest": {
+        "properties": {
+          "category": {
+            "type": "string",
+            "title": "Category",
+            "default": "multi_turn"
+          },
+          "expected_answer": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Answer"
+          }
+        },
+        "type": "object",
+        "title": "AddToGoldenRequest"
+      },
       "Body_upload_document_api_v1_documents_post": {
         "properties": {
           "file": {
@@ -2094,20 +1784,6 @@
           "file"
         ],
         "title": "Body_upload_document_api_v1_documents_post"
-      },
-      "Body_upload_document_documents_post": {
-        "properties": {
-          "file": {
-            "type": "string",
-            "contentMediaType": "application/octet-stream",
-            "title": "File"
-          }
-        },
-        "type": "object",
-        "required": [
-          "file"
-        ],
-        "title": "Body_upload_document_documents_post"
       },
       "CacheInvalidationRecord": {
         "properties": {
@@ -2238,6 +1914,113 @@
         ],
         "title": "CacheStatsResponse"
       },
+      "CitationItem": {
+        "properties": {
+          "chunk_id": {
+            "type": "string",
+            "title": "Chunk Id"
+          },
+          "doc_id": {
+            "type": "string",
+            "title": "Doc Id"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "retrieval_method": {
+            "type": "string",
+            "title": "Retrieval Method"
+          },
+          "path": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chunk_id",
+          "doc_id",
+          "text",
+          "score",
+          "retrieval_method"
+        ],
+        "title": "CitationItem"
+      },
+      "ComponentHealth": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "healthy"
+          },
+          "latency_ms": {
+            "type": "number",
+            "title": "Latency Ms",
+            "default": 1.0
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "title": "ComponentHealth"
+      },
+      "CreateThreadRequest": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "acl_scope": {
+            "type": "string",
+            "title": "Acl Scope",
+            "default": "data-platform"
+          },
+          "as_of_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of Date"
+          }
+        },
+        "type": "object",
+        "title": "CreateThreadRequest"
+      },
       "DocumentDeleteResponse": {
         "properties": {
           "document_id": {
@@ -2247,6 +2030,18 @@
           "success": {
             "type": "boolean",
             "title": "Success"
+          },
+          "verified": {
+            "type": "boolean",
+            "title": "Verified",
+            "default": false
+          },
+          "stores": {
+            "items": {
+              "$ref": "#/components/schemas/StoreDeleteResult"
+            },
+            "type": "array",
+            "title": "Stores"
           },
           "stores_cleared": {
             "items": {
@@ -2348,6 +2143,16 @@
           "valid_from": {
             "type": "string",
             "title": "Valid From"
+          },
+          "tokens": {
+            "type": "integer",
+            "title": "Tokens",
+            "default": 0
+          },
+          "cost_usd": {
+            "type": "number",
+            "title": "Cost Usd",
+            "default": 0.0
           }
         },
         "type": "object",
@@ -2589,6 +2394,31 @@
         ],
         "title": "ExperimentsResponse"
       },
+      "FeedbackRequest": {
+        "properties": {
+          "feedback": {
+            "type": "string",
+            "pattern": "^(up|down)$",
+            "title": "Feedback"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "feedback"
+        ],
+        "title": "FeedbackRequest"
+      },
       "GoldenDatasetResponse": {
         "properties": {
           "questions": {
@@ -2627,6 +2457,16 @@
               }
             ],
             "title": "Sample Size"
+          },
+          "split": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "test",
+              "all"
+            ],
+            "title": "Split",
+            "default": "test"
           }
         },
         "type": "object",
@@ -2642,6 +2482,10 @@
             "type": "string",
             "title": "Status"
           },
+          "split": {
+            "type": "string",
+            "title": "Split"
+          },
           "total_questions": {
             "type": "integer",
             "title": "Total Questions"
@@ -2649,6 +2493,41 @@
           "accuracy": {
             "type": "number",
             "title": "Accuracy"
+          },
+          "category_scores": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Category Scores"
+          },
+          "category_operational": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Category Operational"
+          },
+          "total_cost_usd": {
+            "type": "number",
+            "title": "Total Cost Usd",
+            "default": 0.0
+          },
+          "budget_usd": {
+            "type": "number",
+            "title": "Budget Usd",
+            "default": 0.0
+          },
+          "cache_hit_rate": {
+            "type": "number",
+            "title": "Cache Hit Rate",
+            "default": 0.0
           },
           "started_at": {
             "type": "string",
@@ -2670,6 +2549,7 @@
         "required": [
           "run_id",
           "status",
+          "split",
           "total_questions",
           "accuracy",
           "started_at"
@@ -2712,6 +2592,18 @@
             "type": "array",
             "title": "Ground Truth Chunk Ids"
           },
+          "split": {
+            "type": "string",
+            "title": "Split",
+            "default": "dev"
+          },
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Depends On"
+          },
           "complexity": {
             "type": "string",
             "title": "Complexity",
@@ -2744,14 +2636,26 @@
             "default": "RELATES_TO"
           },
           "tier": {
-            "type": "integer",
-            "title": "Tier",
-            "default": 1
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tier"
           },
           "valid_from": {
-            "type": "string",
-            "title": "Valid From",
-            "default": "2026-01-01"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From"
           },
           "valid_to": {
             "anyOf": [
@@ -2765,14 +2669,26 @@
             "title": "Valid To"
           },
           "tx_time": {
-            "type": "string",
-            "title": "Tx Time",
-            "default": "2026-01-01T00:00:00Z"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Time"
           },
           "chunk_hash": {
-            "type": "string",
-            "title": "Chunk Hash",
-            "default": "sha256:0000"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Hash"
           }
         },
         "type": "object",
@@ -2831,24 +2747,48 @@
             "title": "Type"
           },
           "pagerank": {
-            "type": "number",
-            "title": "Pagerank",
-            "default": 0.05
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pagerank"
           },
           "community": {
-            "type": "integer",
-            "title": "Community",
-            "default": 0
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Community"
           },
           "cluster": {
-            "type": "string",
-            "title": "Cluster",
-            "default": "core"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cluster"
           },
           "valid_from": {
-            "type": "string",
-            "title": "Valid From",
-            "default": "2026-01-01"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From"
           },
           "valid_to": {
             "anyOf": [
@@ -2862,19 +2802,31 @@
             "title": "Valid To"
           },
           "tx_time": {
-            "type": "string",
-            "title": "Tx Time",
-            "default": "2026-01-01T00:00:00Z"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tx Time"
           },
           "chunk_hash": {
-            "type": "string",
-            "title": "Chunk Hash",
-            "default": "sha256:0000"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Hash"
           },
           "degree": {
             "type": "integer",
             "title": "Degree",
-            "default": 1
+            "default": 0
           }
         },
         "type": "object",
@@ -3018,6 +2970,291 @@
         "type": "object",
         "title": "LivenessResponse"
       },
+      "MessageGeneration": {
+        "properties": {
+          "generation_id": {
+            "type": "string",
+            "title": "Generation Id"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "rewritten_query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rewritten Query"
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
+          },
+          "cache_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Status"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Id"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/CitationItem"
+            },
+            "type": "array",
+            "title": "Citations",
+            "default": []
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "generation_id",
+          "content",
+          "created_at"
+        ],
+        "title": "MessageGeneration"
+      },
+      "MessageItem": {
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "title": "Message Id"
+          },
+          "thread_id": {
+            "type": "string",
+            "title": "Thread Id"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "content": {
+            "type": "string",
+            "title": "Content"
+          },
+          "raw_query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Raw Query"
+          },
+          "rewritten_query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rewritten Query"
+          },
+          "route": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Route"
+          },
+          "cache_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cache Status"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Usd"
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens"
+          },
+          "trace_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Trace Id"
+          },
+          "citations": {
+            "items": {
+              "$ref": "#/components/schemas/CitationItem"
+            },
+            "type": "array",
+            "title": "Citations",
+            "default": []
+          },
+          "pipeline_stages": {
+            "items": {
+              "$ref": "#/components/schemas/PipelineStageItem"
+            },
+            "type": "array",
+            "title": "Pipeline Stages",
+            "default": []
+          },
+          "subgraph_nodes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Subgraph Nodes",
+            "default": []
+          },
+          "feedback": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback"
+          },
+          "feedback_note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Feedback Note"
+          },
+          "generations": {
+            "items": {
+              "$ref": "#/components/schemas/MessageGeneration"
+            },
+            "type": "array",
+            "title": "Generations",
+            "default": []
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message_id",
+          "thread_id",
+          "role",
+          "content",
+          "created_at"
+        ],
+        "title": "MessageItem"
+      },
       "OverviewMetricsResponse": {
         "properties": {
           "docs_indexed": {
@@ -3037,23 +3274,58 @@
             "title": "Relations Indexed"
           },
           "golden_set_accuracy": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Golden Set Accuracy"
           },
           "p95_latency_ms": {
-            "type": "integer",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "P95 Latency Ms"
           },
           "cache_hit_rate": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Cache Hit Rate"
           },
           "cache_wrong_hit_rate": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Cache Wrong Hit Rate"
           },
           "cost_per_correct_answer_usd": {
-            "type": "number",
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Cost Per Correct Answer Usd"
           },
           "unverified_facts_pending": {
@@ -3067,14 +3339,54 @@
           "chunks_indexed",
           "entities_indexed",
           "relations_indexed",
-          "golden_set_accuracy",
-          "p95_latency_ms",
-          "cache_hit_rate",
-          "cache_wrong_hit_rate",
-          "cost_per_correct_answer_usd",
           "unverified_facts_pending"
         ],
         "title": "OverviewMetricsResponse"
+      },
+      "PipelineStageItem": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "duration_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Duration Ms"
+          },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "status"
+        ],
+        "title": "PipelineStageItem"
       },
       "QueryRequest": {
         "properties": {
@@ -3082,26 +3394,18 @@
             "type": "string",
             "title": "Query"
           },
-          "user_roles": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "User Roles"
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
           },
-          "user_groups": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "User Groups"
-          },
-          "tenant_id": {
-            "type": "string",
-            "title": "Tenant Id",
-            "default": "default"
-          },
-          "as_of_time": {
+          "as_of": {
             "anyOf": [
               {
                 "type": "string",
@@ -3111,7 +3415,18 @@
                 "type": "null"
               }
             ],
-            "title": "As Of Time"
+            "title": "As Of"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Thread Id"
           }
         },
         "type": "object",
@@ -3119,7 +3434,7 @@
           "query"
         ],
         "title": "QueryRequest",
-        "description": "User query payload with optional authorization context and temporal filters."
+        "description": "User query payload with optional requested scope and temporal filter."
       },
       "QueryResponse": {
         "properties": {
@@ -3316,6 +3631,63 @@
         ],
         "title": "RetrievalCompareResponse"
       },
+      "SendMessageRequest": {
+        "properties": {
+          "content": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Content"
+          },
+          "acl_scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acl Scope"
+          },
+          "as_of_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of Date"
+          },
+          "retrieval_mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Retrieval Mode"
+          },
+          "use_cache": {
+            "type": "boolean",
+            "title": "Use Cache",
+            "default": true
+          },
+          "use_rerank": {
+            "type": "boolean",
+            "title": "Use Rerank",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "content"
+        ],
+        "title": "SendMessageRequest"
+      },
       "SettingsResponse": {
         "properties": {
           "acl_scopes": {
@@ -3389,6 +3761,41 @@
         ],
         "title": "SpanRecord"
       },
+      "StoreDeleteResult": {
+        "properties": {
+          "store": {
+            "type": "string",
+            "title": "Store"
+          },
+          "remaining": {
+            "type": "integer",
+            "title": "Remaining",
+            "default": 0
+          },
+          "cleared": {
+            "type": "boolean",
+            "title": "Cleared",
+            "default": false
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          }
+        },
+        "type": "object",
+        "required": [
+          "store"
+        ],
+        "title": "StoreDeleteResult",
+        "description": "Per-store outcome for a verified document delete."
+      },
       "StoreStatus": {
         "properties": {
           "status": {
@@ -3411,6 +3818,158 @@
           "status"
         ],
         "title": "StoreStatus"
+      },
+      "SystemHealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "ok"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "environment": {
+            "type": "string",
+            "title": "Environment"
+          },
+          "components": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ComponentHealth"
+            },
+            "type": "object",
+            "title": "Components"
+          },
+          "outbox_lag": {
+            "type": "integer",
+            "title": "Outbox Lag",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "version",
+          "environment",
+          "components"
+        ],
+        "title": "SystemHealthResponse"
+      },
+      "ThreadDetail": {
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "title": "Thread Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "acl_scope": {
+            "type": "string",
+            "title": "Acl Scope"
+          },
+          "as_of_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of Date"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "messages": {
+            "items": {
+              "$ref": "#/components/schemas/MessageItem"
+            },
+            "type": "array",
+            "title": "Messages",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "thread_id",
+          "title",
+          "acl_scope",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ThreadDetail"
+      },
+      "ThreadSummary": {
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "title": "Thread Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "acl_scope": {
+            "type": "string",
+            "title": "Acl Scope"
+          },
+          "as_of_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of Date"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "message_count": {
+            "type": "integer",
+            "title": "Message Count",
+            "default": 0
+          },
+          "preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Preview"
+          }
+        },
+        "type": "object",
+        "required": [
+          "thread_id",
+          "title",
+          "acl_scope",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ThreadSummary"
       },
       "TraceDetail": {
         "properties": {
@@ -3589,17 +4148,6 @@
       },
       "UpdateSettingsRequest": {
         "properties": {
-          "default_scope": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Default Scope"
-          },
           "default_as_of_date": {
             "anyOf": [
               {
@@ -3625,6 +4173,45 @@
         },
         "type": "object",
         "title": "UpdateSettingsRequest"
+      },
+      "UpdateThreadRequest": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "acl_scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Acl Scope"
+          },
+          "as_of_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of Date"
+          }
+        },
+        "type": "object",
+        "title": "UpdateThreadRequest"
       },
       "ValidationError": {
         "properties": {

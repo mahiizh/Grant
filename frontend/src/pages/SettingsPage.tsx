@@ -1,12 +1,36 @@
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
-import { Database, Cpu, ShieldCheck, Palette } from "lucide-react";
+import { Database, Cpu, Palette, SlidersHorizontal } from "lucide-react";
 import { useApp } from "../context/AppContext";
 import { useSettingsApi, useUpdateSettings } from "../lib/api/hooks/useSettingsApi";
+import { QueryState } from "../components/ui/QueryState";
+
+const STORE_LABELS: Record<string, { name: string; detail: string; color: string }> = {
+  neo4j: {
+    name: "Neo4j Graph Database",
+    detail: "Bi-temporal · valid_from / valid_to",
+    color: "text-sky-400 border-sky-400/30",
+  },
+  qdrant: {
+    name: "Qdrant Vector Engine",
+    detail: "Dense + sparse vectors",
+    color: "text-emerald-400 border-emerald-400/30",
+  },
+  postgres: {
+    name: "PostgreSQL Relational & Outbox",
+    detail: "Document store & transactional outbox",
+    color: "text-indigo-400 border-indigo-400/30",
+  },
+  redis: {
+    name: "Redis Semantic Cache",
+    detail: "Exact + semantic response cache",
+    color: "text-rose-400 border-rose-400/30",
+  },
+};
 
 export function SettingsPage() {
   const { canvasTheme, setCanvasTheme } = useApp();
-  const { data: settingsData } = useSettingsApi();
+  const { data: settingsData, isLoading, error, refetch } = useSettingsApi();
   const updateSettingsMutation = useUpdateSettings();
 
   const handleCanvasThemeChange = (theme: "dark" | "match") => {
@@ -20,95 +44,103 @@ export function SettingsPage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight text-zinc-100">Settings & Stores</h1>
           <p className="text-sm text-zinc-400 mt-1">
-            Store versions, bi-temporal graph configuration, budget caps, and API endpoints.
+            Store health, measured latency, and runtime defaults reported by the backend.
           </p>
         </div>
 
-        {/* Store Versions */}
-        <Card className="bg-zinc-950/40 border-zinc-800">
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <Database className="h-4 w-4 text-emerald-400" />
-              <CardTitle className="text-sm font-medium">Underlying Stores & Engines</CardTitle>
-            </div>
-            <CardDescription className="text-xs">
-              Configured databases, index versions, and vector store topologies.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40 flex items-center justify-between">
-                <div>
-                  <div className="text-xs font-medium text-zinc-200">Neo4j Graph Database</div>
-                  <div className="text-[11px] font-mono text-zinc-500">Bi-Temporal · valid_from / valid_to</div>
-                </div>
-                <Badge variant="outline" className="font-mono text-[10px] text-sky-400 border-sky-400/30">
-                  {settingsData?.stores?.neo4j?.status ? `v5.20.0 (${settingsData.stores.neo4j.status})` : "v5.20.0-enterprise"}
-                </Badge>
-              </div>
+        <QueryState
+          isLoading={isLoading}
+          error={error}
+          data={settingsData}
+          onRetry={() => refetch()}
+          loadingSkeleton={<div className="h-64 rounded-xl bg-zinc-950/40 border border-zinc-800 animate-pulse" />}
+        >
+          {(data) => (
+            <>
+              {/* Store Health */}
+              <Card className="bg-zinc-950/40 border-zinc-800">
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <Database className="h-4 w-4 text-emerald-400" />
+                    <CardTitle className="text-sm font-medium">Underlying Stores & Engines</CardTitle>
+                  </div>
+                  <CardDescription className="text-xs">
+                    Live health checks with measured round-trip latency.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {Object.entries(data.stores ?? {}).map(([key, store]) => {
+                      const label = STORE_LABELS[key] ?? {
+                        name: key,
+                        detail: "Configured store",
+                        color: "text-zinc-400 border-zinc-700",
+                      };
+                      const healthy = store.status === "healthy";
+                      return (
+                        <div
+                          key={key}
+                          className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40 flex items-center justify-between gap-3"
+                        >
+                          <div>
+                            <div className="text-xs font-medium text-zinc-200">{label.name}</div>
+                            <div className="text-[11px] font-mono text-zinc-500">{label.detail}</div>
+                          </div>
+                          <div className="text-right">
+                            <Badge variant="outline" className={`font-mono text-[10px] ${label.color}`}>
+                              {store.status}
+                            </Badge>
+                            <div className="text-[10px] font-mono text-zinc-500 mt-1 tabular-nums">
+                              {healthy ? `${store.latency_ms.toFixed(1)} ms` : "unreachable"}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
 
-              <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40 flex items-center justify-between">
-                <div>
-                  <div className="text-xs font-medium text-zinc-200">Qdrant Vector Engine</div>
-                  <div className="text-[11px] font-mono text-zinc-500">HNSW Indexing · text-embedding-3-large</div>
-                </div>
-                <Badge variant="outline" className="font-mono text-[10px] text-emerald-400 border-emerald-400/30">
-                  {settingsData?.stores?.qdrant?.status ? `v1.9.2 (${settingsData.stores.qdrant.status})` : "v1.9.2"}
-                </Badge>
-              </div>
-
-              <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40 flex items-center justify-between">
-                <div>
-                  <div className="text-xs font-medium text-zinc-200">PostgreSQL Relational & Outbox</div>
-                  <div className="text-[11px] font-mono text-zinc-500">Document store & Transactional Outbox</div>
-                </div>
-                <Badge variant="outline" className="font-mono text-[10px] text-indigo-400 border-indigo-400/30">
-                  {settingsData?.stores?.postgres?.status ? `v16.3 (${settingsData.stores.postgres.status})` : "v16.3"}
-                </Badge>
-              </div>
-
-              <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40 flex items-center justify-between">
-                <div>
-                  <div className="text-xs font-medium text-zinc-200">Redis Semantic Cache</div>
-                  <div className="text-[11px] font-mono text-zinc-500">TTL 3600s · Cosine Sim Threshold 0.92</div>
-                </div>
-                <Badge variant="outline" className="font-mono text-[10px] text-rose-400 border-rose-400/30">
-                  {settingsData?.stores?.redis?.status ? `v7.2.4 (${settingsData.stores.redis.status})` : "v7.2.4"}
-                </Badge>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Guardrails & Budgets */}
-        <Card className="bg-zinc-950/40 border-zinc-800">
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="h-4 w-4 text-amber-400" />
-              <CardTitle className="text-sm font-medium">Budget Caps & Guardrails</CardTitle>
-            </div>
-            <CardDescription className="text-xs">
-              Daily query spending caps, maximum hops for Personalized PageRank, and timeout limits.
-            </CardDescription>
-          </CardHeader>
-          <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40">
-              <div className="text-xs text-zinc-400">Daily USD Cap</div>
-              <div className="text-base font-semibold text-zinc-100 font-mono mt-1">$50.00 / day</div>
-              <div className="text-[10px] text-zinc-500 mt-0.5">$3.42 consumed today</div>
-            </div>
-            <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40">
-              <div className="text-xs text-zinc-400">Graph Expansion Limit</div>
-              <div className="text-base font-semibold text-zinc-100 font-mono mt-1">3 hops max</div>
-              <div className="text-[10px] text-zinc-500 mt-0.5">Truncates high-degree supernodes</div>
-            </div>
-            <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40">
-              <div className="text-xs text-zinc-400">P95 Latency SLA</div>
-              <div className="text-base font-semibold text-zinc-100 font-mono mt-1">850 ms</div>
-              <div className="text-[10px] text-emerald-400 mt-0.5">Currently passing (620 ms)</div>
-            </div>
-          </CardContent>
-        </Card>
+              {/* Runtime Defaults */}
+              <Card className="bg-zinc-950/40 border-zinc-800">
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <SlidersHorizontal className="h-4 w-4 text-amber-400" />
+                    <CardTitle className="text-sm font-medium">Runtime Defaults</CardTitle>
+                  </div>
+                  <CardDescription className="text-xs">
+                    Defaults applied to new queries and graph views.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40">
+                    <div className="text-xs text-zinc-400">Default ACL Scope</div>
+                    <div className="text-base font-semibold text-zinc-100 font-mono mt-1">
+                      {data.default_scope}
+                    </div>
+                    <div className="text-[10px] text-zinc-500 mt-0.5">
+                      {(data.acl_scopes ?? []).length} scopes available
+                    </div>
+                  </div>
+                  <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40">
+                    <div className="text-xs text-zinc-400">Default As-Of Date</div>
+                    <div className="text-base font-semibold text-zinc-100 font-mono mt-1">
+                      {data.default_as_of_date}
+                    </div>
+                    <div className="text-[10px] text-zinc-500 mt-0.5">Bi-temporal snapshot date</div>
+                  </div>
+                  <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40">
+                    <div className="text-xs text-zinc-400">Canvas Theme</div>
+                    <div className="text-base font-semibold text-zinc-100 font-mono mt-1">
+                      {data.canvas_theme}
+                    </div>
+                    <div className="text-[10px] text-zinc-500 mt-0.5">Graph viewport rendering mode</div>
+                  </div>
+                </CardContent>
+              </Card>
+            </>
+          )}
+        </QueryState>
 
         {/* Canvas Display Appearance */}
         <Card className="bg-zinc-950/40 border-zinc-800">
@@ -168,16 +200,17 @@ export function SettingsPage() {
             <div className="flex justify-between py-1 border-b border-zinc-800/60">
               <span className="text-zinc-400">Backend API URL</span>
               <span className="font-mono text-zinc-200">
-                {import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"} ({import.meta.env.VITE_API_MODE ?? "mock"} mode)
+                {import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"} (
+                {import.meta.env.VITE_API_MODE ?? "live"} mode)
               </span>
             </div>
             <div className="flex justify-between py-1 border-b border-zinc-800/60">
               <span className="text-zinc-400">Embedding Model</span>
-              <span className="font-mono text-zinc-200">text-embedding-3-large (3072d)</span>
+              <span className="font-mono text-zinc-200">Configured by backend</span>
             </div>
             <div className="flex justify-between py-1">
               <span className="text-zinc-400">Orchestrator Architecture</span>
-              <span className="font-mono text-zinc-200">LangGraph Dynamic State Machine</span>
+              <span className="font-mono text-zinc-200">LangGraph dynamic state machine</span>
             </div>
           </CardContent>
         </Card>

@@ -26,26 +26,27 @@ export interface GraphAnalyticsResult {
   findPath: (sourceId: string, targetId: string) => string[] | null;
 }
 
+// Palette only. Counts stay at zero until the worker computes real communities.
 const DEFAULT_CLUSTERS = [
-  { id: 0, name: "Storage & Ingestion Hub", count: 6, color: "#38BDF8" },
-  { id: 1, name: "Payments & Fraud Gateway", count: 8, color: "#10B981" },
-  { id: 2, name: "Core Banking & Ledger", count: 7, color: "#F59E0B" },
-  { id: 3, name: "SRE & Reliability Platform", count: 6, color: "#8B5CF6" },
-  { id: 4, name: "Security & Governance", count: 5, color: "#EC4899" },
-  { id: 5, name: "Event & Async Processing", count: 4, color: "#06B6D4" },
+  { id: 0, name: "Storage & Ingestion Hub", count: 0, color: "#38BDF8" },
+  { id: 1, name: "Payments & Fraud Gateway", count: 0, color: "#10B981" },
+  { id: 2, name: "Core Banking & Ledger", count: 0, color: "#F59E0B" },
+  { id: 3, name: "SRE & Reliability Platform", count: 0, color: "#8B5CF6" },
+  { id: 4, name: "Security & Governance", count: 0, color: "#EC4899" },
+  { id: 5, name: "Event & Async Processing", count: 0, color: "#06B6D4" },
 ];
 
 export function useGraphAnalytics(data: GraphData): GraphAnalyticsResult {
   // Compute fast initial enriched fallback
   const initialNodes = useMemo(() => {
-    return data.nodes.map((n, idx) => ({
+    return data.nodes.map((n) => ({
       ...n,
-      cluster: n.cluster ?? idx % 6,
-      clusterName: DEFAULT_CLUSTERS[(n.cluster ?? idx) % DEFAULT_CLUSTERS.length].name,
-      degree: n.degree ?? 2,
-      inDegree: 1,
-      outDegree: 1,
-      pageRank: n.pageRank ?? 0.05,
+      cluster: n.cluster ?? 0,
+      clusterName: DEFAULT_CLUSTERS[(n.cluster ?? 0) % DEFAULT_CLUSTERS.length].name,
+      degree: n.degree ?? 0,
+      inDegree: 0,
+      outDegree: 0,
+      pageRank: n.pageRank ?? 0,
       val: 6,
     }));
   }, [data.nodes]);
@@ -68,8 +69,8 @@ export function useGraphAnalytics(data: GraphData): GraphAnalyticsResult {
     stats: {
       totalEntities: data.nodes.length,
       totalRelationships: data.links.length,
-      clustersDetected: 6,
-      avgPathDepth: 2.85,
+      clustersDetected: 0,
+      avgPathDepth: 0,
       avgDegree: data.nodes.length > 0 ? (data.links.length * 2) / data.nodes.length : 0,
     },
   });

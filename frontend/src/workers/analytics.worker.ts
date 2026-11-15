@@ -154,7 +154,7 @@ export const analyticsWorkerApi = {
         }
       }
     }
-    const avgPathDepth = pathsSampled > 0 ? totalPathLength / pathsSampled : 2.85;
+    const avgPathDepth = pathsSampled > 0 ? totalPathLength / pathsSampled : 0;
 
     return {
       nodes: enrichedNodes,

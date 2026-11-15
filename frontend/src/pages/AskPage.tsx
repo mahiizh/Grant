@@ -163,13 +163,14 @@ export function AskPage() {
         name: n.name,
         type: n.type as any,
         description: (n as any).description || `${n.type} node`,
-        valid_from: n.valid_from,
-        valid_to: n.valid_to || "9999-12-31",
-        tx_time: n.tx_time,
+        valid_from: n.valid_from ?? "",
+        valid_to: n.valid_to ?? "9999-12-31",
+        tx_time: n.tx_time ?? "",
         tier: (n as any).tier || 1,
-        chunkHash: (n as any).chunk_hash || "sha256:0000",
-        cluster: n.community,
-        pageRank: n.pagerank,
+        chunkHash: (n as any).chunk_hash || "",
+        // Backend analytics are optional; the worker recomputes them.
+        cluster: n.community ?? undefined,
+        pageRank: n.pagerank ?? undefined,
         degree: n.degree,
       })),
       links: graphResponse.links.map((l) => ({
@@ -177,7 +178,7 @@ export function AskPage() {
         target: l.target,
         relation: l.label,
         tier: (l.tier as any) || 1,
-        valid_from: l.valid_from,
+        valid_from: l.valid_from ?? undefined,
       })),
     };
   }, [graphResponse]);
