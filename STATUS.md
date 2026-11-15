@@ -22,7 +22,7 @@ sections below remain the Step 0 evidence.
 | 2. Eval items 1–5 | **Done** | Grounded 30-row dev/test golden set; chunk-level metrics per category; isolated clean-ingest `make eval`; hermetic gate; 65 tests pass |
 | 3. ACL items 7–9 | **Done** | Qdrant payload pushdown; parameterized Cypher ACL on graph reads/paths; `/retrieval/compare` + `/graph` auth; deterministic default scope; 19 unit + 4 live leak tests |
 | 4. Item 6 honest baseline | **Done** | 4-config comparison on the `test` split with response caches disabled; `full` best retrieval, `hybrid` best answer accuracy, `hybrid` RRF does **not** beat dense on retrieval (see §0.1–§0.2) |
-| 5. Items 11–13 | In progress | Item 11 done: idempotent ingest + outbox reconciliation + document-scoped cache invalidation (see §0.4); item 12 done: verified deletes per store (see §0.5); item 13 pending |
+| 5. Items 11–13 | **Done** | Item 11: idempotent ingest + outbox reconciliation + document-scoped cache invalidation (§0.4); item 12: verified deletes per store (§0.5); item 13: hardcoded API surfaces computed or `501`, MSW off by default, frontend wired to real endpoints with empty/error states (§0.6) |
 | 6. Eval power | Pending | 150–200 docs / 500+ chunks, 150+ golden rows (20+/category in test), calibrated LLM judge, bootstrap 95% CIs; token F1 secondary (see §0.3) |
 
 ### §0.1 Item 4 — honest baseline across four retrieval configurations
@@ -272,6 +272,48 @@ as a Redis remainder. `count_document_keys` is also covered through the invalida
 
 **Verification at this commit:** `ruff check` clean, `ruff format --check` 127 files, `mypy` 127
 files, `pytest` 108 passed.
+
+### §0.6 Item 13 — hardcoded API surfaces: compute or refuse
+
+Rule applied: a surface either computes a value from a real store or returns `501 Not Implemented`.
+No endpoint invents telemetry, and the frontend never renders fixture data unless mocks are
+explicitly enabled.
+
+**Backend (one surface per commit).**
+
+- `/experiments` (GET/PUT) → `501` with an explanation that no experiment store exists (`76e6b86`).
+- `/metrics/guardrails` and `/cache/stats` → `501` instead of fixed counters (`4c48c23`).
+- `/metrics/overview` now counts documents/chunks/entities/relations from PostgreSQL, Qdrant, and
+  Neo4j, derives P95 latency and cache hit rate from stored assistant messages, and returns `None`
+  for values the pipeline does not persist (cost per correct answer) (`ea83462`).
+- `/graph` returns a measured `degree` and `None` for analytics it does not compute (PageRank,
+  community, cluster, chunk hash) (`694d68d`).
+- `/traces` reports stored token usage and status; span-only traces no longer claim `tokens=120`
+  or `cost_usd=0.00003` (`765c1fb`).
+- `/settings` store latencies are measured with `time.perf_counter`, and `default_as_of_date`
+  comes from settings rather than a fixed date (`3014d75`).
+
+**Frontend (one commit, `a375408`).**
+
+- MSW is opt-in (`VITE_API_MODE=mock`); the client defaults to `/api/v1` so a fresh checkout talks
+  to the live backend (`browser.ts`, `client.ts`).
+- `ExperimentsPage` and `GoldenSetPage` were rewritten against `useExperiments` and
+  `useGoldenDataset`/`useRunGoldenEval`; the local `DEFAULT_RUNS` and unconditional PASSED eval
+  report are gone. Both pages show loading, empty, and error states.
+- `CachePage` uses `useCacheStats`/`useCacheInvalidations`/`useGuardrailsMetrics`; the chart and
+  invalidations render only returned data.
+- `SettingsPage` renders the real settings payload (`stores`, `default_scope`,
+  `default_as_of_date`, `canvas_theme`); invented versions and budget caps are removed.
+- `OverviewPage` treats nullable metrics as “Not measured” instead of `NaN%` or fabricated trends.
+- Graph mappings accept nullable backend analytics, and the worker/hook fallbacks are zero rather
+  than seeded cluster counts, degrees, PageRank, or `avgPathDepth`.
+- `useEvals` sends the required `split` on add (`dev`) and run (`test`).
+- `openapi.json` and `schema.d.ts` were regenerated; the client spec paths are base-relative and
+  the runtime prefix comes from `VITE_API_BASE_URL` (default `/api/v1`).
+
+**Verification:** backend `ruff check` clean, `ruff format --check` 127 files, `mypy` 127 files,
+`pytest` 108 passed at each commit. Frontend `npm run lint` exit 0, `npm test` 18 passed, and
+`npm run build` exit 0 after the rewrite.
 
 ### After item 5 — approved follow-on sequence (not scheduled)
 
