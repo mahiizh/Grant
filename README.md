@@ -85,7 +85,7 @@ Turn each concept into an experiment with a measured result; that's what makes t
 | GenAI-standard telemetry | OTel GenAI conventions now cover inference, embeddings, retrieval, agents and MCP | Emit `gen_ai.*` spans for every stage; build p50/p95 per stage from `gen_ai.client.operation.duration` |
 | MCP server for your retrievers | Graphiti and Docling both ship MCP servers; it's how agents consume retrieval now | Expose `search_vector`, `traverse_graph`, `explain_trace` as MCP tools; query your lab from Claude |
 | Indirect prompt-injection defense | Retrieved text is untrusted input | Seed the corpus with poisoned docs; measure attack success rate before and after delimiting and instruction filtering |
-| Judge calibration | LLM-as-judge scores drift and flatter | Hand-label 50 answers; report judge agreement (Cohen's kappa) before trusting automated scores |
+| Judge calibration | LLM-as-judge scores drift and flatter | Hand-label a sample of answers (the committed artifact uses 30); report judge agreement (Cohen's kappa) and who authored the labels before trusting automated scores |
 
 ## Revised architecture
 
@@ -276,8 +276,7 @@ graphrag-intelligence-lab/
 │   ├── litellm.yaml                   # models, pricing overrides, budgets
 │   └── otel-collector.yaml
 ├── .github/workflows/
-│   ├── ci.yml                         # lint, type-check, unit + integration tests
-│   └── eval-gate.yml                  # fails the PR if golden-set scores drop
+│   ├── ci.yml                         # lint, typecheck, unit tests, asset check, hermetic eval gate
 ├── docs/
 │   ├── architecture.md
 │   ├── adr/                           # one file per design decision
@@ -306,8 +305,10 @@ The product is complete when all of these hold:
 
 - [ ] `make up && make ingest && make eval` runs from a clean clone
 - [ ] Every request has one trace with per-stage latency, tokens and cost
-- [ ] Golden-set scores are reported per category, and the CI gate blocks regressions
-- [ ] Hybrid retrieval beats dense-only on nDCG@10
+- [ ] Golden-set scores are reported per category; CI runs the generated-asset check and the
+      hermetic eval gate (structure and safety invariants, not tuned quality thresholds)
+- [ ] Hybrid retrieval beats dense-only on nDCG@10 (measured baseline: it does **not**; see
+      `STATUS.md` §0.1–§0.2)
 - [ ] Graph retrieval wins on multi-hop questions without losing on fact lookups
 - [ ] Deleting a document removes it from Qdrant, Neo4j and the cache (reconciler clean)
 - [ ] Zero results from ACL leak tests; prompt-injection success rate measured and reported

@@ -34,10 +34,15 @@ Test rows per category (the gate requires ≥20 in each):
 | `multi_turn` | 25 |
 
 The split is a property of the row, not of the file, so a row can be moved
-between splits without changing the file layout. `make eval` reads the row
-counts from `corpus/synthetic/manifest.json` instead of hardcoding them, and
-`generate_eval_assets --check` fails if the manifest and the committed rows
-disagree.
+between splits without changing the file layout. `make eval` reads the **corpus**
+document/chunk counts from `corpus/synthetic/manifest.json`; golden row counts
+come from the loaded dataset, not the manifest. `generate_eval_assets --check`
+regenerates the rows in memory and fails if the committed bytes or chunk ids
+drift.
+
+The gate enforces total ≥150 rows, test ≥120, and ≥20 in every test category.
+The original request asked for ≥150 **test** rows; the current 105 dev / 135 test
+split does not meet that test-only target (see `STATUS.md` §0.3).
 
 ## Generated rows
 
@@ -64,8 +69,9 @@ They target the failure modes the hand-authored set cannot express at scale:
 Chunk ids have the form `chk_{doc_id}_{index:04d}_{sha256(text)[:10]}`. They are
 deterministic for a given corpus text, so the same ids are produced by the live
 ingestion pipeline and by the Docker-free hermetic test harness. The CI gate
-asserts that every golden `expected_chunk_ids` entry exists after ingestion; a
-missing id fails the run instead of silently scoring against a fake id.
+asserts that every golden `expected_chunk_ids` entry exists in the corpus chunks
+loaded through the shared chunker; a missing id fails the run instead of silently
+scoring against a fake id.
 
 The corpus contains 185 documents and 845 chunks (170 generated documents plus
 the hand-authored documents, including the adversarial set under
@@ -91,8 +97,9 @@ or `--judge`.
 Calibration uses `evals/calibration/judge_answers.jsonl`: 30 answers with binary
 human labels, balanced 15 correct / 15 wrong. The labels were authored by the
 implementer from dev-split golden rows, not by an independent annotator, so the
-agreement figure is a consistency check, not inter-annotator agreement.
-`make calibrate-judge` reruns the judge and writes
+agreement figure is a **provisional consistency check**, not inter-annotator
+agreement. An independent relabel is still required before treating the judge as
+calibrated. `make calibrate-judge` reruns the judge and writes
 `evals/calibration/judge_agreement.json`.
 
 Last committed run (`gemini/gemini-3.5-flash-lite`, threshold 0.5):

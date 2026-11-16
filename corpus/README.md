@@ -53,6 +53,6 @@ uv run --directory backend python -m app.tools.generate_eval_assets
 uv run --directory backend python -m app.tools.generate_eval_assets --check
 ```
 
-`--check` re-reads the committed corpus, recomputes the chunk ids, and fails if
-the manifest counts or generated golden ids no longer match. CI runs it, so a
-hand edit to a generated file cannot drift silently.
+`--check` regenerates the corpus and golden rows in memory and compares the committed document
+bytes, chunk ids, golden row bytes, and manifest fields. CI runs it, so a hand edit to a generated
+file cannot drift silently.
