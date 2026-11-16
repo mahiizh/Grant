@@ -1,0 +1,9 @@
+{
+  "generator": "app.tools.generate_eval_assets",
+  "seed": 20260412,
+  "generated_documents": 170,
+  "generated_chunks": 800,
+  "total_documents": 185,
+  "total_chunks": 845,
+  "golden_rows": 210
+}

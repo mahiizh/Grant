@@ -1,4 +1,4 @@
-.PHONY: help dev migrate test test-unit test-gate eval eval-compare lint format typecheck check up down logs ps clean frontend-dev frontend-build
+.PHONY: help dev migrate test test-unit test-gate eval eval-compare calibrate-judge lint format typecheck check up down logs ps clean frontend-dev frontend-build
 
 # Keep Compose and the backend on the same env file. Fall back to .env.example
 # so `make up` still works before the first `cp .env.example .env`.
@@ -60,7 +60,7 @@ reconcile: migrate
 
 # Isolated evaluation: dedicated PostgreSQL DB + Qdrant collection, clean ingest,
 # then the golden test split. Extra flags: SPLIT=dev|test|all CONFIG=dense|sparse|hybrid|full
-# BUDGET_USD=0.50 CONCURRENCY=2 JSON_REPORT=path
+# BUDGET_USD=0.50 CONCURRENCY=2 JSON_REPORT=path JUDGE=1 JUDGE_MODEL=... JUDGE_THRESHOLD=0.5
 eval:
 	uv run --directory backend python -m app.tools.eval_cli \
 		--config $(or $(CONFIG),full) \
@@ -68,16 +68,31 @@ eval:
 		$(if $(BUDGET_USD),--budget-usd $(BUDGET_USD),) \
 		$(if $(CONCURRENCY),--concurrency $(CONCURRENCY),) \
 		$(if $(FRESH_LLM_CACHE),--fresh-llm-cache,) \
+		$(if $(filter 1 true yes,$(JUDGE)),--judge,) \
+		$(if $(JUDGE_MODEL),--judge-model $(JUDGE_MODEL),) \
+		$(if $(JUDGE_THRESHOLD),--judge-threshold $(JUDGE_THRESHOLD),) \
 		$(if $(JSON_REPORT),--json-report $(JSON_REPORT),)
 
 # Honest baseline: same corpus, prompt, model, and split; four retrieval configs
 # with a cold per-config LLM cache. Extra flags: SPLIT=... BUDGET_USD=... JSON_DIR=...
+# JUDGE=1 JUDGE_MODEL=... JUDGE_THRESHOLD=0.5
 eval-compare:
 	uv run --directory backend python -m app.tools.eval_compare \
 		--split $(or $(SPLIT),test) \
 		$(if $(BUDGET_USD),--budget-usd $(BUDGET_USD),) \
 		$(if $(CONCURRENCY),--concurrency $(CONCURRENCY),) \
+		$(if $(filter 1 true yes,$(JUDGE)),--judge,) \
+		$(if $(JUDGE_MODEL),--judge-model $(JUDGE_MODEL),) \
+		$(if $(JUDGE_THRESHOLD),--judge-threshold $(JUDGE_THRESHOLD),) \
 		$(if $(JSON_DIR),--json-dir $(JSON_DIR),)
+
+# Calibrate the LLM judge on 30 hand-labelled answers and write
+# evals/calibration/judge_agreement.json for the comparison report.
+calibrate-judge:
+	uv run --directory backend python -m app.tools.calibrate_judge \
+		$(if $(JUDGE_MODEL),--judge-model $(JUDGE_MODEL),) \
+		$(if $(JUDGE_THRESHOLD),--judge-threshold $(JUDGE_THRESHOLD),) \
+		--write
 
 
 lint:

@@ -8,7 +8,9 @@ from app.cache.semantic import SemanticCache
 from app.core.acl import ACLScope
 from app.core.config import get_settings
 from app.evaluation.answer_metrics import answer_accuracy
+from app.evaluation.bootstrap import bootstrap_interval
 from app.evaluation.datasets import GoldenDataset, GoldenQuestion, SplitType
+from app.evaluation.judge import AnswerJudge
 from app.evaluation.retrieval_metrics import (
     hit_rate_at_k,
     ndcg_at_k,
@@ -56,7 +58,23 @@ class BenchmarkReport:
     p95_latency_ms: float = 0.0
     retrieval_p50_latency_ms: float = 0.0
     retrieval_p95_latency_ms: float = 0.0
+    category_intervals: dict[str, dict[str, dict[str, float | int]]] = field(default_factory=dict)
+    overall_intervals: dict[str, dict[str, float | int]] = field(default_factory=dict)
+    judge_model: str | None = None
+    judge_threshold: float | None = None
     summary: dict[str, Any] = field(default_factory=dict)
+
+
+# Metrics that get a bootstrap interval in every report. Retrieval metrics are
+# primary; answer metrics are reported next to them, and token F1 is secondary.
+INTERVAL_METRICS = (
+    "chunk_recall@5",
+    "chunk_ndcg@10",
+    "chunk_mrr",
+    "answer_accuracy",
+    "answer_f1",
+)
+JUDGE_METRICS = ("judge_correctness", "judge_faithfulness", "judge_pass_rate")
 
 
 class EvaluationRunner:
@@ -68,9 +86,11 @@ class EvaluationRunner:
         budget_usd: float | None = None,
         concurrency: int | None = None,
         retrieval_config: RetrievalConfig = "full",
+        judge: AnswerJudge | None = None,
     ) -> None:
         self.orchestrator = orchestrator or RAGOrchestrator()
         self.retrieval_config = retrieval_config
+        self.judge = judge
         settings = get_settings()
         self.budget_usd = budget_usd if budget_usd is not None else settings.LLM_MAX_BUDGET_PER_RUN
         self.concurrency = max(
@@ -181,12 +201,15 @@ class EvaluationRunner:
             "id": question.id,
             "category": question.category,
             "split": question.split,
+            "query": question.query,
+            "expected_answer": question.expected_answer,
             "route": state.get("route", "vector"),
             "optimal_strategy": question.optimal_strategy,
             "rewritten_query": rewritten,
             "answer": state.get("answer", ""),
             "retrieved_chunk_ids": retrieved_chunk_ids,
             "retrieved_doc_ids": retrieved_doc_ids,
+            "retrieved_context": [ev.text for ev in evidence],
             "expected_chunk_ids": sorted(target_chunks),
             "expected_doc_ids": sorted(target_docs),
             "chunk_metrics": chunk_metrics,
@@ -218,6 +241,12 @@ class EvaluationRunner:
                 "core-banking",
                 "sre",
                 "executive-audit",
+                "security",
+                "ml-platform",
+                "customer-support",
+                "treasury",
+                "risk",
+                "compliance",
             },
             allowed_groups={"platform-admins"},
         )
@@ -249,15 +278,33 @@ class EvaluationRunner:
         order = {q.id: index for index, q in enumerate(questions)}
         per_question.sort(key=lambda row: order[row["id"]])
 
+        judge = self.judge
+        if judge is not None:
+            judge_semaphore = asyncio.Semaphore(self.concurrency)
+
+            async def judge_one(row: dict[str, Any]) -> None:
+                async with judge_semaphore:
+                    verdict = await judge.evaluate(
+                        question=str(row["query"]),
+                        answer=str(row["answer"]),
+                        expected_answer=row["expected_answer"],
+                        context=list(row["retrieved_context"]),
+                    )
+                row["judge"] = verdict.as_dict()
+
+            await asyncio.gather(*(judge_one(row) for row in per_question))
+
         for row in per_question:
             router_predictions.append((row["route"], row["optimal_strategy"]))
 
         category_scores: dict[str, dict[str, float]] = {}
         category_operational: dict[str, dict[str, float]] = {}
+        category_judge: dict[str, dict[str, float]] = {}
         for row in per_question:
             category = row["category"]
             category_scores.setdefault(category, {}).setdefault("_count", 0.0)
             category_operational.setdefault(category, {}).setdefault("_count", 0.0)
+            category_judge.setdefault(category, {}).setdefault("_count", 0.0)
 
         for row in per_question:
             category = row["category"]
@@ -280,6 +327,13 @@ class EvaluationRunner:
                 ops[name] = ops.get(name, 0.0) + value
             ops["_count"] += 1
 
+            judge_metrics = _judge_metrics(row)
+            if judge_metrics:
+                judge_scores = category_judge[category]
+                for name, value in judge_metrics.items():
+                    judge_scores[name] = judge_scores.get(name, 0.0) + value
+                judge_scores["_count"] += 1
+
         def finalize(groups: dict[str, dict[str, float]]) -> dict[str, dict[str, float]]:
             finalized: dict[str, dict[str, float]] = {}
             for category, values in groups.items():
@@ -293,6 +347,27 @@ class EvaluationRunner:
 
         category_scores = finalize(category_scores)
         category_operational = finalize(category_operational)
+        for category, values in finalize(category_judge).items():
+            category_scores[category].update(values)
+
+        interval_metrics = list(INTERVAL_METRICS)
+        if self.judge is not None:
+            interval_metrics.extend(JUDGE_METRICS)
+        category_intervals = {
+            category: {
+                name: bootstrap_interval(
+                    _metric_values(
+                        [row for row in per_question if row["category"] == category], name
+                    )
+                ).as_dict()
+                for name in interval_metrics
+            }
+            for category in category_scores
+        }
+        overall_intervals = {
+            name: bootstrap_interval(_metric_values(per_question, name)).as_dict()
+            for name in interval_metrics
+        }
 
         router_report = evaluate_router_decisions(router_predictions)
         total = len(per_question)
@@ -312,6 +387,10 @@ class EvaluationRunner:
         retrieval_p50 = percentile(retrieval_latencies, 0.50) if retrieval_latencies else 0.0
         retrieval_p95 = percentile(retrieval_latencies, 0.95) if retrieval_latencies else 0.0
 
+        judge_model = self.judge.model_name if self.judge is not None else None
+        judge_threshold = self.judge.threshold if self.judge is not None else None
+        judge_errors = sum(1 for row in per_question if (row.get("judge") or {}).get("error"))
+
         return BenchmarkReport(
             total_questions=total,
             overall_router_accuracy=router_report.accuracy,
@@ -327,6 +406,10 @@ class EvaluationRunner:
             p95_latency_ms=p95_latency,
             retrieval_p50_latency_ms=retrieval_p50,
             retrieval_p95_latency_ms=retrieval_p95,
+            category_intervals=category_intervals,
+            overall_intervals=overall_intervals,
+            judge_model=judge_model,
+            judge_threshold=judge_threshold,
             summary={
                 "split": split or "all",
                 "retrieval_config": self.retrieval_config,
@@ -334,6 +417,11 @@ class EvaluationRunner:
                 "strategy_distribution": router_report.strategy_distribution,
                 "category_scores": category_scores,
                 "category_operational": category_operational,
+                "category_intervals": category_intervals,
+                "overall_intervals": overall_intervals,
+                "judge_model": judge_model,
+                "judge_threshold": judge_threshold,
+                "judge_errors": judge_errors,
                 "total_cost_usd": total_cost,
                 "budget_usd": self.budget_usd,
                 "cache_hit_rate": cache_hit_rate,
@@ -345,3 +433,42 @@ class EvaluationRunner:
                 "gateway_cache_hits": gateway.cache_hits,
             },
         )
+
+
+def _judge_metrics(row: dict[str, Any]) -> dict[str, float]:
+    """Flatten one row's judge verdict into numeric metrics.
+
+    Rows where the judge failed contribute nothing, so a partial outage does not
+    silently drag the mean toward zero; the report carries the error count.
+    """
+    verdict = row.get("judge")
+    if not isinstance(verdict, dict):
+        return {}
+    metrics: dict[str, float] = {}
+    correctness = verdict.get("correctness_score")
+    if correctness is not None:
+        metrics["judge_correctness"] = float(correctness)
+    faithfulness = verdict.get("faithfulness_score")
+    if faithfulness is not None:
+        metrics["judge_faithfulness"] = float(faithfulness)
+    passed = verdict.get("correctness_pass")
+    if passed is not None:
+        metrics["judge_pass_rate"] = 1.0 if passed else 0.0
+    return metrics
+
+
+def _metric_values(rows: list[dict[str, Any]], name: str) -> list[float]:
+    """Return the scored values for one metric across ``rows``."""
+    values: list[float] = []
+    for row in rows:
+        if name in row["chunk_metrics"]:
+            values.append(float(row["chunk_metrics"][name]))
+        elif name in row["doc_metrics"]:
+            values.append(float(row["doc_metrics"][name]))
+        elif name in row["answer_metrics"]:
+            values.append(float(row["answer_metrics"][name]))
+        else:
+            value = _judge_metrics(row).get(name)
+            if value is not None:
+                values.append(value)
+    return values

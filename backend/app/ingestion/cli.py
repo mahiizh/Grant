@@ -7,6 +7,7 @@ from app.db.postgres import announce_database_identity, get_session, verify_sche
 from app.indexing.neo4j_indexer import Neo4jIndexer
 from app.indexing.outbox_worker import OutboxWorker
 from app.indexing.qdrant_indexer import QdrantIndexer
+from app.ingestion.corpus import iter_corpus_files
 from app.ingestion.pipeline import IngestionPipeline
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -25,7 +26,7 @@ async def run_corpus_ingestion(corpus_dir: str = "corpus") -> None:
     await announce_database_identity()
     await verify_schema()
 
-    md_files = sorted(c_dir.glob("*.md"))
+    md_files = list(iter_corpus_files(c_dir))
     print("=" * 60)
     print(f"GraphRAG Corpus Ingestion: {len(md_files)} documents found in {c_dir}")
     print("=" * 60)
@@ -35,9 +36,6 @@ async def run_corpus_ingestion(corpus_dir: str = "corpus") -> None:
     total_cost = 0.0
 
     for file_path in md_files:
-        if file_path.name.lower() == "readme.md":
-            continue
-
         print(f"Ingesting: {file_path.name}...")
         async with get_session() as session:
             summary = await IngestionPipeline.ingest_file(
@@ -51,18 +49,6 @@ async def run_corpus_ingestion(corpus_dir: str = "corpus") -> None:
                 f"  -> {summary.chunk_count} chunks, {summary.entity_count} entities, "
                 f"{summary.tokens} tokens, ${summary.cost_usd:.6f}"
             )
-
-    # Ingest adversarial docs if present
-    adv_dir = c_dir / "adversarial"
-    if adv_dir.exists():
-        for adv_file in sorted(adv_dir.glob("*.md")):
-            print(f"Ingesting adversarial benchmark: {adv_file.name}...")
-            async with get_session() as session:
-                summary = await IngestionPipeline.ingest_file(
-                    session=session,
-                    file_path=adv_file,
-                )
-                total_chunks += summary.chunk_count
 
     # Drain Outbox to sync Qdrant and Neo4j
     print("\nSynchronizing downstream stores via Outbox Worker...")

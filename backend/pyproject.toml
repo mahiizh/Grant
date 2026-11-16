@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "alembic>=1.13",
     "asyncpg>=0.30.0",
+    "deepeval>=2.0",
     "fastapi>=0.162.0",
     "fastembed>=0.9.1",
     "greenlet>=3.1.0",
@@ -60,7 +61,11 @@ no_implicit_optional = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q -m 'not live'"
+# DeepEval ships a pytest11 plugin that imports its settings module eagerly.
+# Those settings reject the repo's blank LITELLM_API_BASE (see
+# app/evaluation/judge.py for the placeholder we install before our own import),
+# and the plugin does nothing we use, so block it from loading.
+addopts = "-q -m 'not live' -p no:deepeval"
 markers = [
     "integration: requires live containers",
     "eval: golden-set evaluation",

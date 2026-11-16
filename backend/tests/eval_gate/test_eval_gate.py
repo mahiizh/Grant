@@ -24,10 +24,9 @@ async def test_golden_dataset_is_grounded_and_complete() -> None:
     chunk_ids = {chunk.chunk_id for chunk in chunks}
     dataset = GoldenDataset.load_from_dir(_golden_dir())
 
-    assert len(dataset) == 30, dataset.summary()
+    assert len(dataset) >= 150, dataset.summary()
     assert dataset.splits == {"dev", "test"}
-    assert dataset.split_summary()["dev"] == 15
-    assert dataset.split_summary()["test"] == 15
+    assert dataset.split_summary()["test"] >= 120
     assert dataset.categories == {
         "fact",
         "multi_hop",
@@ -36,8 +35,23 @@ async def test_golden_dataset_is_grounded_and_complete() -> None:
         "paraphrase",
         "multi_turn",
     }
+    # Every category has at least 20 rows in the gate split.
+    for category in (
+        "fact",
+        "multi_hop",
+        "global",
+        "unanswerable",
+        "paraphrase",
+        "multi_turn",
+    ):
+        test_rows = [
+            question
+            for question in dataset.filter_by_category(category)
+            if question.split == "test"
+        ]
+        assert len(test_rows) >= 20, f"{category} has only {len(test_rows)} test rows"
     # multi_turn.jsonl is included, not excluded.
-    assert len(dataset.filter_by_category("multi_turn")) == 10
+    assert len(dataset.filter_by_category("multi_turn")) >= 60
 
     missing = dataset.missing_chunk_ids(chunk_ids)
     assert not missing, f"Golden rows reference chunks that do not exist: {missing}"
@@ -60,11 +74,11 @@ async def test_hermetic_eval_gate_reports_chunk_level_metrics() -> None:
     runner = EvaluationRunner(orchestrator=orchestrator, concurrency=2)
     report = await runner.run_benchmark(dataset, split="test")
 
-    assert report.total_questions == 15
+    assert report.total_questions >= 120
     assert report.split == "test"
     assert report.budget_usd > 0.0
     assert report.total_cost_usd >= 0.0
-    assert len(report.per_question) == 15
+    assert len(report.per_question) == report.total_questions
 
     assert set(report.category_scores) == {
         "fact",
@@ -84,6 +98,12 @@ async def test_hermetic_eval_gate_reports_chunk_level_metrics() -> None:
         ):
             assert metric in scores, f"{category} missing {metric}"
         assert 0.0 <= scores["chunk_ndcg@10"] <= 1.0
+
+    for name in ("chunk_recall@5", "chunk_ndcg@10", "answer_accuracy"):
+        interval = report.overall_intervals[name]
+        assert 0.0 <= float(interval["low"]) <= float(interval["high"]) <= 1.0
+        assert int(interval["n"]) == report.total_questions
+    assert report.judge_model is None
 
     for _category, operational in report.category_operational.items():
         assert "latency_ms" in operational

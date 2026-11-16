@@ -38,18 +38,35 @@ from app.db.postgres import (  # noqa: E402
     verify_schema,
 )
 from app.evaluation.datasets import GoldenDataset, SplitType  # noqa: E402
+from app.evaluation.judge import AnswerJudge  # noqa: E402
 from app.evaluation.runner import BenchmarkReport, EvaluationRunner  # noqa: E402
 from app.indexing.outbox_worker import OutboxWorker  # noqa: E402
 from app.indexing.qdrant_indexer import QdrantIndexer  # noqa: E402
+from app.ingestion.corpus import iter_corpus_files  # noqa: E402
 from app.ingestion.pipeline import IngestionPipeline  # noqa: E402
 from app.orchestration.state import RETRIEVAL_CONFIGS, RetrievalConfig  # noqa: E402
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = Path(__file__).resolve().parents[3]
 CORPUS_DIR = REPO_ROOT / "corpus"
+MANIFEST_PATH = CORPUS_DIR / "synthetic" / "manifest.json"
 
-EXPECTED_DOCUMENTS = 15
-EXPECTED_CHUNKS = 45
+
+def _expected_corpus_counts() -> tuple[int, int]:
+    """Return the committed corpus counts.
+
+    The generator writes ``corpus/synthetic/manifest.json`` and
+    ``generate_eval_assets --check`` proves the manifest matches the corpus. The
+    eval harness refuses to guess: a missing manifest means the synthetic corpus
+    was never generated, and an exact ingest check would be meaningless.
+    """
+    if not MANIFEST_PATH.exists():
+        raise RuntimeError(
+            f"Corpus manifest not found at {MANIFEST_PATH}. "
+            "Run `uv run --directory backend python -m app.tools.generate_eval_assets`."
+        )
+    payload = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    return int(payload["total_documents"]), int(payload["total_chunks"])
 
 
 def _validate_identifier(name: str) -> str:
@@ -134,15 +151,10 @@ async def _ingest_corpus() -> None:
     await announce_database_identity()
     await verify_schema()
 
-    files = sorted(CORPUS_DIR.glob("*.md"))
-    adversarial = CORPUS_DIR / "adversarial"
-    if adversarial.exists():
-        files.extend(sorted(adversarial.glob("*.md")))
+    files = list(iter_corpus_files(CORPUS_DIR))
 
     ingested = 0
     for path in files:
-        if path.name.lower() == "readme.md":
-            continue
         async with get_session() as session:
             await IngestionPipeline.ingest_file(session=session, file_path=path)
         ingested += 1
@@ -168,10 +180,11 @@ async def _verify_ingest() -> set[str]:
     print(f"PostgreSQL chunks:    {chunks}")
     print(f"Qdrant vectors:       {vectors}")
 
-    if documents != EXPECTED_DOCUMENTS:
-        raise RuntimeError(f"Expected {EXPECTED_DOCUMENTS} documents, found {documents}")
-    if chunks != EXPECTED_CHUNKS:
-        raise RuntimeError(f"Expected {EXPECTED_CHUNKS} chunks, found {chunks}")
+    expected_documents, expected_chunks = _expected_corpus_counts()
+    if documents != expected_documents:
+        raise RuntimeError(f"Expected {expected_documents} documents, found {documents}")
+    if chunks != expected_chunks:
+        raise RuntimeError(f"Expected {expected_chunks} chunks, found {chunks}")
     if vectors != chunks:
         raise RuntimeError(f"Qdrant has {vectors} vectors but PostgreSQL has {chunks} chunks")
 
@@ -216,13 +229,15 @@ def _print_report(report: BenchmarkReport) -> None:
         f"{'chunk_mrr':>10s} {'answer_f1':>10s} {'answer_acc':>10s} "
         f"{'latency_ms':>11s} {'retr_ms':>8s} {'cost_usd':>9s}"
     )
+    if report.judge_model:
+        header += f" {'judge_corr':>10s} {'judge_faith':>11s} {'judge_pass':>10s}"
     print(header)
     print("-" * len(header))
     for category in sorted(report.category_scores):
         scores = report.category_scores[category]
         ops = report.category_operational.get(category, {})
         count = sum(1 for row in report.per_question if row["category"] == category)
-        print(
+        line = (
             f"{category:12s} {count:3d} "
             f"{scores.get('chunk_recall@5', 0.0):10.3f} "
             f"{scores.get('chunk_ndcg@10', 0.0):14.3f} "
@@ -232,6 +247,27 @@ def _print_report(report: BenchmarkReport) -> None:
             f"{ops.get('latency_ms', 0.0):11.1f} "
             f"{ops.get('retrieval_latency_ms', 0.0):8.1f} "
             f"{ops.get('cost_usd', 0.0):9.6f}"
+        )
+        if report.judge_model:
+            line += (
+                f" {scores.get('judge_correctness', 0.0):10.3f}"
+                f" {scores.get('judge_faithfulness', 0.0):11.3f}"
+                f" {scores.get('judge_pass_rate', 0.0):10.3f}"
+            )
+        print(line)
+    if report.judge_model:
+        errors = int(report.summary.get("judge_errors", 0))
+        print(
+            f"Judge: model={report.judge_model} threshold={report.judge_threshold} "
+            f"errors={errors}"
+        )
+    print()
+    print("95% bootstrap CIs (overall):")
+    for name, interval in report.overall_intervals.items():
+        print(
+            f"  {name:18s} {float(interval['mean']):.3f} "
+            f"[{float(interval['low']):.3f}, {float(interval['high']):.3f}] "
+            f"n={int(interval['n'])}"
         )
     print("=" * 88)
 
@@ -252,6 +288,10 @@ def _write_json_report(report: BenchmarkReport, path: Path) -> None:
         "p95_latency_ms": report.p95_latency_ms,
         "retrieval_p50_latency_ms": report.retrieval_p50_latency_ms,
         "retrieval_p95_latency_ms": report.retrieval_p95_latency_ms,
+        "category_intervals": report.category_intervals,
+        "overall_intervals": report.overall_intervals,
+        "judge_model": report.judge_model,
+        "judge_threshold": report.judge_threshold,
         "summary": report.summary,
         "per_question": report.per_question,
     }
@@ -297,6 +337,9 @@ async def run_config(
     budget_usd: float | None,
     concurrency: int | None,
     cache_enabled: bool = True,
+    judge_enabled: bool = False,
+    judge_model: str | None = None,
+    judge_threshold: float | None = None,
 ) -> BenchmarkReport:
     """Run one retrieval configuration against a freshly prepared dataset."""
     orchestrator = EvaluationRunner.build_production_orchestrator(cache_enabled=cache_enabled)
@@ -307,11 +350,24 @@ async def run_config(
     else:
         print(f"Exact and semantic caches disabled for config={config!r}.")
 
+    judge: AnswerJudge | None = None
+    if judge_enabled:
+        settings = get_settings()
+        judge = AnswerJudge(
+            gateway=orchestrator.gateway,
+            model_name=judge_model or settings.EVAL_JUDGE_MODEL or orchestrator.gateway.default_model,
+            threshold=judge_threshold
+            if judge_threshold is not None
+            else settings.EVAL_JUDGE_THRESHOLD,
+        )
+        print(f"LLM judge enabled (model={judge.model_name}, threshold={judge.threshold}).")
+
     runner = EvaluationRunner(
         orchestrator=orchestrator,
         budget_usd=budget_usd,
         concurrency=concurrency,
         retrieval_config=config,
+        judge=judge,
     )
     try:
         return await runner.run_benchmark(dataset, split=split)
@@ -333,6 +389,9 @@ async def _run(args: argparse.Namespace) -> int:
         budget_usd=args.budget_usd,
         concurrency=args.concurrency,
         cache_enabled=not args.no_cache,
+        judge_enabled=args.judge or get_settings().EVAL_JUDGE_ENABLED,
+        judge_model=args.judge_model,
+        judge_threshold=args.judge_threshold,
     )
     _print_report(report)
 
@@ -377,6 +436,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--no-cache",
         action="store_true",
         help="Disable exact and semantic response caches for the whole run.",
+    )
+    parser.add_argument(
+        "--judge",
+        action="store_true",
+        help="Score answers with the DeepEval LLM judge (uses provider quota).",
+    )
+    parser.add_argument(
+        "--judge-model",
+        default=None,
+        help="Judge model. Defaults to EVAL_JUDGE_MODEL or LLM_MODEL.",
+    )
+    parser.add_argument(
+        "--judge-threshold",
+        type=float,
+        default=None,
+        help="Judge pass threshold. Defaults to EVAL_JUDGE_THRESHOLD (0.5).",
     )
     parser.add_argument(
         "--json-report",

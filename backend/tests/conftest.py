@@ -13,10 +13,9 @@ from fastapi.testclient import TestClient
 # overrides up.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _GOLDEN_DIR = Path(tempfile.mkdtemp(prefix="graphrag-golden-"))
-for _name in ("questions.jsonl", "multi_turn.jsonl", "README.md"):
-    _source = _REPO_ROOT / "evals" / "golden" / _name
-    if _source.exists():
-        shutil.copy2(_source, _GOLDEN_DIR / _name)
+for _source in sorted((_REPO_ROOT / "evals" / "golden").glob("*")):
+    if _source.is_file():
+        shutil.copy2(_source, _GOLDEN_DIR / _source.name)
 
 os.environ["APP_ENV"] = "test"
 # An empty value overrides any key loaded from .env, so the mock path is used.

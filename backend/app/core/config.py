@@ -89,6 +89,11 @@ class Settings(BaseSettings):
     EVAL_POSTGRES_DB: str = "graphrag_lab_eval"
     EVAL_QDRANT_COLLECTION: str = "grant_chunks_eval"
     EVAL_CONCURRENCY: int = 2
+    # LLM judge (DeepEval GEval). Off by default so hermetic runs never call a
+    # provider; `make eval JUDGE=1` turns it on.
+    EVAL_JUDGE_ENABLED: bool = False
+    EVAL_JUDGE_MODEL: str | None = None
+    EVAL_JUDGE_THRESHOLD: float = 0.5
 
     # Observability
     OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://localhost:4318"

@@ -14,6 +14,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.evaluation.bootstrap import paired_bootstrap_difference
+from app.evaluation.calibration import load_agreement
 from app.evaluation.datasets import SplitType
 from app.evaluation.runner import BenchmarkReport
 from app.orchestration.state import RETRIEVAL_CONFIGS, RetrievalConfig
@@ -29,26 +31,55 @@ def _mean(values: list[float]) -> float:
     return round(sum(values) / len(values), 4) if values else 0.0
 
 
+def _metric_value(row: dict[str, Any], metric: str) -> float | None:
+    if metric in row["chunk_metrics"]:
+        return float(row["chunk_metrics"][metric])
+    if metric in row["doc_metrics"]:
+        return float(row["doc_metrics"][metric])
+    if metric in row["answer_metrics"]:
+        return float(row["answer_metrics"][metric])
+    verdict = row.get("judge") or {}
+    if metric == "judge_correctness":
+        value = verdict.get("correctness_score")
+        return float(value) if value is not None else None
+    if metric == "judge_faithfulness":
+        value = verdict.get("faithfulness_score")
+        return float(value) if value is not None else None
+    if metric == "judge_pass_rate":
+        value = verdict.get("correctness_pass")
+        return (1.0 if value else 0.0) if value is not None else None
+    return None
+
+
 def _overall(report: BenchmarkReport, metric: str) -> float:
-    if metric == "answer_accuracy":
-        return _mean([row["answer_metrics"]["answer_accuracy"] for row in report.per_question])
-    if metric == "answer_f1":
-        return _mean([row["answer_metrics"]["answer_f1"] for row in report.per_question])
-    return _mean([row["chunk_metrics"][metric] for row in report.per_question])
+    values = [value for row in report.per_question if (value := _metric_value(row, metric)) is not None]
+    return _mean(values)
 
 
-def _category(report: BenchmarkReport, category: str) -> tuple[float, float, float]:
-    scores = report.category_scores.get(category, {})
+def _interval(report: BenchmarkReport, category: str | None, metric: str) -> dict[str, Any]:
+    source = report.overall_intervals if category is None else report.category_intervals.get(
+        category, {}
+    )
+    interval = source.get(metric)
+    if interval:
+        return interval
+    value = (
+        _overall(report, metric)
+        if category is None
+        else report.category_scores.get(category, {}).get(metric, 0.0)
+    )
+    return {"mean": value, "low": value, "high": value, "n": 0}
+
+
+def _format_interval(interval: dict[str, Any]) -> str:
     return (
-        scores.get("chunk_recall@5", 0.0),
-        scores.get("chunk_ndcg@10", 0.0),
-        scores.get("answer_accuracy", 0.0),
+        f"{float(interval['mean']):.3f}"
+        f"[{float(interval['low']):.2f},{float(interval['high']):.2f}]"
     )
 
 
-def _cell(values: tuple[float, float, float]) -> str:
-    recall, ndcg, accuracy = values
-    return f"{recall:.3f} / {ndcg:.3f} / {accuracy:.3f}"
+def _cell(report: BenchmarkReport, category: str | None, metrics: tuple[str, ...]) -> str:
+    return " / ".join(_format_interval(_interval(report, category, metric)) for metric in metrics)
 
 
 def _print_comparison(
@@ -58,33 +89,97 @@ def _print_comparison(
     categories = sorted(
         {row["category"] for report in reports.values() for row in report.per_question}
     )
-    header = "| category | " + " | ".join(RETRIEVAL_CONFIGS) + " |"
-    divider = "|---|" + "|".join("---" for _ in RETRIEVAL_CONFIGS) + "|"
+    agreement = load_agreement()
+    judge_enabled = any(report.judge_model for report in reports.values())
 
     print()
-    print("=" * 96)
+    print("=" * 120)
     print(
-        f"Retrieval ablation comparison (split={split}) — cell = recall@5 / nDCG@10 / answer accuracy"
+        f"Retrieval ablation comparison (split={split}) — "
+        "cell = point estimate [95% bootstrap CI]"
     )
-    print("=" * 96)
-    print(header)
-    print(divider)
-    for category in categories:
-        cells = [_cell(_category(reports[config], category)) for config in RETRIEVAL_CONFIGS]
-        print(f"| {category} | " + " | ".join(cells) + " |")
-    overall = [
-        _cell(
-            (
-                _overall(reports[config], "chunk_recall@5"),
-                _overall(reports[config], "chunk_ndcg@10"),
-                _overall(reports[config], "answer_accuracy"),
+    if judge_enabled:
+        models = sorted({report.judge_model for report in reports.values() if report.judge_model})
+        if agreement is not None:
+            print(
+                f"Judge: model={', '.join(models)} threshold={agreement.threshold} "
+                f"agreement={agreement.raw_agreement:.3f} "
+                f"kappa={agreement.cohen_kappa:.3f} (n={agreement.n})"
             )
+        else:
+            print(
+                f"Judge: model={', '.join(models)} — NOT CALIBRATED. "
+                "Run `make calibrate-judge` before trusting judge columns."
+            )
+    print("=" * 120)
+    print("Retrieval quality:")
+    print("| category | " + " | ".join(RETRIEVAL_CONFIGS) + " |")
+    print("|---|" + "|".join("---" for _ in RETRIEVAL_CONFIGS) + "|")
+    for category in categories:
+        cells = [
+            _cell(reports[config], category, ("chunk_recall@5", "chunk_ndcg@10"))
+            for config in RETRIEVAL_CONFIGS
+        ]
+        print(f"| {category} | " + " | ".join(cells) + " |")
+    print(
+        "| **overall** | "
+        + " | ".join(
+            _cell(reports[config], None, ("chunk_recall@5", "chunk_ndcg@10"))
+            for config in RETRIEVAL_CONFIGS
         )
-        for config in RETRIEVAL_CONFIGS
-    ]
-    print("| **overall** | " + " | ".join(overall) + " |")
+        + " |"
+    )
+
     print()
-    print("Operational (whole split):")
+    print("Answer quality (token F1 is secondary and shown only in the operational block):")
+    answer_metrics: tuple[str, ...] = ("answer_accuracy",)
+    if judge_enabled:
+        answer_metrics = ("answer_accuracy", "judge_correctness", "judge_pass_rate")
+    print("| category | " + " | ".join(RETRIEVAL_CONFIGS) + " |")
+    print("|---|" + "|".join("---" for _ in RETRIEVAL_CONFIGS) + "|")
+    for category in categories:
+        answer_cells = [
+            _cell(reports[config], category, answer_metrics) for config in RETRIEVAL_CONFIGS
+        ]
+        print(f"| {category} | " + " | ".join(answer_cells) + " |")
+    print(
+        "| **overall** | "
+        + " | ".join(
+            _cell(reports[config], None, answer_metrics) for config in RETRIEVAL_CONFIGS
+        )
+        + " |"
+    )
+
+    baseline = RETRIEVAL_CONFIGS[0]
+    print()
+    print(
+        f"Paired difference vs {baseline} (config minus {baseline}; "
+        "an interval that excludes 0 is evidence of a real difference):"
+    )
+    diff_metrics: tuple[str, ...] = ("chunk_ndcg@10", "answer_accuracy")
+    if judge_enabled:
+        diff_metrics = ("chunk_ndcg@10", "answer_accuracy", "judge_correctness")
+    print("| config | " + " | ".join(diff_metrics) + " |")
+    print("|---|" + "|".join("---" for _ in diff_metrics) + "|")
+    baseline_values = {
+        metric: _values_by_id(reports[baseline], metric) for metric in diff_metrics
+    }
+    for config in RETRIEVAL_CONFIGS[1:]:
+        diff_cells: list[str] = []
+        for metric in diff_metrics:
+            values = _values_by_id(reports[config], metric)
+            shared = sorted(set(values) & set(baseline_values[metric]))
+            interval = paired_bootstrap_difference(
+                [values[question_id] for question_id in shared],
+                [baseline_values[metric][question_id] for question_id in shared],
+            )
+            diff_cells.append(
+                f"{interval.mean:+.3f}[{interval.low:+.2f},{interval.high:+.2f}] (n={interval.n})"
+            )
+        print(f"| {config} | " + " | ".join(diff_cells) + " |")
+
+    print()
+    print("Operational (whole split; retrieval latency excludes LLM and 429 backoff):")
     for config in RETRIEVAL_CONFIGS:
         report = reports[config]
         print(
@@ -96,7 +191,16 @@ def _print_comparison(
             f"cache_hit={report.cache_hit_rate:.3f}  "
             f"answer_f1={_overall(report, 'answer_f1'):.3f}"
         )
-    print("=" * 96)
+    print("=" * 120)
+
+
+def _values_by_id(report: BenchmarkReport, metric: str) -> dict[str, float]:
+    values: dict[str, float] = {}
+    for row in report.per_question:
+        value = _metric_value(row, metric)
+        if value is not None:
+            values[str(row["id"])] = value
+    return values
 
 
 def _write_reports(
@@ -117,6 +221,10 @@ def _write_reports(
             "p95_latency_ms": report.p95_latency_ms,
             "retrieval_p50_latency_ms": report.retrieval_p50_latency_ms,
             "retrieval_p95_latency_ms": report.retrieval_p95_latency_ms,
+            "category_intervals": report.category_intervals,
+            "overall_intervals": report.overall_intervals,
+            "judge_model": report.judge_model,
+            "judge_threshold": report.judge_threshold,
             "summary": report.summary,
             "per_question": report.per_question,
         }
@@ -142,6 +250,9 @@ async def _run(args: argparse.Namespace) -> int:
             budget_usd=args.budget_usd,
             concurrency=args.concurrency,
             cache_enabled=False,
+            judge_enabled=args.judge,
+            judge_model=args.judge_model,
+            judge_threshold=args.judge_threshold,
         )
         reports[config] = report
         _print_report(report)
@@ -180,6 +291,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--json-dir",
         default=None,
         help="Optional directory for one JSON report per configuration.",
+    )
+    parser.add_argument(
+        "--judge",
+        action="store_true",
+        help="Score answers with the DeepEval LLM judge (uses provider quota).",
+    )
+    parser.add_argument(
+        "--judge-model",
+        default=None,
+        help="Judge model. Defaults to EVAL_JUDGE_MODEL or LLM_MODEL.",
+    )
+    parser.add_argument(
+        "--judge-threshold",
+        type=float,
+        default=None,
+        help="Judge pass threshold. Defaults to EVAL_JUDGE_THRESHOLD (0.5).",
     )
     return parser.parse_args(argv)
 

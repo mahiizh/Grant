@@ -6,6 +6,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from app.core.acl import ACLScope
 from app.domain import Chunk, Entity, Relation
 from app.ingestion.chunking import chunk_parsed_document
+from app.ingestion.corpus import iter_corpus_files
 from app.ingestion.extraction import EntityRelationExtractor
 from app.ingestion.parse import parse_markdown
 from app.orchestration.workflow import RAGOrchestrator
@@ -33,22 +34,14 @@ def _scope_for(parsed_scope: str | None) -> ACLScope:
 def load_corpus_chunks(corpus_dir: Path | str | None = None) -> list[Chunk]:
     """Reproduce the ingestion chunker over the corpus without any external store.
 
-    Includes the adversarial documents, mirroring ``app.ingestion.cli``, so the
-    hermetic harness sees exactly the 15 documents / 45 chunks a live ingest does.
+    Uses the same corpus walk as ``app.ingestion.cli`` (root, adversarial, and
+    synthetic documents), so the hermetic harness sees the same chunks a live
+    ingest does.
     """
     root = Path(corpus_dir) if corpus_dir is not None else REPO_ROOT / "corpus"
-    if not root.exists():
-        raise FileNotFoundError(f"Corpus directory not found at: {root}")
-
-    files = sorted(root.glob("*.md"))
-    adversarial = root / "adversarial"
-    if adversarial.exists():
-        files.extend(sorted(adversarial.glob("*.md")))
 
     chunks: list[Chunk] = []
-    for path in files:
-        if path.name.lower() == "readme.md":
-            continue
+    for path in iter_corpus_files(root):
         parsed = parse_markdown(path.read_text(encoding="utf-8"), source_path=path.as_posix())
         scope = _scope_for(parsed.metadata.get("acl_scope"))
         chunks.extend(chunk_parsed_document(parsed, path.as_posix(), scope))

@@ -40,7 +40,14 @@ def _extract_recent_entities(history: list[dict[str, Any]]) -> dict[str, str]:
         extracted["team"] = "Dave Miller's Core Banking team"
 
     # Services / Databases / Components
-    if "outbox" in lower_text:
+    # Generated service names are CamelCase (EventStream, FxRateService, ...).
+    # Resolve them before the legacy keyword chain so "OutboxWorker" is not
+    # mistaken for the hand-authored "outbox service".
+    camel_services = re.findall(r"\b[A-Z][a-z0-9]+(?:[A-Z][a-z0-9]+)+\b", full_text)
+    if camel_services:
+        extracted["service"] = camel_services[0]
+        extracted["topic"] = f"the {camel_services[0]} service"
+    elif "outbox" in lower_text:
         extracted["service"] = "outbox service"
         extracted["topic"] = "the outbox service replication stall on PostgreSQL"
     elif "cache invalidator" in lower_text or "purge stale" in lower_text:
