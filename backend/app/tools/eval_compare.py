@@ -52,13 +52,17 @@ def _metric_value(row: dict[str, Any], metric: str) -> float | None:
 
 
 def _overall(report: BenchmarkReport, metric: str) -> float:
-    values = [value for row in report.per_question if (value := _metric_value(row, metric)) is not None]
+    values = [
+        value for row in report.per_question if (value := _metric_value(row, metric)) is not None
+    ]
     return _mean(values)
 
 
 def _interval(report: BenchmarkReport, category: str | None, metric: str) -> dict[str, Any]:
-    source = report.overall_intervals if category is None else report.category_intervals.get(
-        category, {}
+    source = (
+        report.overall_intervals
+        if category is None
+        else report.category_intervals.get(category, {})
     )
     interval = source.get(metric)
     if interval:
@@ -73,8 +77,7 @@ def _interval(report: BenchmarkReport, category: str | None, metric: str) -> dic
 
 def _format_interval(interval: dict[str, Any]) -> str:
     return (
-        f"{float(interval['mean']):.3f}"
-        f"[{float(interval['low']):.2f},{float(interval['high']):.2f}]"
+        f"{float(interval['mean']):.3f}[{float(interval['low']):.2f},{float(interval['high']):.2f}]"
     )
 
 
@@ -95,8 +98,7 @@ def _print_comparison(
     print()
     print("=" * 120)
     print(
-        f"Retrieval ablation comparison (split={split}) — "
-        "cell = point estimate [95% bootstrap CI]"
+        f"Retrieval ablation comparison (split={split}) — cell = point estimate [95% bootstrap CI]"
     )
     if judge_enabled:
         models = sorted({report.judge_model for report in reports.values() if report.judge_model})
@@ -144,9 +146,7 @@ def _print_comparison(
         print(f"| {category} | " + " | ".join(answer_cells) + " |")
     print(
         "| **overall** | "
-        + " | ".join(
-            _cell(reports[config], None, answer_metrics) for config in RETRIEVAL_CONFIGS
-        )
+        + " | ".join(_cell(reports[config], None, answer_metrics) for config in RETRIEVAL_CONFIGS)
         + " |"
     )
 
@@ -161,9 +161,7 @@ def _print_comparison(
         diff_metrics = ("chunk_ndcg@10", "answer_accuracy", "judge_correctness")
     print("| config | " + " | ".join(diff_metrics) + " |")
     print("|---|" + "|".join("---" for _ in diff_metrics) + "|")
-    baseline_values = {
-        metric: _values_by_id(reports[baseline], metric) for metric in diff_metrics
-    }
+    baseline_values = {metric: _values_by_id(reports[baseline], metric) for metric in diff_metrics}
     for config in RETRIEVAL_CONFIGS[1:]:
         diff_cells: list[str] = []
         for metric in diff_metrics:

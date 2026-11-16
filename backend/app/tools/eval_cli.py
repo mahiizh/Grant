@@ -258,8 +258,7 @@ def _print_report(report: BenchmarkReport) -> None:
     if report.judge_model:
         errors = int(report.summary.get("judge_errors", 0))
         print(
-            f"Judge: model={report.judge_model} threshold={report.judge_threshold} "
-            f"errors={errors}"
+            f"Judge: model={report.judge_model} threshold={report.judge_threshold} errors={errors}"
         )
     print()
     print("95% bootstrap CIs (overall):")
@@ -355,7 +354,9 @@ async def run_config(
         settings = get_settings()
         judge = AnswerJudge(
             gateway=orchestrator.gateway,
-            model_name=judge_model or settings.EVAL_JUDGE_MODEL or orchestrator.gateway.default_model,
+            model_name=judge_model
+            or settings.EVAL_JUDGE_MODEL
+            or orchestrator.gateway.default_model,
             threshold=judge_threshold
             if judge_threshold is not None
             else settings.EVAL_JUDGE_THRESHOLD,

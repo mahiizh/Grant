@@ -19,7 +19,5 @@ _INTERNAL_HUMP = re.compile(r"[a-z][A-Z]")
 def named_entities(text: str) -> set[str]:
     """Return CamelCase names mentioned in ``text``."""
     return {
-        match.group(0)
-        for match in _ENTITY.finditer(text)
-        if _INTERNAL_HUMP.search(match.group(0))
+        match.group(0) for match in _ENTITY.finditer(text) if _INTERNAL_HUMP.search(match.group(0))
     }

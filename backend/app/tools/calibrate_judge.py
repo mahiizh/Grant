@@ -59,9 +59,7 @@ async def _run(args: argparse.Namespace) -> int:
 
     model_name = args.judge_model or settings.EVAL_JUDGE_MODEL or settings.LLM_MODEL
     threshold = (
-        args.judge_threshold
-        if args.judge_threshold is not None
-        else settings.EVAL_JUDGE_THRESHOLD
+        args.judge_threshold if args.judge_threshold is not None else settings.EVAL_JUDGE_THRESHOLD
     )
     gateway = ModelGateway(
         default_model=model_name,
@@ -111,10 +109,14 @@ async def _run(args: argparse.Namespace) -> int:
         print("No judge labels produced; nothing to calibrate.")
         return 1
     if len(human) < len(rows) and not args.allow_partial:
-        print(f"Only {len(human)}/{len(rows)} rows judged; rerun with --allow-partial to record this.")
+        print(
+            f"Only {len(human)}/{len(rows)} rows judged; rerun with --allow-partial to record this."
+        )
         return 1
 
-    raw_agreement = round(sum(1 for a, b in zip(human, predicted, strict=True) if a == b) / len(human), 4)
+    raw_agreement = round(
+        sum(1 for a, b in zip(human, predicted, strict=True) if a == b) / len(human), 4
+    )
     kappa = round(cohen_kappa(human, predicted), 4)
     agreement = {
         "model": model_name,
