@@ -1,11 +1,14 @@
 import React, { createContext, useContext, useState, useEffect } from "react";
 
+export type StoreStatus = "healthy" | "degraded" | "down" | "unknown";
+export type OutboxStatus = "healthy" | "lagging" | "unknown";
+
 export interface StoreHealth {
-  postgres: { status: "healthy" | "degraded" | "down"; latencyMs: number };
-  qdrant: { status: "healthy" | "degraded" | "down"; latencyMs: number };
-  neo4j: { status: "healthy" | "degraded" | "down"; latencyMs: number };
-  redis: { status: "healthy" | "degraded" | "down"; latencyMs: number };
-  outboxLag: { events: number; status: "healthy" | "lagging" };
+  postgres: { status: StoreStatus; latencyMs: number | null };
+  qdrant: { status: StoreStatus; latencyMs: number | null };
+  neo4j: { status: StoreStatus; latencyMs: number | null };
+  redis: { status: StoreStatus; latencyMs: number | null };
+  outboxLag: { events: number | null; status: OutboxStatus };
 }
 
 interface AppContextType {
@@ -25,12 +28,24 @@ interface AppContextType {
 }
 
 const DEFAULT_STORE_HEALTH: StoreHealth = {
-  postgres: { status: "healthy", latencyMs: 1.2 },
-  qdrant: { status: "healthy", latencyMs: 2.4 },
-  neo4j: { status: "healthy", latencyMs: 3.1 },
-  redis: { status: "healthy", latencyMs: 0.8 },
-  outboxLag: { events: 0, status: "healthy" },
+  postgres: { status: "unknown", latencyMs: null },
+  qdrant: { status: "unknown", latencyMs: null },
+  neo4j: { status: "unknown", latencyMs: null },
+  redis: { status: "unknown", latencyMs: null },
+  outboxLag: { events: null, status: "unknown" },
 };
+
+function asStoreStatus(value: unknown): StoreStatus {
+  return value === "healthy" || value === "degraded" || value === "down" ? value : "unknown";
+}
+
+function asOutboxStatus(value: unknown): OutboxStatus {
+  return value === "healthy" || value === "lagging" ? value : "unknown";
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
@@ -84,40 +99,41 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
   }, [theme]);
 
-  // Health poll with mock fallback
+  // Health poll. Unknown is a real state: never invent a healthy store or a latency.
   useEffect(() => {
     const checkHealth = async () => {
       try {
         const res = await fetch("/api/v1/health");
-        if (res.ok) {
-          const data = await res.json();
-          if (data.components) {
-            setStoreHealth({
-              postgres: {
-                status: data.components.postgres?.status || "healthy",
-                latencyMs: data.components.postgres?.latency_ms ?? 1.1,
-              },
-              qdrant: {
-                status: data.components.qdrant?.status || "healthy",
-                latencyMs: data.components.qdrant?.latency_ms ?? 2.2,
-              },
-              neo4j: {
-                status: data.components.neo4j?.status || "healthy",
-                latencyMs: data.components.neo4j?.latency_ms ?? 2.9,
-              },
-              redis: {
-                status: data.components.redis?.status || "healthy",
-                latencyMs: data.components.redis?.latency_ms ?? 0.7,
-              },
-              outboxLag: {
-                events: data.outbox_lag ?? 0,
-                status: data.components.outbox?.status || "healthy",
-              },
-            });
-          }
+        if (!res.ok) {
+          setStoreHealth(DEFAULT_STORE_HEALTH);
+          return;
         }
+        const data = await res.json();
+        const components = data.components ?? {};
+        setStoreHealth({
+          postgres: {
+            status: asStoreStatus(components.postgres?.status),
+            latencyMs: asNumber(components.postgres?.latency_ms),
+          },
+          qdrant: {
+            status: asStoreStatus(components.qdrant?.status),
+            latencyMs: asNumber(components.qdrant?.latency_ms),
+          },
+          neo4j: {
+            status: asStoreStatus(components.neo4j?.status),
+            latencyMs: asNumber(components.neo4j?.latency_ms),
+          },
+          redis: {
+            status: asStoreStatus(components.redis?.status),
+            latencyMs: asNumber(components.redis?.latency_ms),
+          },
+          outboxLag: {
+            events: asNumber(data.outbox_lag),
+            status: asOutboxStatus(components.outbox?.status),
+          },
+        });
       } catch {
-        // Fallback to default healthy state if backend not currently running
+        setStoreHealth(DEFAULT_STORE_HEALTH);
       }
     };
 
