@@ -490,10 +490,7 @@ def _chunk_ids_by_heading(content: str, source_path: str) -> dict[str, str]:
         source_path,
         _scope_for(parsed.metadata.get("acl_scope")),
     )
-    return {
-        str(chunk.metadata.get("heading", "")): chunk.chunk_id
-        for chunk in chunks
-    }
+    return {str(chunk.metadata.get("heading", "")): chunk.chunk_id for chunk in chunks}
 
 
 def _write(path: Path, content: str) -> None:
@@ -501,13 +498,8 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def generate_corpus() -> dict[str, dict[str, str]]:
-    """Write the generated corpus and return ``doc_id -> heading -> chunk_id``."""
-    if SYNTHETIC_DIR.exists():
-        for path in sorted(SYNTHETIC_DIR.glob("*.md")):
-            path.unlink()
-
-    index: dict[str, dict[str, str]] = {}
+def build_corpus() -> list[tuple[str, str]]:
+    """Return ``(doc_id, content)`` for every generated document without writing."""
     documents: list[tuple[str, str]] = []
 
     for team in TEAMS:
@@ -530,7 +522,17 @@ def generate_corpus() -> dict[str, dict[str, str]]:
                 (f"doc_incident_{service.slug}", _incident_doc(service, index_number // 6))
             )
 
-    for doc_id, content in documents:
+    return documents
+
+
+def generate_corpus() -> dict[str, dict[str, str]]:
+    """Write the generated corpus and return ``doc_id -> heading -> chunk_id``."""
+    if SYNTHETIC_DIR.exists():
+        for path in sorted(SYNTHETIC_DIR.glob("*.md")):
+            path.unlink()
+
+    index: dict[str, dict[str, str]] = {}
+    for doc_id, content in build_corpus():
         source_path = f"corpus/synthetic/{doc_id}.md"
         _write(SYNTHETIC_DIR / f"{doc_id}.md", content)
         index[doc_id] = _chunk_ids_by_heading(content, source_path)
@@ -572,9 +574,7 @@ def _splits(count: int, test_count: int) -> list[str]:
 
 def _fact_rows(index: dict[str, dict[str, str]]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    versioned = [
-        service for service in SERVICES if SERVICES.index(service) % 6 == 0
-    ]
+    versioned = [service for service in SERVICES if SERVICES.index(service) % 6 == 0]
     standard = [service for service in SERVICES if service not in versioned]
 
     fact_services = standard[:20] + versioned[:10]
@@ -584,12 +584,8 @@ def _fact_rows(index: dict[str, dict[str, str]]) -> list[dict[str, object]]:
         if service in versioned:
             doc_id = f"doc_sla_{service.slug}_v2"
             heading = "Latency Target"
-            answer = (
-                f"Under v2, {service.name} targets a p99 latency of {service.p99_ms}ms."
-            )
-            query = (
-                f"Under the current v2 agreement, what p99 latency does {service.name} target?"
-            )
+            answer = f"Under v2, {service.name} targets a p99 latency of {service.p99_ms}ms."
+            query = f"Under the current v2 agreement, what p99 latency does {service.name} target?"
         else:
             doc_id = f"doc_service_{service.slug}"
             heading = "SLA"
@@ -776,17 +772,16 @@ def _multi_turn_rows(
                     {"role": "user", "content": parent_query},
                     {"role": "assistant", "content": parent_answer},
                 ],
-                expected_rewritten_query=(
-                    f"What is {service.name}'s p99 latency SLA?"
-                ),
+                expected_rewritten_query=(f"What is {service.name}'s p99 latency SLA?"),
             )
         )
     return rows
 
 
-def generate_golden(index: dict[str, dict[str, str]]) -> list[dict[str, object]]:
+def build_golden(index: dict[str, dict[str, str]]) -> list[dict[str, object]]:
+    """Return the generated golden rows without writing them."""
     fact_rows = _fact_rows(index)
-    rows = (
+    return (
         fact_rows
         + _multi_hop_rows(index)
         + _global_rows(index)
@@ -794,6 +789,10 @@ def generate_golden(index: dict[str, dict[str, str]]) -> list[dict[str, object]]
         + _paraphrase_rows(index, fact_rows)
         + _multi_turn_rows(index)
     )
+
+
+def generate_golden(index: dict[str, dict[str, str]]) -> list[dict[str, object]]:
+    rows = build_golden(index)
     GOLDEN_PATH.parent.mkdir(parents=True, exist_ok=True)
     with GOLDEN_PATH.open("w", encoding="utf-8") as handle:
         for row in rows:
@@ -817,39 +816,85 @@ def _count_corpus() -> tuple[int, int]:
     return documents, chunks
 
 
+def _check_assets() -> int:
+    """Regenerate in memory and compare against the committed assets.
+
+    Counting documents and chunks is not enough: chunk ids include a hash of the
+    chunk text, so a hand edit can keep every count identical while leaving the
+    golden ids stale. This check rebuilds the corpus and golden rows from the
+    generator, then compares the committed bytes and ids.
+    """
+    if not SYNTHETIC_DIR.exists() or not MANIFEST_PATH.exists() or not GOLDEN_PATH.exists():
+        raise SystemExit("generated assets are missing; run without --check first")
+
+    mismatches: list[str] = []
+    expected_documents = build_corpus()
+    expected_names = {f"{doc_id}.md" for doc_id, _ in expected_documents}
+    committed_paths = {path.name: path for path in SYNTHETIC_DIR.glob("*.md")}
+
+    for name in sorted(expected_names - committed_paths.keys()):
+        mismatches.append(f"missing generated document {name}")
+    for name in sorted(committed_paths.keys() - expected_names):
+        mismatches.append(f"unexpected generated document {name}")
+
+    index: dict[str, dict[str, str]] = {}
+    for doc_id, content in expected_documents:
+        source_path = f"corpus/synthetic/{doc_id}.md"
+        path = SYNTHETIC_DIR / f"{doc_id}.md"
+        if path.exists() and path.read_text(encoding="utf-8") != content:
+            mismatches.append(f"generated document {path.name} differs from generator output")
+        index[doc_id] = _chunk_ids_by_heading(content, source_path)
+
+    expected_rows = build_golden(index)
+    expected_lines = [json.dumps(row, ensure_ascii=False) for row in expected_rows]
+    committed_lines = [
+        line for line in GOLDEN_PATH.read_text(encoding="utf-8").splitlines() if line.strip()
+    ]
+    if len(committed_lines) != len(expected_lines):
+        mismatches.append(f"golden rows {len(committed_lines)} != {len(expected_lines)}")
+    for number, (expected_line, committed_line) in enumerate(
+        zip(expected_lines, committed_lines, strict=False), start=1
+    ):
+        if expected_line != committed_line:
+            mismatches.append(f"golden row {number} differs from generator output")
+
+    documents, chunks = _count_corpus()
+    expected_manifest = {
+        "generator": GENERATOR,
+        "seed": SEED,
+        "generated_documents": len(expected_documents),
+        "generated_chunks": sum(len(headings) for headings in index.values()),
+        "total_documents": documents,
+        "total_chunks": chunks,
+        "golden_rows": len(expected_rows),
+    }
+    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    for key, value in expected_manifest.items():
+        if manifest.get(key) != value:
+            mismatches.append(f"manifest {key} {manifest.get(key)!r} != {value!r}")
+
+    print(f"corpus documents: {documents}")
+    print(f"corpus chunks:    {chunks}")
+    print(f"golden rows:      {len(expected_rows)}")
+    if mismatches:
+        for mismatch in mismatches:
+            print(f"MISMATCH: {mismatch}")
+        return 1
+    print("generated assets match the committed corpus and golden rows.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Generate and report counts without writing files.",
+        help="Regenerate in memory and compare against committed assets without writing.",
     )
     args = parser.parse_args(argv)
 
     if args.check:
-        if not SYNTHETIC_DIR.exists() or not MANIFEST_PATH.exists() or not GOLDEN_PATH.exists():
-            raise SystemExit("generated assets are missing; run without --check first")
-        manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-        documents, chunks = _count_corpus()
-        golden_rows = len(GOLDEN_PATH.read_text(encoding="utf-8").splitlines())
-        mismatches: list[str] = []
-        if manifest.get("total_documents") != documents:
-            mismatches.append(
-                f"manifest documents {manifest.get('total_documents')} != {documents}"
-            )
-        if manifest.get("total_chunks") != chunks:
-            mismatches.append(f"manifest chunks {manifest.get('total_chunks')} != {chunks}")
-        if manifest.get("golden_rows") != golden_rows:
-            mismatches.append(f"manifest golden rows {manifest.get('golden_rows')} != {golden_rows}")
-        print(f"corpus documents: {documents}")
-        print(f"corpus chunks:    {chunks}")
-        print(f"golden rows:      {golden_rows}")
-        if mismatches:
-            for mismatch in mismatches:
-                print(f"MISMATCH: {mismatch}")
-            return 1
-        print("manifest matches the committed corpus and golden rows.")
-        return 0
+        return _check_assets()
 
     index = generate_corpus()
     rows = generate_golden(index)
