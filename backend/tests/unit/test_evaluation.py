@@ -11,6 +11,7 @@ from app.evaluation.retrieval_metrics import (
     recall_at_k,
     reciprocal_rank,
 )
+from app.evaluation.runner import diff_metrics
 
 
 def test_recall_at_k() -> None:
@@ -130,3 +131,17 @@ def test_load_golden_dataset() -> None:
 def test_dataset_missing_file_error() -> None:
     with pytest.raises(FileNotFoundError):
         GoldenDataset.load_from_jsonl("non_existent_file.jsonl")
+
+
+def test_paired_difference_metrics_are_retrieval_first() -> None:
+    """Token F1 and answer accuracy never decide a config comparison.
+
+    Retrieval nDCG is the primary signal. Judge correctness is added only when
+    the judge actually ran; the lexical floor metrics stay diagnostic.
+    """
+    assert diff_metrics(judge_enabled=False) == ("chunk_ndcg@10",)
+    assert diff_metrics(judge_enabled=True) == ("chunk_ndcg@10", "judge_correctness")
+    for judge_enabled in (False, True):
+        metrics = diff_metrics(judge_enabled=judge_enabled)
+        assert "answer_f1" not in metrics
+        assert "answer_accuracy" not in metrics

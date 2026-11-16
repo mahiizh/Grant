@@ -17,7 +17,7 @@ from typing import Any
 from app.evaluation.bootstrap import paired_bootstrap_difference
 from app.evaluation.calibration import load_agreement
 from app.evaluation.datasets import SplitType
-from app.evaluation.runner import BenchmarkReport
+from app.evaluation.runner import BenchmarkReport, diff_metrics
 from app.orchestration.state import RETRIEVAL_CONFIGS, RetrievalConfig
 from app.tools.eval_cli import (
     _print_report,
@@ -133,7 +133,10 @@ def _print_comparison(
     )
 
     print()
-    print("Answer quality (token F1 is secondary and shown only in the operational block):")
+    print(
+        "Answer quality (answer accuracy is a secondary floor; "
+        "token F1 is shown only in the operational block):"
+    )
     answer_metrics: tuple[str, ...] = ("answer_accuracy",)
     if judge_enabled:
         answer_metrics = ("answer_accuracy", "judge_correctness", "judge_pass_rate")
@@ -156,15 +159,15 @@ def _print_comparison(
         f"Paired difference vs {baseline} (config minus {baseline}; "
         "an interval that excludes 0 is evidence of a real difference):"
     )
-    diff_metrics: tuple[str, ...] = ("chunk_ndcg@10", "answer_accuracy")
-    if judge_enabled:
-        diff_metrics = ("chunk_ndcg@10", "answer_accuracy", "judge_correctness")
-    print("| config | " + " | ".join(diff_metrics) + " |")
-    print("|---|" + "|".join("---" for _ in diff_metrics) + "|")
-    baseline_values = {metric: _values_by_id(reports[baseline], metric) for metric in diff_metrics}
+    diff_metric_names = diff_metrics(judge_enabled)
+    print("| config | " + " | ".join(diff_metric_names) + " |")
+    print("|---|" + "|".join("---" for _ in diff_metric_names) + "|")
+    baseline_values = {
+        metric: _values_by_id(reports[baseline], metric) for metric in diff_metric_names
+    }
     for config in RETRIEVAL_CONFIGS[1:]:
         diff_cells: list[str] = []
-        for metric in diff_metrics:
+        for metric in diff_metric_names:
             values = _values_by_id(reports[config], metric)
             shared = sorted(set(values) & set(baseline_values[metric]))
             interval = paired_bootstrap_difference(

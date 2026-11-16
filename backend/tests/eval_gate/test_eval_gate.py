@@ -4,7 +4,7 @@ import pytest
 
 from app.core.config import get_settings
 from app.evaluation.datasets import GoldenDataset
-from app.evaluation.runner import EvaluationRunner
+from app.evaluation.runner import EvaluationRunner, diff_metrics
 from tests.fakes.hermetic import (
     REPO_ROOT,
     build_hermetic_orchestrator,
@@ -99,10 +99,15 @@ async def test_hermetic_eval_gate_reports_chunk_level_metrics() -> None:
             assert metric in scores, f"{category} missing {metric}"
         assert 0.0 <= scores["chunk_ndcg@10"] <= 1.0
 
-    for name in ("chunk_recall@5", "chunk_ndcg@10", "answer_accuracy"):
+    # Retrieval metrics are primary; token F1 is a secondary floor. Answer
+    # accuracy still gets an interval but is not a primary comparison metric.
+    for name in ("chunk_recall@5", "chunk_ndcg@10", "answer_f1"):
         interval = report.overall_intervals[name]
         assert 0.0 <= float(interval["low"]) <= float(interval["high"]) <= 1.0
         assert int(interval["n"]) == report.total_questions
+    assert "answer_accuracy" in report.overall_intervals
+    assert "answer_accuracy" not in diff_metrics(judge_enabled=False)
+    assert "answer_f1" not in diff_metrics(judge_enabled=False)
     assert report.judge_model is None
 
     for _category, operational in report.category_operational.items():

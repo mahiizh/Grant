@@ -65,8 +65,9 @@ class BenchmarkReport:
     summary: dict[str, Any] = field(default_factory=dict)
 
 
-# Metrics that get a bootstrap interval in every report. Retrieval metrics are
-# primary; answer metrics are reported next to them, and token F1 is secondary.
+# Metrics that get a bootstrap interval in every report. Retrieval quality is
+# primary. Answer accuracy and token F1 are secondary floor metrics: lexical
+# overlap can rise while answers get worse, so neither decides a comparison.
 INTERVAL_METRICS = (
     "chunk_recall@5",
     "chunk_ndcg@10",
@@ -75,6 +76,19 @@ INTERVAL_METRICS = (
     "answer_f1",
 )
 JUDGE_METRICS = ("judge_correctness", "judge_faithfulness", "judge_pass_rate")
+
+# Metrics in the paired config-vs-baseline difference table. Retrieval nDCG is
+# the primary comparison; judge correctness joins it only when the judge ran.
+# Token F1 and answer accuracy stay out: they are diagnostics, not evidence that
+# one configuration beats another.
+PRIMARY_DIFF_METRICS = ("chunk_ndcg@10",)
+
+
+def diff_metrics(judge_enabled: bool) -> tuple[str, ...]:
+    """Return the metrics shown in the paired difference table."""
+    if judge_enabled:
+        return PRIMARY_DIFF_METRICS + ("judge_correctness",)
+    return PRIMARY_DIFF_METRICS
 
 
 class EvaluationRunner:
