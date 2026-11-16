@@ -133,6 +133,29 @@ def test_dataset_missing_file_error() -> None:
         GoldenDataset.load_from_jsonl("non_existent_file.jsonl")
 
 
+def test_duplicate_question_ids_are_rejected() -> None:
+    question = GoldenQuestion(
+        id="dup_001",
+        category="fact",
+        query="What is the p99 target?",
+        optimal_strategy="vector",
+    )
+    with pytest.raises(ValueError, match="Duplicate golden question ids: dup_001"):
+        GoldenDataset([question, question])
+
+
+def test_duplicate_ids_across_files_are_rejected(tmp_path: Path) -> None:
+    payload = (
+        '{"id": "dup_002", "category": "fact", "split": "test", '
+        '"query": "What is the p99 target?", "optimal_strategy": "vector"}'
+    )
+    (tmp_path / "a.jsonl").write_text(payload + "\n", encoding="utf-8")
+    (tmp_path / "b.jsonl").write_text(payload + "\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="Duplicate golden question ids: dup_002"):
+        GoldenDataset.load_from_dir(tmp_path)
+
+
 def test_paired_difference_metrics_are_retrieval_first() -> None:
     """Token F1 and answer accuracy never decide a config comparison.
 

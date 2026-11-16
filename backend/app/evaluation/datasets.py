@@ -33,6 +33,16 @@ class GoldenQuestion(BaseModel):
 
 class GoldenDataset:
     def __init__(self, questions: list[GoldenQuestion]) -> None:
+        duplicates: list[str] = []
+        seen: set[str] = set()
+        for question in questions:
+            if question.id in seen:
+                duplicates.append(question.id)
+            seen.add(question.id)
+        if duplicates:
+            duplicate_ids = ", ".join(sorted(set(duplicates)))
+            raise ValueError(f"Duplicate golden question ids: {duplicate_ids}")
+
         self._questions = questions
         self._by_id = {q.id: q for q in questions}
 
