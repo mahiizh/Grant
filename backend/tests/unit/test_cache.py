@@ -170,6 +170,28 @@ def test_semantic_cache_guardrails_prevent_wrong_hits() -> None:
     assert sem_cache.stats["guard_rejections"] == 1
 
 
+def test_semantic_cache_guard_rejects_cross_service_camelcase_hits() -> None:
+    guard = validate_cache_hit(
+        new_query="Which team owns PhotonIndex?",
+        cached_query="Which team owns EventStream?",
+    )
+    assert not guard.passed
+    assert "photonindex" in guard.reason
+
+    # A single-word service name has no CamelCase hump. The cached query must
+    # still not answer a question about a different service.
+    assert not validate_cache_hit(
+        new_query="What is the p99 latency SLA for QuantumLedger?",
+        cached_query="What is the p99 latency SLA for Reconciler?",
+    ).passed
+
+    # A paraphrase that keeps the same service still passes.
+    assert validate_cache_hit(
+        new_query="Who is responsible for EventStream?",
+        cached_query="Which team owns EventStream?",
+    ).passed
+
+
 def test_outbox_cache_invalidation_lifecycle() -> None:
     exact = ExactCache()
     exact.clear()

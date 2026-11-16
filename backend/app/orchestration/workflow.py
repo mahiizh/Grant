@@ -16,6 +16,7 @@ from app.graph.retrievers import GraphRetriever
 from app.llm.citations import verify_claim_citations
 from app.llm.gateway import ModelGateway
 from app.orchestration.condense import condense_query
+from app.orchestration.grounding import asks_about_absent_entity
 from app.orchestration.router import QueryRouter
 from app.orchestration.state import RAGState, RetrievalConfig
 from app.retrieval.filters import RetrievalFilter
@@ -564,6 +565,9 @@ class RAGOrchestrator:
         def evidence_decision(state: RAGState) -> str:
             evidence = state.get("evidence", [])
             if not evidence:
+                return "abstain_step"
+            query = state.get("rewritten_query") or state["query"]
+            if asks_about_absent_entity(query, (item.text for item in evidence)):
                 return "abstain_step"
             return "generate_step"
 

@@ -1,6 +1,8 @@
 import re
 from typing import NamedTuple
 
+from app.core.entities import named_entities
+
 
 class CacheGuardResult(NamedTuple):
     passed: bool
@@ -22,7 +24,13 @@ def extract_technical_codes(text: str) -> set[str]:
 
 
 def extract_key_subsystems(text: str) -> set[str]:
-    """Extract key subsystem and team identifiers to prevent cross-domain cache poisoning."""
+    """Extract key subsystem and team identifiers to prevent cross-domain cache poisoning.
+
+    Hand-authored subsystem names cover the legacy corpus. Generated corpus
+    services are CamelCase (PhotonIndex, EventStream), so they are extracted
+    generically: without this, a question about one service can receive another
+    service's cached answer whenever their wordings are similar enough.
+    """
     keywords = {
         "payment",
         "paymentgateway",
@@ -38,7 +46,9 @@ def extract_key_subsystems(text: str) -> set[str]:
         "observability",
     }
     text_lower = text.lower()
-    return {k for k in keywords if k in text_lower}
+    found = {k for k in keywords if k in text_lower}
+    found.update(entity.lower() for entity in named_entities(text))
+    return found
 
 
 def validate_cache_hit(new_query: str, cached_query: str) -> CacheGuardResult:
@@ -65,10 +75,13 @@ def validate_cache_hit(new_query: str, cached_query: str) -> CacheGuardResult:
             reason=f"Numerical or date token mismatch detected: {diff}",
         )
 
-    # 3. Check key subsystem / domain entity parity (e.g. Payments vs Outbox)
+    # 3. Check key subsystem / domain entity parity (e.g. Payments vs Outbox).
+    # If either query names a domain entity, both must share one. A cached
+    # query with no extractable entity can be generic ("Tell me the p99 SLA"),
+    # and serving it to a question about a specific service is still wrong.
     subsystems_new = extract_key_subsystems(new_query)
     subsystems_cached = extract_key_subsystems(cached_query)
-    if subsystems_new and subsystems_cached and not (subsystems_new & subsystems_cached):
+    if (subsystems_new or subsystems_cached) and not (subsystems_new & subsystems_cached):
         return CacheGuardResult(
             passed=False,
             reason=f"Subsystem domain mismatch: {subsystems_new} vs {subsystems_cached}",
