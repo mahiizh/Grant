@@ -162,20 +162,28 @@ export function PromptComposer({
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] font-mono text-zinc-500 uppercase">Mode:</span>
               <div className="flex rounded-md border border-zinc-800 bg-zinc-950 p-0.5">
-                {(["auto", "vector", "hybrid", "graph", "ppr"] as const).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => setMode(m)}
-                    className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase transition-colors cursor-pointer ${
-                      mode === m
-                        ? "bg-amber-500 text-zinc-950 font-semibold shadow-xs"
-                        : "text-zinc-400 hover:text-zinc-200"
-                    }`}
-                  >
-                    {m}
-                  </button>
-                ))}
+                {(["auto", "vector", "hybrid", "graph", "ppr"] as const).map((m) => {
+                  const isDisabled = m === "ppr";
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      disabled={isDisabled}
+                      title={isDisabled ? "Personalized PageRank (PPR) is not yet implemented in backend" : undefined}
+                      onClick={() => !isDisabled && setMode(m)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-mono uppercase transition-colors ${
+                        isDisabled
+                          ? "text-zinc-600 cursor-not-allowed opacity-50"
+                          : mode === m
+                          ? "bg-amber-500 text-zinc-950 font-semibold shadow-xs cursor-pointer"
+                          : "text-zinc-400 hover:text-zinc-200 cursor-pointer"
+                      }`}
+                    >
+                      {m}
+                      {isDisabled && " (N/A)"}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
