@@ -158,10 +158,12 @@ class FakeHybridRetriever:
         dense: FakeDenseRetriever | None = None,
         sparse: FakeBM25Retriever | None = None,
         reranker: FakeReranker | None = None,
+        prefetch_multiplier: int = 5,
     ) -> None:
         self.dense = dense or FakeDenseRetriever()
         self.sparse = sparse or FakeBM25Retriever()
         self.reranker = reranker
+        self.prefetch_multiplier = prefetch_multiplier
         self._chunks: dict[str, Chunk] = {}
 
     def index_chunks(self, chunks: Sequence[Chunk]) -> None:
@@ -221,14 +223,23 @@ class FakeHybridRetriever:
         k: int = 60,
         rerank: bool = False,
         extra_candidates: Sequence[Evidence] | None = None,
+        prefetch_k: int | None = None,
+        weights: Sequence[float] | None = None,
     ) -> AwaitableList:
-        dense_results = self.dense.search(query, top_k=top_k * 2, filter_criteria=filter_criteria)
-        sparse_results = self.sparse.search(query, top_k=top_k * 2, filter_criteria=filter_criteria)
+        prefetch_limit = prefetch_k if prefetch_k is not None else top_k * self.prefetch_multiplier
+        dense_results = self.dense.search(
+            query, top_k=prefetch_limit, filter_criteria=filter_criteria
+        )
+        sparse_results = self.sparse.search(
+            query, top_k=prefetch_limit, filter_criteria=filter_criteria
+        )
         rrf_scores: dict[str, float] = {}
+        w_dense = weights[0] if weights and len(weights) > 0 else 1.0
+        w_sparse = weights[1] if weights and len(weights) > 1 else 1.0
         for rank, (chunk_id, _) in enumerate(dense_results):
-            rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0.0) + 1.0 / (k + rank + 1)
+            rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0.0) + w_dense / (k + rank + 1)
         for rank, (chunk_id, _) in enumerate(sparse_results):
-            rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0.0) + 1.0 / (k + rank + 1)
+            rrf_scores[chunk_id] = rrf_scores.get(chunk_id, 0.0) + w_sparse / (k + rank + 1)
         ranked = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
         # Defense-in-depth: mirror the production payload check even if a fake
         # retriever upstream forgot to apply the ACL predicate.

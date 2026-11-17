@@ -70,6 +70,8 @@ class Settings(BaseSettings):
     EMBEDDING_DIM: int = 384
     SPARSE_MODEL: str = "Qdrant/bm25"
     RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    RRF_K: int = 60
+    HYBRID_PREFETCH_MULTIPLIER: int = 5
     ACQUISITION_ENABLED: bool = False
     MAX_ACQUISITION_CALLS: int = 3
     MIN_TRUST_TO_CITE: float = 0.7

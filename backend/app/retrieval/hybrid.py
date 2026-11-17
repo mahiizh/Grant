@@ -1,6 +1,7 @@
 from collections.abc import Sequence
 from typing import Any
 
+from app.core.config import get_settings
 from app.domain import Evidence, Provenance, SourceTier
 from app.retrieval.dense import DenseRetriever
 from app.retrieval.filters import RetrievalFilter
@@ -11,16 +12,18 @@ from app.retrieval.sparse import BM25Retriever
 def reciprocal_rank_fusion(
     ranked_lists: Sequence[list[str]],
     rrf_k: int = 60,
+    weights: Sequence[float] | None = None,
 ) -> list[tuple[str, float]]:
     """Fuse multiple ranked candidate lists using Reciprocal Rank Fusion (RRF).
 
-    Formula: RRF_score(d) = sum(1.0 / (rrf_k + rank_i(d))) for each list i.
+    Formula: RRF_score(d) = sum(weight_i / (rrf_k + rank_i(d))) for each list i.
     """
     scores: dict[str, float] = {}
+    effective_weights = [1.0] * len(ranked_lists) if weights is None else list(weights)
 
-    for ranked_list in ranked_lists:
+    for ranked_list, weight in zip(ranked_lists, effective_weights, strict=False):
         for rank, item_id in enumerate(ranked_list, start=1):
-            scores[item_id] = scores.get(item_id, 0.0) + (1.0 / (rrf_k + rank))
+            scores[item_id] = scores.get(item_id, 0.0) + (weight / (rrf_k + rank))
 
     return sorted(scores.items(), key=lambda x: x[1], reverse=True)
 
@@ -32,12 +35,19 @@ class HybridRetriever:
         self,
         dense_retriever: DenseRetriever | None = None,
         bm25_retriever: BM25Retriever | None = None,
-        rrf_k: int = 60,
+        rrf_k: int | None = None,
+        prefetch_multiplier: int | None = None,
         reranker: Any | None = None,
     ) -> None:
+        settings = get_settings()
         self.dense = dense_retriever or DenseRetriever()
         self.sparse = bm25_retriever or BM25Retriever()
-        self.rrf_k = rrf_k
+        self.rrf_k = rrf_k if rrf_k is not None else settings.RRF_K
+        self.prefetch_multiplier = (
+            prefetch_multiplier
+            if prefetch_multiplier is not None
+            else settings.HYBRID_PREFETCH_MULTIPLIER
+        )
         self.reranker = reranker or get_reranker()
 
     def _to_evidence(
@@ -113,6 +123,8 @@ class HybridRetriever:
         filter_criteria: RetrievalFilter | None = None,
         rerank: bool = False,
         extra_candidates: Sequence[Evidence] | None = None,
+        prefetch_k: int | None = None,
+        weights: Sequence[float] | None = None,
     ) -> list[Evidence]:
         """Perform hybrid retrieval over real Qdrant collection and return Evidence objects.
 
@@ -120,10 +132,12 @@ class HybridRetriever:
         example graph path evidence) to the same rerank pool. The combined list
         is deduplicated, reranked once, and only then cut to ``top_k``.
         """
+        prefetch_limit = prefetch_k if prefetch_k is not None else top_k * self.prefetch_multiplier
+
         # 1. Fetch dense candidates
         dense_candidates = await self.dense.search(
             query=query,
-            top_k=top_k * 2,
+            top_k=prefetch_limit,
             filter_criteria=filter_criteria,
         )
         dense_ranked_ids = [cid for cid, _, _ in dense_candidates]
@@ -132,7 +146,7 @@ class HybridRetriever:
         # 2. Fetch sparse candidates
         sparse_candidates = await self.sparse.search(
             query=query,
-            top_k=top_k * 2,
+            top_k=prefetch_limit,
             filter_criteria=filter_criteria,
         )
         sparse_ranked_ids = [cid for cid, _, _ in sparse_candidates]
@@ -144,11 +158,12 @@ class HybridRetriever:
         fused = reciprocal_rank_fusion(
             ranked_lists=[dense_ranked_ids, sparse_ranked_ids],
             rrf_k=self.rrf_k,
+            weights=weights,
         )
 
         # 4. Construct Evidence items
         evidence_list: list[Evidence] = []
-        for chunk_id, rrf_score in fused[: top_k * 2]:
+        for chunk_id, rrf_score in fused[:prefetch_limit]:
             payload = payloads.get(chunk_id)
             if not payload:
                 continue

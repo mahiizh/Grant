@@ -279,3 +279,28 @@ def test_graph_multi_hop_path_traversal() -> None:
     assert evidence[0].chunk_id == "chunk_incident_03"
     assert evidence[0].retrieval_method == "graph"
     assert evidence[0].path == expected
+
+
+def test_reciprocal_rank_fusion_weighted() -> None:
+    from app.retrieval.hybrid import reciprocal_rank_fusion
+
+    list_dense = ["chunk_a", "chunk_b", "chunk_c"]
+    list_sparse = ["chunk_b", "chunk_c", "chunk_d"]
+
+    standard = reciprocal_rank_fusion([list_dense, list_sparse], rrf_k=60)
+    assert standard[0][0] == "chunk_b"
+
+    dense_dominant = reciprocal_rank_fusion([list_dense, list_sparse], rrf_k=60, weights=[1.0, 0.0])
+    assert dense_dominant[0][0] == "chunk_a"
+    assert dense_dominant[1][0] == "chunk_b"
+
+
+def test_hybrid_configurable_prefetch() -> None:
+    hybrid = HybridRetriever(prefetch_multiplier=10)
+    assert hybrid.prefetch_multiplier == 10
+    chunks = create_sample_chunks()
+    hybrid.index_chunks(chunks)
+
+    evidence = hybrid.search(query="PostgreSQL outbox", top_k=2, prefetch_k=20)
+    assert len(evidence) <= 2
+    assert any("chunk_storage_01" in e.chunk_id for e in evidence)
