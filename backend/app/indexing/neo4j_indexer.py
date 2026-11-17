@@ -41,19 +41,33 @@ class Neo4jIndexer:
         temporal: dict[str, Any] | None = None,
         properties: dict[str, Any] | None = None,
     ) -> None:
-        """Idempotently create or update an Entity node in Neo4j."""
+        """Idempotently create or update an Entity node in Neo4j, maintaining ACL scope unions."""
         cypher = """
         MERGE (n:Entity {id: $entity_id})
-        SET n.name = $name,
+        ON CREATE SET
+            n.name = $name,
             n.entity_type = $entity_type,
             n.acl_scope = $acl_scope,
             n.acl_tenant_id = $acl_tenant_id,
             n.acl_is_public = $acl_is_public,
             n.acl_allowed_roles = $acl_allowed_roles,
             n.acl_allowed_groups = $acl_allowed_groups,
+            n.doc_ids = CASE WHEN $doc_id <> '' THEN [$doc_id] ELSE [] END,
             n.valid_from = $valid_from,
             n.valid_to = $valid_to,
             n.doc_id = $doc_id
+        ON MATCH SET
+            n.name = $name,
+            n.entity_type = $entity_type,
+            n.acl_tenant_id = $acl_tenant_id,
+            n.acl_is_public = (coalesce(n.acl_is_public, false) OR $acl_is_public),
+            n.acl_allowed_roles = [r IN coalesce(n.acl_allowed_roles, []) WHERE NOT r IN $acl_allowed_roles] + $acl_allowed_roles,
+            n.acl_allowed_groups = [g IN coalesce(n.acl_allowed_groups, []) WHERE NOT g IN $acl_allowed_groups] + $acl_allowed_groups,
+            n.doc_ids = CASE
+                WHEN $doc_id <> '' AND NOT $doc_id IN coalesce(n.doc_ids, [])
+                THEN coalesce(n.doc_ids, []) + [$doc_id]
+                ELSE coalesce(n.doc_ids, [])
+            END
         """
         props = properties or {}
         temp = temporal or {}
@@ -79,10 +93,12 @@ class Neo4jIndexer:
         temporal: dict[str, Any] | None = None,
         properties: dict[str, Any] | None = None,
     ) -> str:
-        """Idempotently create or update a relationship edge between two entities."""
+        """Idempotently create or update a relationship edge between two entities carrying chunk ACL."""
         rel_type_clean = (
             "".join(c if c.isalnum() else "_" for c in relation_type).upper() or "RELATES_TO"
         )
+        props = properties or {}
+        chunk_id = props.get("chunk_id") or props.get("doc_id") or ""
         cypher = f"""
         MERGE (a:Entity {{id: $source_id}})
         ON CREATE SET a.acl_tenant_id = $acl_tenant_id,
@@ -94,7 +110,7 @@ class Neo4jIndexer:
                       b.acl_is_public = $acl_is_public,
                       b.acl_allowed_roles = $acl_allowed_roles,
                       b.acl_allowed_groups = $acl_allowed_groups
-        MERGE (a)-[r:{rel_type_clean}]->(b)
+        MERGE (a)-[r:{rel_type_clean} {{chunk_id: $chunk_id}}]->(b)
         SET r.relation_type = $relation_type,
             r.acl_scope = $acl_scope,
             r.acl_tenant_id = $acl_tenant_id,
@@ -103,11 +119,11 @@ class Neo4jIndexer:
             r.acl_allowed_groups = $acl_allowed_groups,
             r.valid_from = $valid_from,
             r.valid_to = $valid_to,
-            r.doc_id = $doc_id
+            r.doc_id = $doc_id,
+            r.chunk_id = $chunk_id
         RETURN elementId(r) AS rel_id
         """
         temp = temporal or {}
-        props = properties or {}
         async with self.driver.session() as session:
             res = await session.run(
                 cypher,
@@ -118,6 +134,7 @@ class Neo4jIndexer:
                 valid_from=temp.get("valid_from", "1970-01-01T00:00:00Z"),
                 valid_to=temp.get("valid_to"),
                 doc_id=props.get("doc_id", ""),
+                chunk_id=chunk_id,
                 **_acl_props(acl_scope),
             )
             record = await res.single()
@@ -158,29 +175,93 @@ class Neo4jIndexer:
             )
 
     async def link_chunk_entity(self, chunk_id: str, entity_id: str) -> None:
-        """Connect a chunk to an entity it mentions."""
+        """Connect a chunk to an entity it mentions and recompute entity ACL from all linked chunks."""
         cypher = """
         MATCH (c:Chunk {chunk_id: $chunk_id})
         MATCH (e:Entity {id: $entity_id})
         MERGE (c)-[:MENTIONS]->(e)
+        WITH e
+        MATCH (chk:Chunk)-[:MENTIONS]->(e)
+        WITH e,
+             collect(DISTINCT chk.doc_id) AS doc_ids,
+             any(x IN collect(chk) WHERE coalesce(x.acl_is_public, false)) AS is_public,
+             [x IN collect(chk) | coalesce(x.acl_allowed_roles, [])] AS all_roles,
+             [x IN collect(chk) | coalesce(x.acl_allowed_groups, [])] AS all_groups
+        SET e.doc_ids = doc_ids,
+            e.acl_is_public = is_public,
+            e.acl_allowed_roles = REDUCE(acc = [], r_list IN all_roles |
+                acc + [r IN r_list WHERE NOT r IN acc]
+            ),
+            e.acl_allowed_groups = REDUCE(acc = [], g_list IN all_groups |
+                acc + [g IN g_list WHERE NOT g IN acc]
+            )
         """
         async with self.driver.session() as session:
             await session.run(cypher, chunk_id=chunk_id, entity_id=entity_id)
 
     async def delete_by_doc_id(self, doc_id: str) -> int:
-        """Remove chunks, entities, and isolated relations originating from doc_id."""
-        cypher = """
-        MATCH (c:Chunk {doc_id: $doc_id})
-        DETACH DELETE c
-        """
+        """Remove chunks, edges, and recompute or delete orphaned entities for doc_id."""
         async with self.driver.session() as session:
-            res = await session.run(cypher, doc_id=doc_id)
-            summary = await res.consume()
-            deleted = summary.counters.nodes_deleted
+            # 1. Find all entities mentioned by chunks of this doc
+            find_entities_cypher = """
+            MATCH (c:Chunk {doc_id: $doc_id})-[:MENTIONS]->(e:Entity)
+            RETURN DISTINCT e.id AS entity_id
+            """
+            res = await session.run(find_entities_cypher, doc_id=doc_id)
+            records = await res.data()
+            entity_ids = [record["entity_id"] for record in records]
 
-            # Also delete entity nodes that were solely defined by this document
+            # 2. Delete edges originating from doc_id
+            edge_cypher = """
+            MATCH ()-[r]->()
+            WHERE r.doc_id = $doc_id
+            DELETE r
+            """
+            res_edge = await session.run(edge_cypher, doc_id=doc_id)
+            sum_edge = await res_edge.consume()
+
+            # 3. Delete chunks of doc_id
+            chunk_cypher = """
+            MATCH (c:Chunk {doc_id: $doc_id})
+            DETACH DELETE c
+            """
+            res_c = await session.run(chunk_cypher, doc_id=doc_id)
+            sum_c = await res_c.consume()
+            deleted = sum_c.counters.nodes_deleted + sum_edge.counters.relationships_deleted
+
+            # 4. Recompute or delete affected entities
+            for eid in entity_ids:
+                recompute_cypher = """
+                MATCH (e:Entity {id: $entity_id})
+                OPTIONAL MATCH (chk:Chunk)-[:MENTIONS]->(e)
+                WITH e, collect(chk) AS remaining_chunks
+                WHERE size(remaining_chunks) = 0
+                DETACH DELETE e
+                """
+                await session.run(recompute_cypher, entity_id=eid)
+
+                recompute_props_cypher = """
+                MATCH (e:Entity {id: $entity_id})<-[:MENTIONS]-(chk:Chunk)
+                WITH e,
+                     collect(DISTINCT chk.doc_id) AS doc_ids,
+                     any(x IN collect(chk) WHERE coalesce(x.acl_is_public, false)) AS is_public,
+                     [x IN collect(chk) | coalesce(x.acl_allowed_roles, [])] AS all_roles,
+                     [x IN collect(chk) | coalesce(x.acl_allowed_groups, [])] AS all_groups
+                SET e.doc_ids = doc_ids,
+                    e.acl_is_public = is_public,
+                    e.acl_allowed_roles = REDUCE(acc = [], r_list IN all_roles |
+                        acc + [r IN r_list WHERE NOT r IN acc]
+                    ),
+                    e.acl_allowed_groups = REDUCE(acc = [], g_list IN all_groups |
+                        acc + [g IN g_list WHERE NOT g IN acc]
+                    )
+                """
+                await session.run(recompute_props_cypher, entity_id=eid)
+
+            # 5. Also delete entities solely created for doc_id that had no chunks
             entity_cypher = """
             MATCH (e:Entity {doc_id: $doc_id})
+            WHERE NOT (e)<-[:MENTIONS]-(:Chunk)
             DETACH DELETE e
             """
             res_e = await session.run(entity_cypher, doc_id=doc_id)

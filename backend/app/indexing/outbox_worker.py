@@ -83,7 +83,7 @@ class OutboxWorker:
                         relation_type=rel.get("relation_type", "RELATED_TO"),
                         acl_scope=acl_scope,
                         temporal=temporal,
-                        properties={"doc_id": doc_id},
+                        properties={"doc_id": doc_id, "chunk_id": chunk_id},
                     )
 
             elif event_type == OutboxEventType.DOCUMENT_DELETED.value:

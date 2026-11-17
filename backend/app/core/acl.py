@@ -55,3 +55,15 @@ class ACLScope(BaseModel):
                 return True
 
         return False
+
+    def union(self, other: "ACLScope") -> "ACLScope":
+        """Compute the union of two ACL scopes.
+
+        An entity visible in either scope is visible in the union.
+        """
+        return ACLScope(
+            tenant_id=self.tenant_id if self.tenant_id == other.tenant_id else "default",
+            allowed_roles=self.allowed_roles | other.allowed_roles,
+            allowed_groups=self.allowed_groups | other.allowed_groups,
+            is_public=self.is_public or other.is_public,
+        )

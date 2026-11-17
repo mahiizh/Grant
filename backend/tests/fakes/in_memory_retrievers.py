@@ -282,7 +282,7 @@ class FakeGraphRetriever:
     def __init__(self) -> None:
         self._entities: dict[str, Entity] = {}
         self._name_to_id: dict[str, str] = {}
-        self._adjacency: dict[str, list[tuple[str, str]]] = {}
+        self._adjacency: dict[str, list[tuple[str, str, Relation]]] = {}
         self._chunks: dict[str, Chunk] = {}
 
     def index_graph(
@@ -291,15 +291,40 @@ class FakeGraphRetriever:
         relations: Sequence[Relation],
         chunks: Sequence[Chunk] | None = None,
     ) -> None:
-        self._entities = {e.entity_id: e for e in entities}
-        self._name_to_id = {normalize_entity_name(e.name): e.entity_id for e in entities}
+        self._entities.clear()
+        self._name_to_id.clear()
+        for e in entities:
+            norm_name = normalize_entity_name(e.name)
+            if e.entity_id in self._entities:
+                existing = self._entities[e.entity_id]
+                merged = existing.model_copy(
+                    update={
+                        "acl_scope": existing.acl_scope.union(e.acl_scope),
+                        "source_chunk_ids": list(set(existing.source_chunk_ids + e.source_chunk_ids)),
+                    }
+                )
+                self._entities[e.entity_id] = merged
+            else:
+                self._entities[e.entity_id] = e
+                self._name_to_id[norm_name] = e.entity_id
+
         self._adjacency.clear()
         for r in relations:
             self._adjacency.setdefault(r.source_entity_id, []).append(
-                (r.relation_type, r.target_entity_id)
+                (r.relation_type, r.target_entity_id, r)
             )
         if chunks:
             self._chunks = {c.chunk_id: c for c in chunks}
+            for e_id, e in list(self._entities.items()):
+                linked_chunks = [
+                    self._chunks[cid] for cid in e.source_chunk_ids if cid in self._chunks
+                ]
+                if linked_chunks:
+                    new_scope = e.acl_scope
+                    for chk in linked_chunks:
+                        new_scope = new_scope.union(chk.acl_scope)
+                    if new_scope != e.acl_scope:
+                        self._entities[e_id] = e.model_copy(update={"acl_scope": new_scope})
 
     @staticmethod
     def _permits_entity(entity: Entity, filter_criteria: RetrievalFilter | None) -> bool:
@@ -315,6 +340,22 @@ class FakeGraphRetriever:
         return not (
             filter_criteria.as_of_time is not None
             and not entity.temporal.is_valid_at(filter_criteria.as_of_time)
+        )
+
+    @staticmethod
+    def _permits_relation(relation: Relation, filter_criteria: RetrievalFilter | None) -> bool:
+        if filter_criteria is None:
+            return True
+        if not relation.acl_scope.permits(
+            user_roles=filter_criteria.user_roles,
+            user_groups=filter_criteria.user_groups,
+            tenant_id=filter_criteria.acl_scope.tenant_id,
+            is_admin=filter_criteria.is_admin,
+        ):
+            return False
+        return not (
+            filter_criteria.as_of_time is not None
+            and not relation.temporal.is_valid_at(filter_criteria.as_of_time)
         )
 
     def search_entities(
@@ -354,9 +395,11 @@ class FakeGraphRetriever:
                 return AwaitableList(path)
             if len(path) // 2 >= max_depth:
                 continue
-            for rel_type, next_id in self._adjacency.get(curr_id, []):
-                if next_id not in visited and self._permits_entity(
-                    self._entities[next_id], filter_criteria
+            for rel_type, next_id, rel in self._adjacency.get(curr_id, []):
+                if (
+                    next_id not in visited
+                    and self._permits_relation(rel, filter_criteria)
+                    and self._permits_entity(self._entities[next_id], filter_criteria)
                 ):
                     visited.add(next_id)
                     queue.append((next_id, path + [rel_type, self._entities[next_id].name]))
