@@ -10,6 +10,7 @@ from app.core.acl import ACLScope
 from app.db.postgres import DocumentRepository
 from app.domain import Document, Entity, Provenance, Relation, TemporalBounds
 from app.ingestion.chunking import chunk_parsed_document
+from app.ingestion.conflicts import close_superseded_document_versions
 from app.ingestion.extraction import EntityRelationExtractor
 from app.ingestion.parse import parse_markdown
 
@@ -150,6 +151,9 @@ class IngestionPipeline:
 
         # Persist to PostgreSQL within the caller's transaction
         await DocumentRepository.save_document(session=session, document=doc)
+
+        # Invalidate / close validity on superseded prior versions (e.g. v1 when v2 arrives)
+        await close_superseded_document_versions(session=session, new_doc=doc)
 
         return IngestionSummary(
             doc_id=doc.doc_id,

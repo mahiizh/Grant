@@ -20,9 +20,10 @@ def chunk_parsed_document(
 ) -> list[Chunk]:
     """Structure-aware chunker converting document sections into typed Domain Chunks."""
     scope = acl_scope or ACLScope.public()
+    effective_valid_to = valid_to if valid_to is not None else parsed.valid_to
     temporal = TemporalBounds(
         valid_from=parsed.valid_from or datetime.now(UTC),
-        valid_to=valid_to,
+        valid_to=effective_valid_to,
     )
     prov = Provenance.from_document(
         source_uri=source_uri,

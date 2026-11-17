@@ -365,11 +365,13 @@ class FakeGraphRetriever:
     def retrieve_path_evidence(
         self,
         path: list[str] | None,
+        top_k: int = 5,
         filter_criteria: RetrievalFilter | None = None,
     ) -> AwaitableList:
         evidence = AwaitableList()
         if not path:
             return evidence
+        seen_chunks: set[str] = set()
         for i in range(0, len(path), 2):
             ent_name = path[i]
             ent_id = self._name_to_id.get(normalize_entity_name(ent_name))
@@ -377,8 +379,11 @@ class FakeGraphRetriever:
                 continue
             entity = self._entities[ent_id]
             for chunk_id in entity.source_chunk_ids:
+                if chunk_id in seen_chunks:
+                    continue
                 chunk = self._chunks.get(chunk_id)
                 if chunk and (filter_criteria is None or filter_criteria.permits_chunk(chunk)):
+                    seen_chunks.add(chunk_id)
                     evidence.append(
                         Evidence(
                             chunk_id=chunk.chunk_id,
@@ -390,4 +395,6 @@ class FakeGraphRetriever:
                             path=path,
                         )
                     )
+                    if len(evidence) >= top_k:
+                        return evidence
         return evidence
