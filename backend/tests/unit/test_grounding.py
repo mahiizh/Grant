@@ -20,6 +20,14 @@ def test_named_entities_ignores_plain_words_and_acronyms() -> None:
     assert "INC" not in entities
 
 
+def test_named_entities_extracts_single_word_contextual_services() -> None:
+    text = "Which team owns the Reconciler? Did Payments service fail?"
+    entities = named_entities(text)
+    assert "Reconciler" in entities
+    assert "Payments" in entities
+    assert "Which" not in entities
+
+
 def test_absent_entity_requires_every_named_entity_to_be_missing() -> None:
     evidence = ["EventStream targets a p99 latency of 33ms."]
     assert asks_about_absent_entity("Which team owns PhotonIndex?", evidence)
