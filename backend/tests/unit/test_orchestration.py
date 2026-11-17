@@ -1,10 +1,12 @@
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.api.routes.query import set_orchestrator
+from app.cache.exact import ExactCache
+from app.cache.semantic import SemanticCache
 from app.core.acl import ACLScope
 from app.domain import Chunk, Entity, Provenance, Relation, TemporalBounds
 from app.graph.retrievers import GraphRetriever as RealGraphRetriever
@@ -12,6 +14,7 @@ from app.main import app
 from app.orchestration.router import QueryRouter
 from app.orchestration.workflow import RAGOrchestrator
 from app.retrieval.hybrid import HybridRetriever as RealHybridRetriever
+from tests.fakes.fake_redis import FakeRedis
 from tests.fakes.in_memory_retrievers import (
     FakeGraphRetriever as GraphRetriever,
 )
@@ -79,9 +82,15 @@ def build_test_orchestrator(cache_enabled: bool = True) -> RAGOrchestrator:
     graph = GraphRetriever()
     graph.index_graph(entities=[e1, e2], relations=[rel], chunks=[c1, c2])
 
+    # Inject FakeRedis so unit tests never require a live Redis server.
+    exact_cache = ExactCache(redis_client=cast(Any, FakeRedis())) if cache_enabled else None
+    sem_cache = SemanticCache(redis_client=cast(Any, FakeRedis())) if cache_enabled else None
+
     return RAGOrchestrator(
         hybrid_retriever=cast(RealHybridRetriever, hybrid),
         graph_retriever=cast(RealGraphRetriever, graph),
+        exact_cache=exact_cache,
+        semantic_cache=sem_cache,
         cache_enabled=cache_enabled,
     )
 

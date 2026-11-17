@@ -14,6 +14,16 @@ from app.domain import Answer, Evidence, Provenance
 from tests.fakes.fake_redis import FakeRedis
 
 
+def _fake_exact_cache(**kwargs: Any) -> ExactCache:
+    """Return an ExactCache backed by FakeRedis so unit tests never need a live Redis."""
+    return ExactCache(redis_client=cast(Any, FakeRedis()), **kwargs)
+
+
+def _fake_semantic_cache(**kwargs: Any) -> SemanticCache:
+    """Return a SemanticCache backed by FakeRedis so unit tests never need a live Redis."""
+    return SemanticCache(redis_client=cast(Any, FakeRedis()), **kwargs)
+
+
 def create_sample_answer(query: str, text: str) -> Answer:
     prov = Provenance.from_document("corpus/rfc_001.md")
     ev = Evidence(
@@ -87,7 +97,7 @@ def test_semantic_cache_key_scopes_full_context() -> None:
 
 
 def test_exact_cache_hit_and_metrics() -> None:
-    cache = ExactCache()
+    cache = _fake_exact_cache()
     cache.clear()
     acl = ACLScope.public()
     query = "What database is used for vectors?"
@@ -111,7 +121,7 @@ def test_exact_cache_hit_and_metrics() -> None:
 
 
 def test_exact_cache_tenant_isolation() -> None:
-    cache = ExactCache()
+    cache = _fake_exact_cache()
     acl_a = ACLScope.public(tenant_id="tenant_a")
     acl_b = ACLScope.public(tenant_id="tenant_b")
 
@@ -128,7 +138,7 @@ def test_exact_cache_tenant_isolation() -> None:
 
 
 def test_semantic_cache_paraphrase_hit() -> None:
-    sem_cache = SemanticCache(similarity_threshold=0.75)
+    sem_cache = _fake_semantic_cache(similarity_threshold=0.75)
     sem_cache.clear()
     acl = ACLScope.public()
 
@@ -147,7 +157,7 @@ def test_semantic_cache_paraphrase_hit() -> None:
 
 
 def test_semantic_cache_guardrails_prevent_wrong_hits() -> None:
-    sem_cache = SemanticCache(similarity_threshold=0.75)
+    sem_cache = _fake_semantic_cache(similarity_threshold=0.75)
     sem_cache.clear()
     acl = ACLScope.public()
 
@@ -193,9 +203,9 @@ def test_semantic_cache_guard_rejects_cross_service_camelcase_hits() -> None:
 
 
 def test_outbox_cache_invalidation_lifecycle() -> None:
-    exact = ExactCache()
+    exact = _fake_exact_cache()
     exact.clear()
-    sem = SemanticCache()
+    sem = _fake_semantic_cache()
     sem.clear()
     invalidator = CacheInvalidator(exact_cache=exact, semantic_cache=sem, initial_index_version=1)
 

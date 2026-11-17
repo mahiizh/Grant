@@ -25,17 +25,24 @@ UNANSWERABLE_PATTERNS: list[re.Pattern[str]] = [
 
 # Patterns characteristic of multi-hop relationship traversal
 MULTI_HOP_PATTERNS: list[re.Pattern[str]] = [
-    re.compile(r"who leads the.*(?:engineering\s+team|database\s+where)", re.IGNORECASE),
-    re.compile(r"which team owns the service whose.*deployment", re.IGNORECASE),
-    re.compile(r"what service failed during the incident commanded by", re.IGNORECASE),
+    re.compile(r"who leads the.*team responsible", re.IGNORECASE),
+    re.compile(r"which (?:sre lead|architect(?:'s)? team|team) (?:owns|ran)", re.IGNORECASE),
+    re.compile(r"which team owns.*(?:service that|depends on|suffered|whose)", re.IGNORECASE),
+    re.compile(r"the service that.*depends on", re.IGNORECASE),
+    re.compile(r"what service failed during the incident", re.IGNORECASE),
     re.compile(r"what slack channel.*(?:regarding|contacted)", re.IGNORECASE),
     re.compile(r"who was assigned the remediation.*(?:following|incident)", re.IGNORECASE),
+    re.compile(r"who leads the.*(?:engineering\s+team|database\s+where)", re.IGNORECASE),
 ]
 
 # Patterns characteristic of global cross-document summarization
 GLOBAL_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"\b(summarize|summary across|all engineering teams|all teams)\b", re.IGNORECASE),
     re.compile(r"\b(cross-team|mechanisms exist to ensure|across systems)\b", re.IGNORECASE),
+    re.compile(
+        r"\b(describe the remediation action items|action items and their owners)\b",
+        re.IGNORECASE,
+    ),
 ]
 
 

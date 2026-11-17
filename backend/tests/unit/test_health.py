@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -34,10 +35,13 @@ def test_api_v1_health_prefix(client: TestClient) -> None:
 
 
 def test_system_health_endpoint(client: TestClient) -> None:
+    """System health returns 200 (ok) when all stores are reachable or 503 (degraded)
+    when any store is down. The shape must always include all four components."""
     response = client.get("/api/v1/health")
-    assert response.status_code == 200
+    # 200 (healthy) or 503 (degraded) — both are valid without Docker.
+    assert response.status_code in (200, 503)
     data = response.json()
-    assert data["status"] == "ok"
+    assert data["status"] in ("ok", "degraded")
     assert "components" in data
     assert "postgres" in data["components"]
     assert "qdrant" in data["components"]
@@ -46,8 +50,17 @@ def test_system_health_endpoint(client: TestClient) -> None:
 
 
 def test_api_v1_system_health_endpoint(client: TestClient) -> None:
+    """Alias for the system health check — asserts shape only, not store liveness."""
+    response = client.get("/api/v1/health")
+    assert response.status_code in (200, 503)
+    data = response.json()
+    assert data["status"] in ("ok", "degraded")
+    assert "components" in data
+
+
+@pytest.mark.integration
+def test_system_health_all_stores_up(client: TestClient) -> None:
+    """Requires Docker (postgres:5433, qdrant:6333, neo4j:7687, redis:6379)."""
     response = client.get("/api/v1/health")
     assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "ok"
-    assert "components" in data
+    assert response.json()["status"] == "ok"

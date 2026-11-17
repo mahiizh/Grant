@@ -20,6 +20,7 @@ for _source in sorted((_REPO_ROOT / "evals" / "golden").glob("*")):
 os.environ["APP_ENV"] = "test"
 # An empty value overrides any key loaded from .env, so the mock path is used.
 os.environ["GEMINI_API_KEY"] = ""
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 os.environ["EVAL_GOLDEN_DIR"] = str(_GOLDEN_DIR)
 os.environ["EVAL_CANDIDATES_DIR"] = tempfile.mkdtemp(prefix="graphrag-candidates-")
 os.environ["LLM_CACHE_DIR"] = tempfile.mkdtemp(prefix="graphrag-llm-cache-")
