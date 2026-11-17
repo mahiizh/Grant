@@ -7,6 +7,9 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+# Ensure LiteLLM uses local bundled cost map to prevent remote network timeouts in sandboxed/offline environments
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+
 import litellm
 
 from app.core.config import get_settings

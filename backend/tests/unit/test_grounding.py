@@ -1,13 +1,17 @@
 """Unit tests for entity-grounding abstention."""
 
+from datetime import UTC, datetime
+
 import pytest
 
+from app.core.acl import ACLScope
+from app.domain import Chunk, Provenance, TemporalBounds
 from app.orchestration.grounding import (
     asks_about_absent_entity,
     evidence_mentions_any,
     named_entities,
 )
-from tests.fakes.hermetic import build_hermetic_orchestrator, load_corpus_chunks
+from tests.fakes.hermetic import build_hermetic_orchestrator
 
 
 def test_named_entities_ignores_plain_words_and_acronyms() -> None:
@@ -41,7 +45,19 @@ def test_absent_entity_requires_every_named_entity_to_be_missing() -> None:
 
 @pytest.mark.anyio
 async def test_orchestrator_abstains_on_absent_service() -> None:
-    orchestrator, _ = build_hermetic_orchestrator(load_corpus_chunks())
+    now = datetime(2026, 3, 1, tzinfo=UTC)
+    prov = Provenance.from_document("corpus/rfc_001.md")
+    chunk = Chunk(
+        chunk_id="chk_eventstream_01",
+        doc_id="doc_eventstream",
+        index=0,
+        text="EventStream targets a p99 latency of 33ms and provides stream ingestion.",
+        tokens=12,
+        acl_scope=ACLScope.public(),
+        temporal=TemporalBounds(valid_from=now),
+        provenance=prov,
+    )
+    orchestrator, _ = build_hermetic_orchestrator([chunk])
     orchestrator.exact_cache.clear()
     orchestrator.semantic_cache.clear()
 

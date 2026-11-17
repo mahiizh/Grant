@@ -300,7 +300,9 @@ class FakeGraphRetriever:
                 merged = existing.model_copy(
                     update={
                         "acl_scope": existing.acl_scope.union(e.acl_scope),
-                        "source_chunk_ids": list(set(existing.source_chunk_ids + e.source_chunk_ids)),
+                        "source_chunk_ids": list(
+                            set(existing.source_chunk_ids + e.source_chunk_ids)
+                        ),
                     }
                 )
                 self._entities[e.entity_id] = merged

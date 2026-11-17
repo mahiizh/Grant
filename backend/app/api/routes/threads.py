@@ -311,13 +311,15 @@ async def send_message(
         created_at=now,
     )
     session.add(user_record)
+    if user_record not in thread.messages:
+        thread.messages.append(user_record)
     await session.flush()
 
-    # Build chat history for rewriting
+    # Build chat history for rewriting from prior turns
     history = [
         {"role": m.role, "content": m.content}
         for m in thread.messages
-        if m.role in ("user", "assistant")
+        if m.role in ("user", "assistant") and m.message_id != user_msg_id
     ]
 
     orchestrator = get_orchestrator()
@@ -559,6 +561,8 @@ async def send_message(
         created_at=datetime.now(UTC),
     )
     session.add(asst_record)
+    if asst_record not in thread.messages:
+        thread.messages.append(asst_record)
     await session.flush()
     await session.refresh(asst_record)
 
