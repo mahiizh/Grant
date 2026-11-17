@@ -214,6 +214,8 @@ def _print_report(report: BenchmarkReport) -> None:
     print("=" * 88)
     print(f"Golden evaluation report (config={report.retrieval_config}, split={report.split})")
     print("=" * 88)
+    if report.git_sha:
+        print(f"Git commit:       {report.git_sha}")
     print(f"Questions:        {report.total_questions}")
     print(f"Router accuracy:  {report.overall_router_accuracy:.4f}")
     print(f"Cache hit rate:   {report.cache_hit_rate:.4f}")
@@ -274,6 +276,7 @@ def _print_report(report: BenchmarkReport) -> None:
 def _write_json_report(report: BenchmarkReport, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     payload: dict[str, Any] = {
+        "git_sha": report.git_sha,
         "retrieval_config": report.retrieval_config,
         "split": report.split,
         "total_questions": report.total_questions,

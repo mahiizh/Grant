@@ -1,5 +1,6 @@
 import asyncio
 import math
+import subprocess
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -48,6 +49,7 @@ class BenchmarkReport:
     overall_router_accuracy: float
     split: str = "all"
     retrieval_config: str = "full"
+    git_sha: str | None = None
     category_scores: dict[str, dict[str, float]] = field(default_factory=dict)
     category_operational: dict[str, dict[str, float]] = field(default_factory=dict)
     per_question: list[dict[str, Any]] = field(default_factory=list)
@@ -224,6 +226,15 @@ class EvaluationRunner:
             "retrieved_chunk_ids": retrieved_chunk_ids,
             "retrieved_doc_ids": retrieved_doc_ids,
             "retrieved_context": [ev.text for ev in evidence],
+            "evidence_details": [
+                {
+                    "chunk_id": ev.chunk_id,
+                    "score": ev.score,
+                    "method": ev.retrieval_method,
+                    "path": ev.path,
+                }
+                for ev in evidence
+            ],
             "expected_chunk_ids": sorted(target_chunks),
             "expected_doc_ids": sorted(target_docs),
             "chunk_metrics": chunk_metrics,
@@ -405,11 +416,20 @@ class EvaluationRunner:
         judge_threshold = self.judge.threshold if self.judge is not None else None
         judge_errors = sum(1 for row in per_question if (row.get("judge") or {}).get("error"))
 
+        git_sha: str | None = None
+        try:
+            git_sha = subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, text=True
+            ).strip()
+        except Exception:
+            git_sha = None
+
         return BenchmarkReport(
             total_questions=total,
             overall_router_accuracy=router_report.accuracy,
             split=split or "all",
             retrieval_config=self.retrieval_config,
+            git_sha=git_sha,
             category_scores=category_scores,
             category_operational=category_operational,
             per_question=per_question,
@@ -425,6 +445,7 @@ class EvaluationRunner:
             judge_model=judge_model,
             judge_threshold=judge_threshold,
             summary={
+                "git_sha": git_sha,
                 "split": split or "all",
                 "retrieval_config": self.retrieval_config,
                 "router_accuracy": router_report.accuracy,

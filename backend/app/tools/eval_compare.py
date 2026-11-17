@@ -100,6 +100,9 @@ def _print_comparison(
     print(
         f"Retrieval ablation comparison (split={split}) — cell = point estimate [95% bootstrap CI]"
     )
+    git_shas = {report.git_sha for report in reports.values() if report.git_sha}
+    if git_shas:
+        print(f"Git commit(s): {', '.join(sorted(git_shas))}")
     if judge_enabled:
         models = sorted({report.judge_model for report in reports.values() if report.judge_model})
         if agreement is not None:
