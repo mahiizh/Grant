@@ -123,3 +123,17 @@ async def test_end_to_end_corpus_ingestion(test_session: AsyncSession) -> None:
         assert stored_doc is not None
         assert stored_doc.title == summary.title
         assert len(stored_doc.chunks) == summary.chunk_count
+
+
+def test_pdf_upload_rejected_with_415() -> None:
+    from fastapi.testclient import TestClient
+
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.post(
+        "/api/v1/documents",
+        files={"file": ("unsupported_spec.pdf", b"%PDF-1.4 dummy", "application/pdf")},
+    )
+    assert response.status_code == 415
+    assert "PDF upload is not supported" in response.json()["detail"]

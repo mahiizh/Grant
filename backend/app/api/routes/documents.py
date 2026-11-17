@@ -65,6 +65,14 @@ async def upload_document(
     file: UploadFile = File(...),
 ) -> DocumentUploadResponse:
     """Upload document for parsing, chunking, outbox staging, and automatic indexing."""
+    filename = (file.filename or "").lower()
+    content_type = (file.content_type or "").lower()
+    if filename.endswith(".pdf") or content_type == "application/pdf":
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail="PDF upload is not supported. Please upload Markdown (.md) or CSV (.csv) documents.",
+        )
+
     content_bytes = await file.read()
     content_str = content_bytes.decode("utf-8", errors="replace")
 
