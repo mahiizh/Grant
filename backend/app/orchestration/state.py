@@ -8,8 +8,16 @@ from app.domain import Evidence
 # ``full`` is the production pipeline: router-directed graph traversal plus
 # hybrid RRF retrieval plus CrossEncoder reranking. The other three bypass the
 # router's retrieval branch and call one retriever directly.
-RetrievalConfig = Literal["dense", "sparse", "hybrid", "full"]
-RETRIEVAL_CONFIGS: tuple[RetrievalConfig, ...] = ("dense", "sparse", "hybrid", "full")
+# ``graph_forced`` bypasses the router and always takes the graph branch, then
+# uses the same RRF pool and CrossEncoder reranking as ``full``.
+RetrievalConfig = Literal["dense", "sparse", "hybrid", "full", "graph_forced"]
+RETRIEVAL_CONFIGS: tuple[RetrievalConfig, ...] = (
+    "dense",
+    "sparse",
+    "hybrid",
+    "full",
+    "graph_forced",
+)
 
 
 class RAGState(TypedDict, total=False):

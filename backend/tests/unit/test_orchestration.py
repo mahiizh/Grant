@@ -13,6 +13,7 @@ from app.graph.retrievers import GraphRetriever as RealGraphRetriever
 from app.main import app
 from app.orchestration.router import QueryRouter
 from app.orchestration.workflow import RAGOrchestrator
+from app.retrieval.filters import RetrievalFilter
 from app.retrieval.hybrid import HybridRetriever as RealHybridRetriever
 from tests.fakes.fake_redis import FakeRedis
 from tests.fakes.in_memory_retrievers import (
@@ -166,6 +167,45 @@ async def test_orchestrator_retrieval_configs(config: str, method: str) -> None:
     assert state["route"] == "vector"
     assert state["evidence"]
     assert {ev.retrieval_method for ev in state["evidence"]} == {method}
+
+
+class CountingGraphRetriever(GraphRetriever):
+    """Fake graph retriever that records every traversal entry."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.search_entities_calls = 0
+
+    def search_entities(
+        self,
+        query: str,
+        top_k: int = 5,
+        filter_criteria: RetrievalFilter | None = None,
+    ) -> Any:
+        self.search_entities_calls += 1
+        return super().search_entities(query, top_k=top_k, filter_criteria=filter_criteria)
+
+
+@pytest.mark.anyio
+async def test_graph_forced_enters_graph_branch_on_every_row() -> None:
+    orchestrator = build_test_orchestrator(cache_enabled=False)
+    graph = CountingGraphRetriever()
+    orchestrator.graph_retriever = cast(RealGraphRetriever, graph)
+
+    queries = [
+        "Which database acts as the single source of truth?",
+        "What was the company ARR for fiscal year 2025?",
+        "Who leads the team responsible for the database where outbox events are staged?",
+        "Summarize the responsibilities across all engineering teams",
+    ]
+    for query in queries:
+        state = await orchestrator.run(query=query, retrieval_config="graph_forced")
+        assert state["retrieval_config"] == "graph_forced"
+        assert any(span["name"] == "Graph Traversal: Cypher BFS" for span in state.get("spans", []))
+
+    # Includes a router-abstain row: the router decision is still recorded but
+    # does not prevent graph traversal in this config.
+    assert graph.search_entities_calls == len(queries)
 
 
 @pytest.mark.anyio

@@ -312,8 +312,10 @@ class RAGOrchestrator:
                 )
                 return done({"evidence": hybrid_only, "path": None, "spans": spans})
 
-            # Route to Graph if multi-hop detected
-            if route == "graph":
+            # Route to Graph if multi-hop detected. ``graph_forced`` bypasses
+            # the router decision and takes this branch on every row while
+            # keeping the same hybrid RRF pool and CrossEncoder reranking.
+            if config == "graph_forced" or route == "graph":
                 discovered_path: list[str] | None = None
                 matched_entities = await _maybe_await(
                     self.graph_retriever.search_entities(
@@ -571,6 +573,8 @@ class RAGOrchestrator:
 
         def route_decision(state: RAGState) -> str:
             route = state.get("route", "vector")
+            if state.get("retrieval_config") == "graph_forced":
+                return "cache_step"
             if route == "small_talk":
                 return "small_talk_step"
             if route == "abstain":
@@ -581,6 +585,8 @@ class RAGOrchestrator:
         workflow.add_edge("small_talk_step", END)
 
         def cache_decision(state: RAGState) -> str:
+            if state.get("retrieval_config") == "graph_forced":
+                return "retrieve_step"
             if state.get("is_cached", False):
                 return END
             return "retrieve_step"
