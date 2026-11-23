@@ -137,6 +137,7 @@ def test_duplicate_question_ids_are_rejected() -> None:
     question = GoldenQuestion(
         id="dup_001",
         category="fact",
+        cluster_id="hand_dup_001",
         query="What is the p99 target?",
         optimal_strategy="vector",
     )
@@ -146,8 +147,9 @@ def test_duplicate_question_ids_are_rejected() -> None:
 
 def test_duplicate_ids_across_files_are_rejected(tmp_path: Path) -> None:
     payload = (
-        '{"id": "dup_002", "category": "fact", "split": "test", '
-        '"query": "What is the p99 target?", "optimal_strategy": "vector"}'
+        '{"id": "dup_002", "category": "fact", "cluster_id": "hand_dup_002", '
+        '"split": "test", "query": "What is the p99 target?", '
+        '"optimal_strategy": "vector"}'
     )
     (tmp_path / "a.jsonl").write_text(payload + "\n", encoding="utf-8")
     (tmp_path / "b.jsonl").write_text(payload + "\n", encoding="utf-8")

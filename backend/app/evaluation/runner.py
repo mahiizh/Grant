@@ -216,6 +216,7 @@ class EvaluationRunner:
         return {
             "id": question.id,
             "category": question.category,
+            "cluster_id": question.cluster_id,
             "split": question.split,
             "query": question.query,
             "expected_answer": question.expected_answer,

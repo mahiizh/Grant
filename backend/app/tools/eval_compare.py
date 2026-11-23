@@ -14,7 +14,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from app.evaluation.bootstrap import paired_bootstrap_difference
+from app.evaluation.bootstrap import (
+    cluster_paired_bootstrap_difference,
+    cluster_paired_bootstrap_sd,
+    paired_bootstrap_difference,
+    paired_sd,
+)
 from app.evaluation.calibration import load_agreement
 from app.evaluation.datasets import SplitType
 from app.evaluation.runner import BenchmarkReport, diff_metrics
@@ -159,28 +164,32 @@ def _print_comparison(
     baseline = RETRIEVAL_CONFIGS[0]
     print()
     print(
-        f"Paired difference vs {baseline} (config minus {baseline}; "
-        "an interval that excludes 0 is evidence of a real difference):"
+        f"Paired difference vs {baseline} (config minus {baseline}). "
+        "Each cell shows the row-bootstrap CI (n=rows) then the cluster-bootstrap "
+        "CI (n_clusters=resampling clusters); both use 95% percentile intervals."
     )
     diff_metric_names = diff_metrics(judge_enabled)
-    print("| config | " + " | ".join(diff_metric_names) + " |")
-    print("|---|" + "|".join("---" for _ in diff_metric_names) + "|")
-    baseline_values = {
-        metric: _values_by_id(reports[baseline], metric) for metric in diff_metric_names
-    }
-    for config in RETRIEVAL_CONFIGS[1:]:
-        diff_cells: list[str] = []
-        for metric in diff_metric_names:
-            values = _values_by_id(reports[config], metric)
-            shared = sorted(set(values) & set(baseline_values[metric]))
-            interval = paired_bootstrap_difference(
-                [values[question_id] for question_id in shared],
-                [baseline_values[metric][question_id] for question_id in shared],
+    for metric in diff_metric_names:
+        print()
+        print(f"**{metric}**")
+        print("| category | " + " | ".join(RETRIEVAL_CONFIGS[1:]) + " |")
+        print("|---|" + "|".join("---" for _ in RETRIEVAL_CONFIGS[1:]) + "|")
+        for category in [*categories, None]:
+            cells = [
+                _paired_cell(reports, config, baseline, metric, category)
+                for config in RETRIEVAL_CONFIGS[1:]
+            ]
+            label = "**overall**" if category is None else category
+            print(f"| {label} | " + " | ".join(cells) + " |")
+
+        print()
+        print(f"Observed paired SD of {metric} (rows / cluster-bootstrap):")
+        for config in RETRIEVAL_CONFIGS[1:]:
+            print(
+                f"  {config:12s} "
+                f"row_sd={_paired_sd(reports, config, baseline, metric):.4f}  "
+                f"cluster_bootstrap_sd={_cluster_sd(reports, config, baseline, metric):.4f}"
             )
-            diff_cells.append(
-                f"{interval.mean:+.3f}[{interval.low:+.2f},{interval.high:+.2f}] (n={interval.n})"
-            )
-        print(f"| {config} | " + " | ".join(diff_cells) + " |")
 
     print()
     print("Operational (whole split; retrieval latency excludes LLM and 429 backoff):")
@@ -205,6 +214,73 @@ def _values_by_id(report: BenchmarkReport, metric: str) -> dict[str, float]:
         if value is not None:
             values[str(row["id"])] = value
     return values
+
+
+def _clusters_by_id(report: BenchmarkReport) -> dict[str, str]:
+    return {
+        str(row["id"]): str(row.get("cluster_id") or f"hand_{row['id']}")
+        for row in report.per_question
+    }
+
+
+def _aligned_pair(
+    reports: dict[RetrievalConfig, BenchmarkReport],
+    config: RetrievalConfig,
+    baseline: RetrievalConfig,
+    metric: str,
+    category: str | None,
+) -> tuple[list[float], list[float], list[str]]:
+    left = _values_by_id(reports[config], metric)
+    right = _values_by_id(reports[baseline], metric)
+    clusters = _clusters_by_id(reports[baseline])
+    categories_by_id = {str(row["id"]): row["category"] for row in reports[config].per_question}
+    shared = [
+        question_id
+        for question_id in sorted(set(left) & set(right))
+        if category is None or categories_by_id.get(question_id) == category
+    ]
+    return (
+        [left[question_id] for question_id in shared],
+        [right[question_id] for question_id in shared],
+        [clusters.get(question_id, f"hand_{question_id}") for question_id in shared],
+    )
+
+
+def _paired_cell(
+    reports: dict[RetrievalConfig, BenchmarkReport],
+    config: RetrievalConfig,
+    baseline: RetrievalConfig,
+    metric: str,
+    category: str | None,
+) -> str:
+    left, right, clusters = _aligned_pair(reports, config, baseline, metric, category)
+    row_interval = paired_bootstrap_difference(left, right)
+    cluster_interval = cluster_paired_bootstrap_difference(left, right, clusters)
+    return (
+        f"{row_interval.mean:+.3f} row[{row_interval.low:+.2f},{row_interval.high:+.2f}] "
+        f"n={row_interval.n}; cluster[{cluster_interval.low:+.2f},{cluster_interval.high:+.2f}] "
+        f"n_clusters={cluster_interval.n}"
+    )
+
+
+def _paired_sd(
+    reports: dict[RetrievalConfig, BenchmarkReport],
+    config: RetrievalConfig,
+    baseline: RetrievalConfig,
+    metric: str,
+) -> float:
+    left, right, _ = _aligned_pair(reports, config, baseline, metric, None)
+    return paired_sd(left, right)
+
+
+def _cluster_sd(
+    reports: dict[RetrievalConfig, BenchmarkReport],
+    config: RetrievalConfig,
+    baseline: RetrievalConfig,
+    metric: str,
+) -> float:
+    left, right, clusters = _aligned_pair(reports, config, baseline, metric, None)
+    return cluster_paired_bootstrap_sd(left, right, clusters)
 
 
 def _write_reports(

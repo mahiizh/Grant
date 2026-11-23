@@ -16,6 +16,9 @@ class GoldenQuestion(BaseModel):
 
     id: str
     category: CategoryType
+    # Resampling cluster: generated rows share a template family, hand-written
+    # rows share their source document. Required so no row escapes clustering.
+    cluster_id: str
     split: SplitType = "dev"
     query: str
     expected_answer: str | None = None

@@ -5,7 +5,14 @@ import os
 
 import pytest
 
-from app.evaluation.bootstrap import bootstrap_interval, paired_bootstrap_difference
+from app.evaluation.bootstrap import (
+    bootstrap_interval,
+    cluster_bootstrap_interval,
+    cluster_paired_bootstrap_difference,
+    cluster_paired_bootstrap_sd,
+    paired_bootstrap_difference,
+    paired_sd,
+)
 from app.evaluation.calibration import cohen_kappa, load_agreement
 from app.evaluation.datasets import GoldenDataset, GoldenQuestion
 from app.evaluation.judge import JudgeVerdict
@@ -33,6 +40,33 @@ def test_paired_difference_uses_aligned_observations() -> None:
     assert interval.n == len(left)
     assert interval.mean == pytest.approx(0.75)
     assert interval.low > 0.0
+
+
+def test_cluster_bootstrap_reports_effective_cluster_count() -> None:
+    values = [1.0, 1.0, 0.0, 0.0]
+    clusters = ["template_a", "template_a", "template_b", "template_b"]
+    first = cluster_bootstrap_interval(values, clusters, iterations=500, seed=7)
+    second = cluster_bootstrap_interval(values, clusters, iterations=500, seed=7)
+
+    assert first == second
+    assert first.n == 2  # clusters, not the four rows
+    assert first.mean == pytest.approx(0.5)
+    with pytest.raises(ValueError, match="same length"):
+        cluster_bootstrap_interval(values, clusters[:1])
+
+
+def test_cluster_paired_difference_and_bootstrap_sd() -> None:
+    left = [1.0, 1.0, 0.0, 0.0]
+    right = [0.0, 0.0, 0.0, 0.0]
+    clusters = ["doc_a", "doc_a", "doc_b", "doc_b"]
+
+    interval = cluster_paired_bootstrap_difference(left, right, clusters, iterations=500, seed=11)
+    sd = cluster_paired_bootstrap_sd(left, right, clusters, iterations=500, seed=11)
+
+    assert interval.n == 2
+    assert interval.mean == pytest.approx(0.5)
+    assert sd > 0.0
+    assert paired_sd(left, right) == pytest.approx(0.5774, abs=0.0001)
 
 
 def test_cohen_kappa_matches_known_values() -> None:
@@ -148,3 +182,18 @@ def test_generated_golden_rows_are_grounded() -> None:
     dataset = GoldenDataset.load_from_dir(REPO_ROOT / "evals" / "golden")
     assert not dataset.missing_chunk_ids(chunk_ids)
     assert dataset.split_summary()["test"] >= 120
+
+
+def test_every_golden_row_has_a_resampling_cluster() -> None:
+    dataset = GoldenDataset.load_from_dir(REPO_ROOT / "evals" / "golden")
+    rows = dataset.questions
+    assert len(rows) == 240
+    assert len({row.cluster_id for row in rows}) >= 15
+    for row in rows:
+        assert row.cluster_id
+        if row.id.startswith("gen_"):
+            assert row.cluster_id.startswith("gen_")
+        elif row.expected_doc_ids:
+            assert row.cluster_id == row.expected_doc_ids[0]
+        else:
+            assert row.cluster_id == f"hand_{row.id}"

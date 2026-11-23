@@ -5,6 +5,7 @@ hand edit can preserve every document/chunk count while changing the text hash
 embedded in a chunk id, which would leave the committed golden rows stale.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,27 @@ from app.tools import generate_eval_assets as generator
 
 def test_check_passes_on_committed_assets() -> None:
     assert generator.main(["--check"]) == 0
+
+
+def test_check_detects_cluster_id_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _redirect_generator(monkeypatch, tmp_path)
+    assert generator.main([]) == 0
+
+    rows = [
+        json.loads(line)
+        for line in generator.GOLDEN_PATH.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    rows[0]["cluster_id"] = "drifted_cluster"
+    generator.GOLDEN_PATH.write_text(
+        "\n".join(json.dumps(row, ensure_ascii=False) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+
+    assert generator.main(["--check"]) == 1
 
 
 def _redirect_generator(monkeypatch: pytest.MonkeyPatch, root: Path) -> None:

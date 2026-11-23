@@ -33,6 +33,11 @@ Test rows per category (the gate requires ≥20 in each):
 | `paraphrase` | 22 |
 | `multi_turn` | 25 |
 
+Every row also carries a `cluster_id`, the unit used for cluster-paired
+bootstrap intervals. Generated rows cluster by template family; hand-written
+rows cluster by their first expected source document (or by their own id when
+no document is expected). No new rows were added to attach this metadata.
+
 The split is a property of the row, not of the file, so a row can be moved
 between splits without changing the file layout. `make eval` reads the **corpus**
 document/chunk counts from `corpus/synthetic/manifest.json`; golden row counts

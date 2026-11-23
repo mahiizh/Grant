@@ -543,6 +543,7 @@ def generate_corpus() -> dict[str, dict[str, str]]:
 def _row(
     row_id: str,
     category: str,
+    cluster_id: str,
     split: str,
     query: str,
     expected_answer: str | None,
@@ -555,6 +556,7 @@ def _row(
     payload: dict[str, object] = {
         "id": row_id,
         "category": category,
+        "cluster_id": cluster_id,
         "split": split,
         "query": query,
         "expected_answer": expected_answer,
@@ -598,6 +600,7 @@ def _fact_rows(index: dict[str, dict[str, str]]) -> list[dict[str, object]]:
             _row(
                 f"gen_fact_{position + 1:03d}",
                 "fact",
+                "gen_fact_sla_v2" if service in versioned else "gen_fact_sla",
                 split,
                 query,
                 answer,
@@ -627,6 +630,7 @@ def _multi_hop_rows(index: dict[str, dict[str, str]]) -> list[dict[str, object]]
             _row(
                 f"gen_multi_hop_{position + 1:03d}",
                 "multi_hop",
+                "gen_multihop_dependency_owner",
                 split,
                 f"Which team owns {dependency.name}, the service that {service.name} depends on?",
                 f"{team.name} owns {dependency.name}.",
@@ -669,11 +673,13 @@ def _global_rows(index: dict[str, dict[str, str]]) -> list[dict[str, object]]:
                 [team.name],
             ),
         ]
-        for query, answer, heading, entities in questions:
+        cluster_ids = ("gen_global_ownership", "gen_global_lead", "gen_global_count")
+        for question_index, (query, answer, heading, entities) in enumerate(questions):
             rows.append(
                 _row(
                     f"gen_global_{position + 1:03d}",
                     "global",
+                    cluster_ids[question_index],
                     splits[position],
                     query,
                     answer,
@@ -694,10 +700,16 @@ def _unanswerable_rows() -> list[dict[str, object]]:
         "Which team owns {name}?",
         "Which runbook covers {name}?",
     )
+    cluster_ids = (
+        "gen_unanswerable_sla",
+        "gen_unanswerable_owner",
+        "gen_unanswerable_runbook",
+    )
     return [
         _row(
             f"gen_unanswerable_{position + 1:03d}",
             "unanswerable",
+            cluster_ids[position % len(cluster_ids)],
             split,
             templates[position % len(templates)].format(name=name),
             None,
@@ -724,6 +736,11 @@ def _paraphrase_rows(
         "What latency target applies to {name}?",
         "State the error budget and p99 target for {name}.",
     )
+    cluster_ids = (
+        "gen_paraphrase_p99",
+        "gen_paraphrase_latency",
+        "gen_paraphrase_error_budget",
+    )
 
     for position, (parent, split) in enumerate(zip(parents, splits, strict=True)):
         entities = cast(list[str], parent["expected_entities"])
@@ -733,6 +750,7 @@ def _paraphrase_rows(
             _row(
                 f"gen_paraphrase_{position + 1:03d}",
                 "paraphrase",
+                cluster_ids[position % len(cluster_ids)],
                 split,
                 templates[position % len(templates)].format(name=service.name),
                 cast(str | None, parent["expected_answer"]),
@@ -761,6 +779,7 @@ def _multi_turn_rows(
             _row(
                 f"gen_multi_turn_{position + 1:03d}",
                 "multi_turn",
+                "gen_multi_turn_p99",
                 split,
                 "What is its p99 latency SLA?",
                 parent_answer,
@@ -846,6 +865,9 @@ def _check_assets() -> int:
         index[doc_id] = _chunk_ids_by_heading(content, source_path)
 
     expected_rows = build_golden(index)
+    for number, row in enumerate(expected_rows, start=1):
+        if not row.get("cluster_id"):
+            mismatches.append(f"generated golden row {number} has no cluster_id")
     expected_lines = [json.dumps(row, ensure_ascii=False) for row in expected_rows]
     committed_lines = [
         line for line in GOLDEN_PATH.read_text(encoding="utf-8").splitlines() if line.strip()
