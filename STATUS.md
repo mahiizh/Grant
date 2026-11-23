@@ -475,14 +475,16 @@ decision are recorded below rather than silently relabelled.
 
 - Independent relabel of the 30 calibration answers. Current labels are implementer-authored, so κ
   is provisional.
-- Test-only ≥150 questions. Current split is 105 dev / 135 test; the gate enforces total ≥150, test
-  ≥120, and ≥20 per test category.
-- Broader grounding for single-word names (`Reconciler`, `Payments`, `Alice`). The CamelCase rule is
-  deliberately narrow; a naive capitalized-word rule false-abstains.
-- Prefetch was not varied. The hybrid multi-hop deficit is explained by sparse recall + no reranker,
-  not by a prefetch defect.
-- Live rerun of the four-config table on the expanded 135-row test split, with paired CIs. No new
-  "beats" claim is supported until then.
+- Test-only ≥150 questions is **dropped as a literal target** by decision. The current 105 dev /
+  135 test split stands for Phase A; Phase C adds rows per measured category power, not to hit a
+  fixed count. Gate thresholds remain total ≥150, test ≥120, and ≥20 per test category.
+- Broader single-word grounding was addressed by `119c50f` (contextual single-word entities) and
+  multi-turn/entity/awaitable graph path fixes in `289ed98`. Any remaining failure is a measured
+  retrieval issue, not an open grounding feature request.
+- Prefetch and RRF fusion were made configurable in `ea1f58a`; the prefetch defect recorded here is
+  resolved. No prefetch tuning is planned.
+- Live five-config rerun on the expanded 135-row test split with paired row- and cluster-bootstrap
+  CIs remains the open Phase A experiment (§0.8). No new "beats" claim is supported until then.
 
 **Verification at this follow-up:** `generate_eval_assets --check` reports 185 docs / 845 chunks /
 210 generated rows and compares bytes/ids; generator tests 3 passed; `ruff check` clean;

@@ -41,8 +41,10 @@ regenerates the rows in memory and fails if the committed bytes or chunk ids
 drift.
 
 The gate enforces total ≥150 rows, test ≥120, and ≥20 in every test category.
-The original request asked for ≥150 **test** rows; the current 105 dev / 135 test
-split does not meet that test-only target (see `STATUS.md` §0.3).
+The literal ≥150 **test** row target has been dropped by decision: the current
+105 dev / 135 test split is used for the Phase A baseline, and Phase C will add
+rows only where the preregistered per-category power calculation requires them
+(see `STATUS.md` §0.3 and §0.8). Gate thresholds are unchanged.
 
 ## Generated rows
 
