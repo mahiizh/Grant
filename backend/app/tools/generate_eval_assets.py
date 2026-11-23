@@ -37,6 +37,14 @@ MANIFEST_PATH = SYNTHETIC_DIR / "manifest.json"
 GENERATOR = "app.tools.generate_eval_assets"
 SEED = 20260412
 
+# Phase C row additions from the preregistered Phase A power table (STATUS §0.8).
+# The hand-authored set already contributes 3 test `fact` rows and 2 test
+# `multi_hop` rows, so these generated counts lift the totals to n_needed.
+PHASE_C_FACT_TEST_ROWS = 45
+PHASE_C_FACT_CLUSTERS = 8
+PHASE_C_MULTI_HOP_TEST_ROWS = 201
+PHASE_C_MULTI_HOP_CLUSTERS = 19
+
 
 @dataclass(frozen=True)
 class Team:
@@ -240,6 +248,46 @@ ABSENT_NAMES: tuple[str, ...] = (
     "CedarEngine",
     "MapleStore",
     "AspenRouter",
+)
+
+# Phase C template families. Each cluster id is one family, so a cluster
+# bootstrap resamples phrasings together instead of treating near-duplicates as
+# independent rows.
+PHASE_C_FACT_PROBES: tuple[tuple[str, str, str], ...] = (
+    ("gen_fact_p99_direct", "What p99 latency target is documented for {name}?", "p99"),
+    ("gen_fact_sla_restatement", "State the p99 SLA for {name}.", "p99"),
+    ("gen_fact_error_budget", "What is the documented error budget for {name}?", "budget"),
+    ("gen_fact_monthly_budget", "What monthly error budget applies to {name}?", "budget"),
+    ("gen_fact_sla_pair", "Give the p99 target and error budget for {name}.", "both"),
+    (
+        "gen_fact_latency_target",
+        "According to its SLA, what latency target does {name} use?",
+        "p99",
+    ),
+    ("gen_fact_budget_lookup", "Find the error budget listed for {name}.", "budget"),
+    ("gen_fact_p99_lookup", "Find the p99 latency figure for {name}.", "p99"),
+)
+
+PHASE_C_MULTI_HOP_TEMPLATES: tuple[str, ...] = (
+    "Which team owns {dependency}, the service that {service} depends on?",
+    "Which team is responsible for {dependency}, an upstream dependency of {service}?",
+    "Who owns the upstream service {dependency} used by {service}?",
+    "What team maintains the dependency {dependency} of {service}?",
+    "Which team's scope includes {dependency}, which {service} relies on?",
+    "Find the owning team for {dependency} in {service}'s dependency chain.",
+    "When {service} calls {dependency}, which team owns that service?",
+    "Who is accountable for {dependency}, upstream of {service}?",
+    "Which team should be paged for {dependency}, the dependency of {service}?",
+    "What team owns the service {service} depends on for upstream data?",
+    "Identify the owner of {dependency} as used by {service}.",
+    "Which team is listed as the owner of {dependency} in {service}'s upstream path?",
+    "For the {service} dependency chain, which team owns {dependency}?",
+    "Which engineering team owns {dependency}, the upstream service of {service}?",
+    "Who owns the service on which {service} depends?",
+    "Which team's directory covers {dependency}, a dependency of {service}?",
+    "What is the owning team of {dependency} for {service}?",
+    "Trace {service}'s dependency to {dependency}: which team owns it?",
+    "Which team has operational ownership of {dependency} for {service}?",
 )
 
 
@@ -797,6 +845,85 @@ def _multi_turn_rows(
     return rows
 
 
+def _phase_c_fact_rows(index: dict[str, dict[str, str]]) -> list[dict[str, object]]:
+    """Powered `fact` rows added after the frozen Phase A baseline."""
+    rows: list[dict[str, object]] = []
+    versioned = [service for service in SERVICES if SERVICES.index(service) % 6 == 0]
+    standard = [service for service in SERVICES if service not in versioned]
+    assert len(PHASE_C_FACT_PROBES) == PHASE_C_FACT_CLUSTERS
+
+    for position in range(PHASE_C_FACT_TEST_ROWS):
+        service = standard[position % len(standard)]
+        cluster_id, template, answer_kind = PHASE_C_FACT_PROBES[position % len(PHASE_C_FACT_PROBES)]
+        p99 = f"{service.p99_ms}ms"
+        budget = f"{service.error_budget_pct}%"
+        if answer_kind == "budget":
+            answer = f"{service.name} has an error budget of {budget} per 30 days."
+        elif answer_kind == "both":
+            answer = (
+                f"{service.name} targets a p99 latency of {p99} and an error budget of "
+                f"{budget} per 30 days."
+            )
+        else:
+            answer = f"{service.name} targets a p99 latency of {p99}."
+        rows.append(
+            _row(
+                f"gen_fact_phase_c_{position + 1:03d}",
+                "fact",
+                cluster_id,
+                "test",
+                template.format(name=service.name),
+                answer,
+                [f"doc_service_{service.slug}"],
+                [index[f"doc_service_{service.slug}"]["SLA"]],
+                [service.name, p99],
+                "vector",
+            )
+        )
+    return rows
+
+
+def _phase_c_multi_hop_rows(index: dict[str, dict[str, str]]) -> list[dict[str, object]]:
+    """Powered `multi_hop` rows added after the frozen Phase A baseline."""
+    rows: list[dict[str, object]] = []
+    candidates = [
+        service
+        for service in SERVICES
+        if TEAMS_BY_SLUG[service.team].slug
+        != TEAMS_BY_SLUG[SERVICES_BY_NAME[service.dependency].team].slug
+    ]
+    assert len(PHASE_C_MULTI_HOP_TEMPLATES) == PHASE_C_MULTI_HOP_CLUSTERS
+
+    for position in range(PHASE_C_MULTI_HOP_TEST_ROWS):
+        service = candidates[position % len(candidates)]
+        dependency = SERVICES_BY_NAME[service.dependency]
+        team = TEAMS_BY_SLUG[dependency.team]
+        template_index = position % len(PHASE_C_MULTI_HOP_TEMPLATES)
+        template = PHASE_C_MULTI_HOP_TEMPLATES[template_index]
+        rows.append(
+            _row(
+                f"gen_multi_hop_phase_c_{position + 1:03d}",
+                "multi_hop",
+                f"gen_multihop_upstream_owner_{template_index + 1:02d}",
+                "test",
+                template.format(
+                    service=service.name,
+                    dependency=dependency.name,
+                    team=team.name,
+                ),
+                f"{team.name} owns {dependency.name}.",
+                [f"doc_service_{service.slug}", f"doc_service_{dependency.slug}"],
+                [
+                    index[f"doc_service_{service.slug}"]["Dependencies"],
+                    index[f"doc_service_{dependency.slug}"]["Overview"],
+                ],
+                [dependency.name, team.name],
+                "graph",
+            )
+        )
+    return rows
+
+
 def build_golden(index: dict[str, dict[str, str]]) -> list[dict[str, object]]:
     """Return the generated golden rows without writing them."""
     fact_rows = _fact_rows(index)
@@ -807,6 +934,8 @@ def build_golden(index: dict[str, dict[str, str]]) -> list[dict[str, object]]:
         + _unanswerable_rows()
         + _paraphrase_rows(index, fact_rows)
         + _multi_turn_rows(index)
+        + _phase_c_fact_rows(index)
+        + _phase_c_multi_hop_rows(index)
     )
 
 

@@ -7,6 +7,7 @@ embedded in a chunk id, which would leave the committed golden rows stale.
 
 import json
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -15,6 +16,41 @@ from app.tools import generate_eval_assets as generator
 
 def test_check_passes_on_committed_assets() -> None:
     assert generator.main(["--check"]) == 0
+
+
+def _generated_index() -> dict[str, dict[str, str]]:
+    return {
+        doc_id: generator._chunk_ids_by_heading(
+            content,
+            f"corpus/synthetic/{doc_id}.md",
+        )
+        for doc_id, content in generator.build_corpus()
+    }
+
+
+def test_phase_c_rows_are_powered_grounded_and_isolated() -> None:
+    index = _generated_index()
+    rows = generator.build_golden(index)
+    fact = [row for row in rows if str(row["id"]).startswith("gen_fact_phase_c_")]
+    multi_hop = [row for row in rows if str(row["id"]).startswith("gen_multi_hop_phase_c_")]
+    chunk_ids = {chunk_id for headings in index.values() for chunk_id in headings.values()}
+
+    assert len(rows) == 456
+    assert len(fact) == generator.PHASE_C_FACT_TEST_ROWS == 45
+    assert len(multi_hop) == generator.PHASE_C_MULTI_HOP_TEST_ROWS == 201
+    assert len({row["cluster_id"] for row in fact}) == generator.PHASE_C_FACT_CLUSTERS
+    assert len({row["cluster_id"] for row in multi_hop}) == generator.PHASE_C_MULTI_HOP_CLUSTERS
+    assert all(row["split"] == "test" for row in [*fact, *multi_hop])
+    for row in [*fact, *multi_hop]:
+        assert set(cast(list[str], row["expected_chunk_ids"])) <= chunk_ids
+
+    paraphrase = [row for row in rows if row["category"] == "paraphrase"]
+    assert len(paraphrase) == 30
+    parents = [
+        parent for row in paraphrase for parent in cast(list[str], row.get("depends_on", []))
+    ]
+    assert parents
+    assert all(not parent.startswith("gen_fact_phase_c_") for parent in parents)
 
 
 def test_check_detects_cluster_id_drift(

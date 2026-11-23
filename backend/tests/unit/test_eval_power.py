@@ -204,7 +204,7 @@ def test_generated_golden_rows_are_grounded() -> None:
 def test_every_golden_row_has_a_resampling_cluster() -> None:
     dataset = GoldenDataset.load_from_dir(REPO_ROOT / "evals" / "golden")
     rows = dataset.questions
-    assert len(rows) == 240
+    assert len(rows) == 486
     assert len({row.cluster_id for row in rows}) >= 15
     for row in rows:
         assert row.cluster_id
@@ -214,3 +214,16 @@ def test_every_golden_row_has_a_resampling_cluster() -> None:
             assert row.cluster_id == row.expected_doc_ids[0]
         else:
             assert row.cluster_id == f"hand_{row.id}"
+
+
+def test_phase_c_test_counts_match_preregistered_power() -> None:
+    dataset = GoldenDataset.load_from_dir(REPO_ROOT / "evals" / "golden")
+    test_rows = [row for row in dataset.questions if row.split == "test"]
+
+    fact = [row for row in test_rows if row.category == "fact"]
+    multi_hop = [row for row in test_rows if row.category == "multi_hop"]
+    assert len(fact) == 68
+    assert len({row.cluster_id for row in fact}) == 12
+    assert len(multi_hop) == 223
+    assert len({row.cluster_id for row in multi_hop}) == 21
+    assert dataset.split_summary()["test"] == 381
