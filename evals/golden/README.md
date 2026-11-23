@@ -11,9 +11,9 @@ gate. Every row is grounded in the synthetic corpus under `corpus/`, and every
 | --- | --- | --- |
 | `questions.jsonl` | 20 | Hand-authored single-turn questions across `fact`, `multi_hop`, `global`, `unanswerable`, `paraphrase` |
 | `multi_turn.jsonl` | 10 | Hand-authored follow-ups that require pronoun/context resolution |
-| `generated_questions.jsonl` | 210 | Generated from `corpus/synthetic/`; same schema, grounded ids |
+| `generated_questions.jsonl` | 456 | Generated from `corpus/synthetic/`; same schema, grounded ids |
 
-Total: **240 rows**, **105 dev / 135 test**.
+Total: **486 rows**, **105 dev / 381 test**.
 
 ## Dev / test split
 
@@ -26,8 +26,8 @@ Test rows per category (the gate requires ≥20 in each):
 
 | category | test rows |
 | --- | --- |
-| `fact` | 23 |
-| `multi_hop` | 22 |
+| `fact` | 68 |
+| `multi_hop` | 223 |
 | `global` | 21 |
 | `unanswerable` | 22 |
 | `paraphrase` | 22 |
@@ -36,7 +36,8 @@ Test rows per category (the gate requires ≥20 in each):
 Every row also carries a `cluster_id`, the unit used for cluster-paired
 bootstrap intervals. Generated rows cluster by template family; hand-written
 rows cluster by their first expected source document (or by their own id when
-no document is expected). No new rows were added to attach this metadata.
+no document is expected). The metadata itself was attached without new rows; the
+Phase C rows below were added only for the preregistered power calculation.
 
 The split is a property of the row, not of the file, so a row can be moved
 between splits without changing the file layout. `make eval` reads the **corpus**
@@ -46,10 +47,10 @@ regenerates the rows in memory and fails if the committed bytes or chunk ids
 drift.
 
 The gate enforces total ≥150 rows, test ≥120, and ≥20 in every test category.
-The literal ≥150 **test** row target has been dropped by decision: the current
-105 dev / 135 test split is used for the Phase A baseline, and Phase C will add
-rows only where the preregistered per-category power calculation requires them
-(see `STATUS.md` §0.3 and §0.8). Gate thresholds are unchanged.
+The literal ≥150 **test** row target has been dropped by decision. Phase A used
+105 dev / 135 test; Phase C then added 246 test rows only to the ranked
+categories (45 `fact`, 201 `multi_hop`) per the preregistered power rule
+(see `STATUS.md` §0.3, §0.8, and §0.9). Gate thresholds are unchanged.
 
 ## Generated rows
 
@@ -70,6 +71,11 @@ They target the failure modes the hand-authored set cannot express at scale:
   the cache is never pre-seeded.
 - `multi_turn` — a parent question followed by "What is its p99 latency SLA?",
   with `expected_rewritten_query` recording the standalone form.
+
+Phase C rows are appended after the original 210 generated rows with ids
+`gen_fact_phase_c_*` and `gen_multi_hop_phase_c_*`. They use eight `fact` and 19
+`multi_hop` template-family clusters. Paraphrase parents remain the original
+30 generated fact rows, so adding `fact` rows does not grow an unranked category.
 
 ## Provenance and chunk ids
 
