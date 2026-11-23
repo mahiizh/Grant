@@ -49,6 +49,7 @@ class BenchmarkReport:
     overall_router_accuracy: float
     split: str = "all"
     retrieval_config: str = "full"
+    retrieval_only: bool = False
     git_sha: str | None = None
     category_scores: dict[str, dict[str, float]] = field(default_factory=dict)
     category_operational: dict[str, dict[str, float]] = field(default_factory=dict)
@@ -102,10 +103,12 @@ class EvaluationRunner:
         budget_usd: float | None = None,
         concurrency: int | None = None,
         retrieval_config: RetrievalConfig = "full",
+        retrieval_only: bool = False,
         judge: AnswerJudge | None = None,
     ) -> None:
         self.orchestrator = orchestrator or RAGOrchestrator()
         self.retrieval_config = retrieval_config
+        self.retrieval_only = retrieval_only
         self.judge = judge
         settings = get_settings()
         self.budget_usd = budget_usd if budget_usd is not None else settings.LLM_MAX_BUDGET_PER_RUN
@@ -293,6 +296,7 @@ class EvaluationRunner:
                     thread_history=question.thread_turns,
                     acl_scope=admin_scope,
                     retrieval_config=self.retrieval_config,
+                    retrieval_only=self.retrieval_only,
                 )
                 return self._score_question(question, state)
 
@@ -430,6 +434,7 @@ class EvaluationRunner:
             overall_router_accuracy=router_report.accuracy,
             split=split or "all",
             retrieval_config=self.retrieval_config,
+            retrieval_only=self.retrieval_only,
             git_sha=git_sha,
             category_scores=category_scores,
             category_operational=category_operational,

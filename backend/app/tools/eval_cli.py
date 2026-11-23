@@ -278,6 +278,7 @@ def _write_json_report(report: BenchmarkReport, path: Path) -> None:
     payload: dict[str, Any] = {
         "git_sha": report.git_sha,
         "retrieval_config": report.retrieval_config,
+        "retrieval_only": report.retrieval_only,
         "split": report.split,
         "total_questions": report.total_questions,
         "overall_router_accuracy": report.overall_router_accuracy,
@@ -339,6 +340,7 @@ async def run_config(
     budget_usd: float | None,
     concurrency: int | None,
     cache_enabled: bool = True,
+    retrieval_only: bool = False,
     judge_enabled: bool = False,
     judge_model: str | None = None,
     judge_threshold: float | None = None,
@@ -371,6 +373,7 @@ async def run_config(
         budget_usd=budget_usd,
         concurrency=concurrency,
         retrieval_config=config,
+        retrieval_only=retrieval_only,
         judge=judge,
     )
     try:
@@ -393,6 +396,7 @@ async def _run(args: argparse.Namespace) -> int:
         budget_usd=args.budget_usd,
         concurrency=args.concurrency,
         cache_enabled=not args.no_cache,
+        retrieval_only=args.retrieval_only,
         judge_enabled=args.judge or get_settings().EVAL_JUDGE_ENABLED,
         judge_model=args.judge_model,
         judge_threshold=args.judge_threshold,
@@ -440,6 +444,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--no-cache",
         action="store_true",
         help="Disable exact and semantic response caches for the whole run.",
+    )
+    parser.add_argument(
+        "--retrieval-only",
+        action="store_true",
+        help="Skip answer generation; multi-turn query rewrites still run.",
     )
     parser.add_argument(
         "--judge",

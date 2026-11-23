@@ -1,16 +1,18 @@
-"""Run the four retrieval configurations and print one honest comparison table.
+"""Run the five retrieval configurations and print one honest comparison table.
 
-This is the item-4 baseline harness. It ingests the corpus once into the
-isolated eval stores, then runs ``dense``, ``sparse``, ``hybrid`` and ``full``
-against the same golden split, prompt, model, and ACL scope. Each configuration
-gets a cold on-disk LLM cache and exact/semantic response caching is disabled
-for the whole run, so a cache hit cannot return an answer produced by another
-configuration.
+This is the item-6b baseline harness. It ingests the corpus once into the
+isolated eval stores, then runs ``dense``, ``sparse``, ``hybrid``, ``full`` and
+``graph_forced`` against the same golden split, ACL scope, and retrieval stack.
+Each configuration gets a cold on-disk LLM cache and exact/semantic response
+caching is disabled, so a cache hit cannot return results from another config.
+``--retrieval-only`` skips answer generation while retaining multi-turn
+query rewrites.
 """
 
 import argparse
 import asyncio
 import json
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -105,6 +107,10 @@ def _print_comparison(
     print(
         f"Retrieval ablation comparison (split={split}) — cell = point estimate [95% bootstrap CI]"
     )
+    if all(report.retrieval_only for report in reports.values()):
+        print("Mode: retrieval-only (no answer generation; multi-turn rewrites included)")
+    elif any(report.retrieval_only for report in reports.values()):
+        print("Mode: MIXED retrieval-only/generative reports — do not compare blindly")
     git_shas = {report.git_sha for report in reports.values() if report.git_sha}
     if git_shas:
         print(f"Git commit(s): {', '.join(sorted(git_shas))}")
@@ -160,6 +166,33 @@ def _print_comparison(
         + " | ".join(_cell(reports[config], None, answer_metrics) for config in RETRIEVAL_CONFIGS)
         + " |"
     )
+
+    print()
+    print("Router decisions for multi_hop rows (decision is recorded before any config bypass):")
+    print("| config | graph | vector | hybrid | abstain | graph_share |")
+    print("|---|---:|---:|---:|---:|---:|")
+    for config in RETRIEVAL_CONFIGS:
+        routes = Counter(
+            str(row["route"])
+            for row in reports[config].per_question
+            if row["category"] == "multi_hop"
+        )
+        total = sum(routes.values())
+        graph_share = routes["graph"] / total if total else 0.0
+        print(
+            f"| {config} | {routes['graph']} | {routes['vector']} | {routes['hybrid']} "
+            f"| {routes['abstain']} | {graph_share:.3f} |"
+        )
+    full_routes = Counter(
+        str(row["route"]) for row in reports["full"].per_question if row["category"] == "multi_hop"
+    )
+    full_total = sum(full_routes.values())
+    full_graph_share = full_routes["graph"] / full_total if full_total else 0.0
+    if full_graph_share < 0.5:
+        print(
+            f"FINDING: full routed only {full_routes['graph']}/{full_total} multi_hop rows "
+            "to graph (<50%). Router patterns were left unchanged in Phase A."
+        )
 
     baseline = RETRIEVAL_CONFIGS[0]
     print()
@@ -291,6 +324,7 @@ def _write_reports(
     for config, report in reports.items():
         payload: dict[str, Any] = {
             "retrieval_config": report.retrieval_config,
+            "retrieval_only": report.retrieval_only,
             "split": report.split,
             "total_questions": report.total_questions,
             "category_scores": report.category_scores,
@@ -330,6 +364,7 @@ async def _run(args: argparse.Namespace) -> int:
             budget_usd=args.budget_usd,
             concurrency=args.concurrency,
             cache_enabled=False,
+            retrieval_only=args.retrieval_only,
             judge_enabled=args.judge,
             judge_model=args.judge_model,
             judge_threshold=args.judge_threshold,
@@ -347,7 +382,7 @@ async def _run(args: argparse.Namespace) -> int:
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Compare dense, sparse, hybrid, and full retrieval configurations."
+        description="Compare dense, sparse, hybrid, full, and graph_forced retrieval configurations."
     )
     parser.add_argument(
         "--split",
@@ -371,6 +406,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--json-dir",
         default=None,
         help="Optional directory for one JSON report per configuration.",
+    )
+    parser.add_argument(
+        "--retrieval-only",
+        action="store_true",
+        help="Skip answer generation; multi-turn query rewrites still run.",
     )
     parser.add_argument(
         "--judge",

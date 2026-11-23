@@ -33,6 +33,8 @@ class RAGState(TypedDict, total=False):
     as_of_time: datetime | None
     prompt_version: str
     retrieval_config: RetrievalConfig
+    # Retrieval-only evals skip answer generation; multi-turn rewrites still run.
+    retrieval_only: bool
     route: str  # "cache", "vector", "graph", "hybrid", "abstain"
     is_cached: bool
     evidence: list[Evidence]

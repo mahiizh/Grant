@@ -10,11 +10,13 @@ from app.cache.semantic import SemanticCache
 from app.core.acl import ACLScope
 from app.domain import Chunk, Entity, Provenance, Relation, TemporalBounds
 from app.graph.retrievers import GraphRetriever as RealGraphRetriever
+from app.llm.gateway import ModelResponse
 from app.main import app
 from app.orchestration.router import QueryRouter
 from app.orchestration.workflow import RAGOrchestrator
 from app.retrieval.filters import RetrievalFilter
 from app.retrieval.hybrid import HybridRetriever as RealHybridRetriever
+from tests.fakes.fake_gateway import FakeModelGateway
 from tests.fakes.fake_redis import FakeRedis
 from tests.fakes.in_memory_retrievers import (
     FakeGraphRetriever as GraphRetriever,
@@ -186,6 +188,28 @@ class CountingGraphRetriever(GraphRetriever):
         return super().search_entities(query, top_k=top_k, filter_criteria=filter_criteria)
 
 
+class RewriteGateway(FakeModelGateway):
+    """Fake gateway whose only model response is a multi-turn rewrite."""
+
+    async def complete(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        model: str | None = None,
+        max_tokens: int = 800,
+        temperature: float = 0.1,
+        mock_response: str | None = None,
+    ) -> ModelResponse:
+        return await super().complete(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            mock_response="What is OutboxWorker's p99 latency SLA?",
+        )
+
+
 @pytest.mark.anyio
 async def test_graph_forced_enters_graph_branch_on_every_row() -> None:
     orchestrator = build_test_orchestrator(cache_enabled=False)
@@ -206,6 +230,47 @@ async def test_graph_forced_enters_graph_branch_on_every_row() -> None:
     # Includes a router-abstain row: the router decision is still recorded but
     # does not prevent graph traversal in this config.
     assert graph.search_entities_calls == len(queries)
+
+
+@pytest.mark.anyio
+async def test_retrieval_only_skips_answer_generation() -> None:
+    orchestrator = build_test_orchestrator(cache_enabled=False)
+    gateway = FakeModelGateway()
+    orchestrator.gateway = cast(Any, gateway)
+
+    state = await orchestrator.run(
+        query="Which database acts as the single source of truth?",
+        retrieval_only=True,
+    )
+
+    assert gateway.total_calls == 0
+    assert state["evidence"]
+    assert state["answer"] == ""
+    assert any(
+        span["name"] == "Retrieval Only: skip answer generation" for span in state.get("spans", [])
+    )
+
+
+@pytest.mark.anyio
+async def test_retrieval_only_still_rewrites_multi_turn_queries() -> None:
+    orchestrator = build_test_orchestrator(cache_enabled=False)
+    gateway = RewriteGateway()
+    gateway.default_model = "rewrite-model"
+    orchestrator.gateway = cast(Any, gateway)
+
+    state = await orchestrator.run(
+        query="What is its p99 latency SLA?",
+        thread_history=[
+            {"role": "user", "content": "What is the SLA for OutboxWorker?"},
+            {"role": "assistant", "content": "OutboxWorker targets 47ms."},
+        ],
+        retrieval_only=True,
+    )
+
+    assert "OutboxWorker" in state["rewritten_query"]
+    # One model call is the multi-turn rewrite; no generation call follows it.
+    # Zero evidence here legitimately reaches the abstention node instead.
+    assert gateway.total_calls == 1
 
 
 @pytest.mark.anyio

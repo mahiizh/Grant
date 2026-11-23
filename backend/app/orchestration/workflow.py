@@ -462,6 +462,23 @@ class RAGOrchestrator:
                 "spans": spans,
             }
 
+        # 5a. Retrieval-only terminal node. It never calls the generation model;
+        # multi-turn condensation has already happened in condense_step.
+        def retrieval_only_node(state: RAGState) -> dict[str, Any]:
+            spans = list(state.get("spans", []))
+            spans.append(
+                {
+                    "id": f"sp-{uuid.uuid4().hex[:6]}",
+                    "name": "Retrieval Only: skip answer generation",
+                    "service": "EvalHarness",
+                    "start_ms": 30.0,
+                    "duration_ms": 0.0,
+                    "status": "ok",
+                    "meta": f"Scored {len(state.get('evidence', []))} evidence items",
+                }
+            )
+            return {"answer": "", "is_abstention": False, "spans": spans}
+
         # 6. Generation Node
         async def generate_node(state: RAGState) -> dict[str, Any]:
             evidence = state.get("evidence", [])
@@ -565,6 +582,7 @@ class RAGOrchestrator:
         workflow.add_node("cache_step", cache_node)
         workflow.add_node("retrieve_step", retrieve_node)
         workflow.add_node("abstain_step", abstain_node)
+        workflow.add_node("retrieval_only_step", retrieval_only_node)
         workflow.add_node("generate_step", generate_node)
 
         # Wire edges: start at condense_step
@@ -600,10 +618,13 @@ class RAGOrchestrator:
             query = state.get("rewritten_query") or state["query"]
             if asks_about_absent_entity(query, (item.text for item in evidence)):
                 return "abstain_step"
+            if state.get("retrieval_only", False):
+                return "retrieval_only_step"
             return "generate_step"
 
         workflow.add_conditional_edges("retrieve_step", evidence_decision)
         workflow.add_edge("abstain_step", END)
+        workflow.add_edge("retrieval_only_step", END)
         workflow.add_edge("generate_step", END)
 
         return workflow.compile(checkpointer=self.checkpointer)
@@ -616,6 +637,7 @@ class RAGOrchestrator:
         thread_id: str | None = None,
         thread_history: list[dict[str, Any]] | None = None,
         retrieval_config: RetrievalConfig = "full",
+        retrieval_only: bool = False,
     ) -> RAGState:
         """Execute the compiled LangGraph workflow end-to-end."""
         start_time = time.perf_counter()
@@ -633,6 +655,7 @@ class RAGOrchestrator:
             "acl_scope": scope,
             "as_of_time": as_of_time,
             "retrieval_config": retrieval_config,
+            "retrieval_only": retrieval_only,
             "route": "vector",
             "is_cached": False,
             "evidence": [],

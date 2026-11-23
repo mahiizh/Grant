@@ -171,6 +171,23 @@ async def test_runner_attaches_judge_metrics_and_intervals() -> None:
     assert report.per_question[0]["retrieved_context"]
 
 
+@pytest.mark.anyio
+async def test_runner_propagates_retrieval_only_mode() -> None:
+    legacy = GoldenDataset.load_from_jsonl(REPO_ROOT / "evals" / "golden" / "questions.jsonl")
+    question = legacy.get_by_id("fact_001")
+    assert question is not None
+    dataset = GoldenDataset([GoldenQuestion.model_validate(question.model_dump())])
+    chunks = [chunk for chunk in load_corpus_chunks() if chunk.doc_id == "doc_rfc_001"]
+    orchestrator, _ = build_hermetic_orchestrator(chunks)
+    runner = EvaluationRunner(orchestrator=orchestrator, retrieval_only=True)
+
+    report = await runner.run_benchmark(dataset, split="dev")
+
+    assert report.retrieval_only is True
+    assert all(row["answer"] == "" for row in report.per_question)
+    assert report.per_question[0]["chunk_metrics"]["chunk_recall@5"] >= 0.0
+
+
 def test_fake_gateway_is_still_importable() -> None:
     # Guards the FakeJudge construction pattern used above.
     assert FakeModelGateway().default_model == "mock-hermetic"
