@@ -23,12 +23,14 @@ class FakeExactCache:
         acl_scope: ACLScope,
         index_version: int = 1,
         prompt_version: str = "v1",
+        owner_user_id: str | None = None,
     ) -> Answer | None:
         key = generate_exact_cache_key(
             query=query,
             acl_scope=acl_scope,
             index_version=index_version,
             prompt_version=prompt_version,
+            owner_user_id=owner_user_id,
         )
         entry = self._store.get(key)
         if entry is None:
@@ -56,12 +58,14 @@ class FakeExactCache:
         acl_scope: ACLScope,
         index_version: int = 1,
         prompt_version: str = "v1",
+        owner_user_id: str | None = None,
     ) -> str:
         key = generate_exact_cache_key(
             query=query,
             acl_scope=acl_scope,
             index_version=index_version,
             prompt_version=prompt_version,
+            owner_user_id=owner_user_id,
         )
         self._store[key] = {
             "answer": answer,
@@ -95,6 +99,7 @@ class FakeSemanticCacheEntry:
     tenant_id: str
     prompt_version: str = "v1"
     as_of: str | None = None
+    owner_user_id: str | None = None
 
 
 class FakeSemanticCache:
@@ -114,6 +119,7 @@ class FakeSemanticCache:
         index_version: int = 1,
         prompt_version: str = "v1",
         as_of: str | None = None,
+        owner_user_id: str | None = None,
     ) -> Answer | None:
         if not self._entries:
             self._misses += 1
@@ -124,6 +130,8 @@ class FakeSemanticCache:
         best_similarity = 0.0
 
         for entry in self._entries:
+            if owner_user_id is not None and entry.owner_user_id != owner_user_id:
+                continue
             if entry.tenant_id != acl_scope.tenant_id or entry.index_version != index_version:
                 continue
             if entry.prompt_version != prompt_version or entry.as_of != as_of:
@@ -174,6 +182,7 @@ class FakeSemanticCache:
         index_version: int = 1,
         prompt_version: str = "v1",
         as_of: str | None = None,
+        owner_user_id: str | None = None,
     ) -> None:
         entry = FakeSemanticCacheEntry(
             query=query,
@@ -184,6 +193,7 @@ class FakeSemanticCache:
             tenant_id=acl_scope.tenant_id,
             prompt_version=prompt_version,
             as_of=as_of,
+            owner_user_id=owner_user_id,
         )
         self._entries.append(entry)
 

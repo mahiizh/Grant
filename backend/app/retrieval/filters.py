@@ -19,14 +19,22 @@ class RetrievalFilter(BaseModel):
     is_admin: bool = False
     as_of_time: datetime | None = None
     doc_ids: frozenset[str] | None = None
+    owner_user_id: str | None = None
 
     def permits_chunk(self, chunk: Chunk) -> bool:
-        """Evaluate both ACL permissions and bi-temporal validity for a chunk."""
+        """Evaluate ownership, ACL permissions, and bi-temporal validity for a chunk."""
         # 1. Document ID filtering (if scoped to specific documents)
         if self.doc_ids is not None and chunk.doc_id not in self.doc_ids:
             return False
 
-        # 2. ACL Permission check
+        # 2. Ownership isolation: enforce for owner-tagged data; legacy/unowned
+        # data falls back to ACL (eval corpus/tests and pre-migration rows).
+        if self.owner_user_id is not None:
+            chunk_owner = getattr(chunk, "owner_user_id", None)
+            if chunk_owner is not None and chunk_owner != self.owner_user_id:
+                return False
+
+        # 3. ACL Permission check
         if not chunk.acl_scope.permits(
             user_roles=self.user_roles,
             user_groups=self.user_groups,
@@ -35,7 +43,7 @@ class RetrievalFilter(BaseModel):
         ):
             return False
 
-        # 3. Bi-temporal "as of" validity check
+        # 4. Bi-temporal "as of" validity check
         return not (self.as_of_time is not None and not chunk.temporal.is_valid_at(self.as_of_time))
 
     def permits_payload(self, payload: dict[str, Any]) -> bool:
@@ -50,6 +58,11 @@ class RetrievalFilter(BaseModel):
 
         if acl.get("tenant_id") != self.acl_scope.tenant_id:
             return False
+
+        if self.owner_user_id is not None:
+            payload_owner = payload.get("owner_user_id")
+            if payload_owner is not None and payload_owner != self.owner_user_id:
+                return False
 
         if self.doc_ids is not None and payload.get("doc_id") not in self.doc_ids:
             return False
@@ -91,6 +104,19 @@ class RetrievalFilter(BaseModel):
                 match=models.MatchValue(value=self.acl_scope.tenant_id),
             )
         ]
+        if self.owner_user_id is not None:
+            must.append(
+                models.Filter(
+                    should=[
+                        models.FieldCondition(
+                            key="owner_user_id",
+                            match=models.MatchValue(value=self.owner_user_id),
+                        ),
+                        models.IsNullCondition(is_null=models.PayloadField(key="owner_user_id")),
+                        models.IsEmptyCondition(is_empty=models.PayloadField(key="owner_user_id")),
+                    ]
+                )
+            )
 
         if not self.is_admin:
             should: list[models.Condition] = [
@@ -148,7 +174,7 @@ class RetrievalFilter(BaseModel):
         return models.Filter(must=must)
 
     def to_cypher_predicate(self, node_alias: str = "n") -> tuple[str, dict[str, Any]]:
-        """Build a parameterized Cypher ACL/temporal predicate for a node or relationship.
+        """Build a parameterized Cypher ACL/temporal/owner predicate for a node or relationship.
 
         Returns the predicate plus the parameters it binds. Never interpolates
         caller-controlled values into the query string.
@@ -161,10 +187,15 @@ class RetrievalFilter(BaseModel):
             "acl_as_of": self.as_of_time.astimezone(UTC).isoformat()
             if self.as_of_time is not None
             else None,
+            "owner_user_id": self.owner_user_id,
         }
         alias = node_alias
         clause = (
             f"(coalesce({alias}.acl_tenant_id, 'default') = $acl_tenant_id"
+            f" AND ($owner_user_id IS NULL OR "
+            f"(coalesce({alias}.owner_user_id, '') = '' AND size(coalesce({alias}.owner_user_ids, [])) = 0) OR "
+            f"coalesce({alias}.owner_user_id, '') = $owner_user_id OR "
+            f"$owner_user_id IN coalesce({alias}.owner_user_ids, []))"
             f" AND ($acl_is_admin OR coalesce({alias}.acl_is_public, false)"
             f" OR any(role IN coalesce({alias}.acl_allowed_roles, [])"
             f" WHERE role IN $acl_user_roles)"

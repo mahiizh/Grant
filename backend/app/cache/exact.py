@@ -35,6 +35,7 @@ class ExactCache:
         acl_scope: ACLScope,
         index_version: int = 1,
         prompt_version: str = "v1",
+        owner_user_id: str | None = None,
     ) -> Answer | None:
         """Retrieve cached Answer if exact key matches in Redis."""
         if not self.enabled:
@@ -45,6 +46,7 @@ class ExactCache:
             acl_scope=acl_scope,
             index_version=index_version,
             prompt_version=prompt_version,
+            owner_user_id=owner_user_id,
         )
         if not self.client:
             self._misses += 1
@@ -105,6 +107,7 @@ class ExactCache:
         index_version: int = 1,
         prompt_version: str = "v1",
         ttl_seconds: int = 3600,
+        owner_user_id: str | None = None,
     ) -> str:
         """Store synthesized answer under isolated permission and index-version key in Redis."""
         key = generate_exact_cache_key(
@@ -112,6 +115,7 @@ class ExactCache:
             acl_scope=acl_scope,
             index_version=index_version,
             prompt_version=prompt_version,
+            owner_user_id=owner_user_id,
         )
         if not self.enabled or not self.client:
             return key
@@ -140,6 +144,7 @@ class ExactCache:
                 "evidence": evidence_dicts,
                 "is_abstention": answer.is_abstention,
                 "tenant_id": acl_scope.tenant_id,
+                "owner_user_id": owner_user_id,
             }
 
             self.client.set(f"exact:{key}", json.dumps(payload), ex=ttl_seconds)

@@ -23,13 +23,15 @@ def generate_exact_cache_key(
     acl_scope: ACLScope,
     index_version: int = 1,
     prompt_version: str = "v1",
+    owner_user_id: str | None = None,
 ) -> str:
-    """Generate isolated cache key bound to query, permissions, index version, and prompt."""
+    """Generate isolated cache key bound to query, permissions, owner, index version, and prompt."""
     norm_q = normalize_query(query)
     acl_hash = hash_acl_scope(acl_scope)
+    owner_hash = hashlib.sha256((owner_user_id or "anon").encode("utf-8")).hexdigest()[:12]
     q_hash = hashlib.sha256(norm_q.encode("utf-8")).hexdigest()[:16]
     prefix = f"cache:exact:{acl_scope.tenant_id}:v{index_version}:{prompt_version}"
-    return f"{prefix}:{acl_hash}:{q_hash}"
+    return f"{prefix}:{owner_hash}:{acl_hash}:{q_hash}"
 
 
 def generate_semantic_cache_key(
@@ -38,12 +40,13 @@ def generate_semantic_cache_key(
     index_version: int = 1,
     prompt_version: str = "v1",
     as_of: str | None = None,
+    owner_user_id: str | None = None,
 ) -> str:
     """Generate a deterministic semantic-cache key scoped to the full answer context.
 
     The semantic tier still matches paraphrases by embedding similarity; this key only
-    isolates persisted entries by normalized query, tenant, roles, groups, index
-    version, prompt version, and temporal scope.
+    isolates persisted entries by normalized query, tenant, roles, groups, owner,
+    index version, prompt version, and temporal scope.
     """
     norm_q = normalize_query(query)
     roles = ",".join(sorted(acl_scope.allowed_roles))
@@ -55,6 +58,7 @@ def generate_semantic_cache_key(
             roles,
             groups,
             str(acl_scope.is_public),
+            owner_user_id or "anon",
             f"v{index_version}",
             prompt_version,
             as_of or "",

@@ -66,13 +66,14 @@ class AuthenticatedUser:
         requested_scope: str | None = None,
         as_of_time: datetime | None = None,
     ) -> RetrievalFilter:
-        """Build the query-time ACL/temporal filter for this identity."""
+        """Build the query-time ACL/temporal/owner filter for this identity."""
         acl_scope = self.to_acl_scope(requested_scope)
         return RetrievalFilter(
             acl_scope=acl_scope,
             user_roles=acl_scope.allowed_roles,
             user_groups=acl_scope.allowed_groups,
             as_of_time=as_of_time,
+            owner_user_id=self.user_id,
         )
 
 

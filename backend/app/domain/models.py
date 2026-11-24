@@ -17,6 +17,7 @@ class Chunk(BaseModel):
     index: int
     text: str
     tokens: int | None = None
+    owner_user_id: str | None = None
     acl_scope: ACLScope = Field(default_factory=ACLScope.public)
     temporal: TemporalBounds
     provenance: Provenance
@@ -32,6 +33,7 @@ class Document(BaseModel):
     title: str
     content: str
     chunks: list[Chunk] = Field(default_factory=list)
+    owner_user_id: str | None = None
     acl_scope: ACLScope = Field(default_factory=ACLScope.public)
     temporal: TemporalBounds
     provenance: Provenance

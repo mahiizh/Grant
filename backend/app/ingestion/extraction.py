@@ -59,6 +59,37 @@ class EntityRelationExtractor:
     """Extracts entities and relationships from chunks using patterns or LLM prompts."""
 
     @classmethod
+    def extract_from_text(cls, text: str) -> ExtractionResult:
+        """Heuristic extraction from plain text, including generic CamelCase entities for chat."""
+        found_entities: dict[str, str] = {}
+        for name, ent_type in KNOWN_ENTITIES.items():
+            pattern = re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)
+            if pattern.search(text):
+                found_entities[name] = ent_type
+
+        # Generic chat/entity extraction: capture CamelCase tokens as concepts.
+        for token in re.findall(r"\b[A-Z][a-z]+(?:[A-Z][a-z0-9]+)+\b", text):
+            if token not in found_entities:
+                found_entities[token] = "CONCEPT"
+
+        relations: list[ExtractedRelation] = []
+        # Simple ownership/lead patterns for chat text.
+        for person, team in re.findall(
+            r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\s+(?:leads|owns|manages)\s+([A-Z][A-Za-z0-9]+(?:\s+[A-Z][A-Za-z0-9]+)*)",
+            text,
+        ):
+            found_entities.setdefault(person.strip(), "PERSON")
+            found_entities.setdefault(team.strip(), "TEAM")
+            relations.append(
+                ExtractedRelation(source=team.strip(), predicate="LED_BY", target=person.strip())
+            )
+
+        entities_list = [
+            ExtractedEntity(name=name, entity_type=etype) for name, etype in found_entities.items()
+        ]
+        return ExtractionResult(entities=entities_list, relations=relations)
+
+    @classmethod
     def extract_from_chunk(cls, chunk: Chunk) -> ExtractionResult:
         """Heuristic/pattern-based extraction matching technical entities and relationships."""
         text = chunk.text

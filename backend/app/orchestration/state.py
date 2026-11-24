@@ -30,6 +30,7 @@ class RAGState(TypedDict, total=False):
     thread_history: list[dict[str, str]]
     trace_id: str
     acl_scope: ACLScope
+    owner_user_id: str | None
     as_of_time: datetime | None
     prompt_version: str
     retrieval_config: RetrievalConfig

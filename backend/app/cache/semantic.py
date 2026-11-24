@@ -25,6 +25,7 @@ class SemanticCacheEntry:
     tenant_id: str
     prompt_version: str = "v1"
     as_of: str | None = None
+    owner_user_id: str | None = None
 
 
 class SemanticCache:
@@ -113,6 +114,7 @@ class SemanticCache:
                         tenant_id=scope.tenant_id,
                         prompt_version=data.get("prompt_version", "v1"),
                         as_of=data.get("as_of"),
+                        owner_user_id=data.get("owner_user_id"),
                     )
                 )
         except Exception as e:
@@ -125,6 +127,7 @@ class SemanticCache:
         index_version: int = 1,
         prompt_version: str = "v1",
         as_of: str | None = None,
+        owner_user_id: str | None = None,
     ) -> Answer | None:
         """Search for a semantically similar query, verified by entity/number guardrails."""
         if not self.enabled:
@@ -138,6 +141,8 @@ class SemanticCache:
         candidates: list[tuple[float, SemanticCacheEntry]] = []
 
         for entry in self._entries:
+            if owner_user_id is not None and entry.owner_user_id != owner_user_id:
+                continue
             if entry.tenant_id != acl_scope.tenant_id or entry.index_version != index_version:
                 continue
             if entry.prompt_version != prompt_version or entry.as_of != as_of:
@@ -193,6 +198,7 @@ class SemanticCache:
         ttl_seconds: int = 3600,
         prompt_version: str = "v1",
         as_of: str | None = None,
+        owner_user_id: str | None = None,
     ) -> None:
         """Store query embedding and answer in the semantic cache and Redis."""
         if not self.enabled:
@@ -207,6 +213,7 @@ class SemanticCache:
             tenant_id=acl_scope.tenant_id,
             prompt_version=prompt_version,
             as_of=as_of,
+            owner_user_id=owner_user_id,
         )
         self._entries.append(entry)
 
@@ -220,6 +227,7 @@ class SemanticCache:
                     "index_version": index_version,
                     "prompt_version": prompt_version,
                     "as_of": as_of,
+                    "owner_user_id": owner_user_id,
                     "acl_scope": {
                         "tenant_id": acl_scope.tenant_id,
                         "allowed_roles": list(acl_scope.allowed_roles),
@@ -244,6 +252,7 @@ class SemanticCache:
                     index_version=index_version,
                     prompt_version=prompt_version,
                     as_of=as_of,
+                    owner_user_id=owner_user_id,
                 )
                 self.client.set(k, json.dumps(payload), ex=ttl_seconds)
             except Exception as e:

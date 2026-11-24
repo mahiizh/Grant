@@ -100,6 +100,7 @@ class RAGOrchestrator:
                 exact_cache=self.exact_cache,
                 semantic_cache=self.semantic_cache,
                 acl_scope=state.get("acl_scope"),
+                owner_user_id=state.get("owner_user_id"),
             )
             route_span = {
                 "id": f"sp-{uuid.uuid4().hex[:6]}",
@@ -165,6 +166,7 @@ class RAGOrchestrator:
                 query,
                 scope,
                 prompt_version=prompt_version,
+                owner_user_id=state.get("owner_user_id"),
             )
             if hit is not None:
                 spans.append(
@@ -193,6 +195,7 @@ class RAGOrchestrator:
                 scope,
                 prompt_version=prompt_version,
                 as_of=as_of_key,
+                owner_user_id=state.get("owner_user_id"),
             )
             if sem_hit is not None:
                 spans.append(
@@ -558,6 +561,7 @@ class RAGOrchestrator:
                     ans_obj,
                     scope,
                     prompt_version=prompt_version,
+                    owner_user_id=state.get("owner_user_id"),
                 )
                 self.semantic_cache.set(
                     query_to_cache,
@@ -565,6 +569,7 @@ class RAGOrchestrator:
                     scope,
                     prompt_version=prompt_version,
                     as_of=as_of.isoformat() if as_of else None,
+                    owner_user_id=state.get("owner_user_id"),
                 )
 
             return {
@@ -638,6 +643,7 @@ class RAGOrchestrator:
         thread_history: list[dict[str, Any]] | None = None,
         retrieval_config: RetrievalConfig = "full",
         retrieval_only: bool = False,
+        owner_user_id: str | None = None,
     ) -> RAGState:
         """Execute the compiled LangGraph workflow end-to-end."""
         start_time = time.perf_counter()
@@ -653,6 +659,7 @@ class RAGOrchestrator:
             "thread_history": list(thread_history or []),
             "trace_id": trace_id,
             "acl_scope": scope,
+            "owner_user_id": owner_user_id,
             "as_of_time": as_of_time,
             "retrieval_config": retrieval_config,
             "retrieval_only": retrieval_only,

@@ -56,6 +56,7 @@ class QueryRouter:
         exact_cache: ExactCache | None = None,
         semantic_cache: SemanticCache | None = None,
         acl_scope: ACLScope | None = None,
+        owner_user_id: str | None = None,
     ) -> str:
         """Evaluate query and return route: 'cache', 'abstain', 'graph', 'hybrid', or 'vector'."""
         query_clean = query.strip()
@@ -72,7 +73,10 @@ class QueryRouter:
                 return "abstain"
 
         # 2. Check Exact Cache (100% exact match hit)
-        if exact_cache is not None and exact_cache.get(query_clean, acl_scope=scope) is not None:
+        if (
+            exact_cache is not None
+            and exact_cache.get(query_clean, acl_scope=scope, owner_user_id=owner_user_id) is not None
+        ):
             return "cache"
 
         # 3. Check Multi-Hop Graph Traversal
@@ -88,7 +92,7 @@ class QueryRouter:
         # 5. Check Semantic Cache (for fact / localized query paraphrases)
         if (
             semantic_cache is not None
-            and semantic_cache.get(query_clean, acl_scope=scope) is not None
+            and semantic_cache.get(query_clean, acl_scope=scope, owner_user_id=owner_user_id) is not None
         ):
             return "cache"
 
