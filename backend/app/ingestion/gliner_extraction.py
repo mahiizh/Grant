@@ -140,10 +140,12 @@ class GLiNEREntityExtractor:
         flush()
         return [w for w in windows if w.strip()]
 
-    def extract_mentions(self, text: str) -> list[EntityMention]:
+    def extract_mentions(self, text: str, *, windows: list[str] | None = None) -> list[EntityMention]:
         model = self._load_model()
         mentions: list[EntityMention] = []
-        for wi, window in enumerate(self.chunk_windows(text)):
+        if windows is None:
+            windows = self.chunk_windows(text)
+        for wi, window in enumerate(windows):
             try:
                 preds = model.predict_entities(window, self.labels, threshold=0.0)
             except Exception:
@@ -279,7 +281,20 @@ class GLiNEREntityExtractor:
         return edges
 
     def extract_from_text(self, text: str) -> ExtractionResult:
-        mentions = self.extract_mentions(text)
+        windows = self.chunk_windows(text)
+        mentions = self.extract_mentions(text, windows=windows)
+        try:
+            tok = self.tokenizer
+            chunk_tokens = len(tok.encode(text, add_special_tokens=False))
+            processed_tokens = sum(len(tok.encode(w, add_special_tokens=False)) for w in windows)
+            logger.debug(
+                "GLiNER text_tokens=%s processed_tokens=%s windows=%s",
+                chunk_tokens,
+                processed_tokens,
+                len(windows),
+            )
+        except Exception:
+            logger.debug("GLiNER token coverage logging failed", exc_info=True)
         # dedupe by normalized text+label, keep highest score
         best: dict[tuple[str, str], EntityMention] = {}
         for m in mentions:
