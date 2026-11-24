@@ -69,12 +69,16 @@ async def get_graph(
 
             node_ids = set()
             for r in node_rows:
-                node_ids.add(r["id"])
+                node_id = r.get("id")
+                node_name = r.get("name")
+                if not node_id or not node_name:
+                    continue
+                node_ids.add(node_id)
                 nodes.append(
                     GraphNode(
-                        id=r["id"],
-                        name=r["name"],
-                        type=r["type"] or "CONCEPT",
+                        id=node_id,
+                        name=node_name,
+                        type=r.get("type") or "CONCEPT",
                         valid_from=r.get("valid_from"),
                         valid_to=r.get("valid_to"),
                         degree=int(r.get("degree") or 0),

@@ -53,6 +53,8 @@ class Neo4jIndexer:
             n.acl_allowed_roles = $acl_allowed_roles,
             n.acl_allowed_groups = $acl_allowed_groups,
             n.doc_ids = CASE WHEN $doc_id <> '' THEN [$doc_id] ELSE [] END,
+            n.source_ids = CASE WHEN $source_id <> '' THEN [$source_id] ELSE [] END,
+            n.owner_user_ids = CASE WHEN $owner_user_id <> '' THEN [$owner_user_id] ELSE [] END,
             n.valid_from = $valid_from,
             n.valid_to = $valid_to,
             n.doc_id = $doc_id
@@ -67,10 +69,22 @@ class Neo4jIndexer:
                 WHEN $doc_id <> '' AND NOT $doc_id IN coalesce(n.doc_ids, [])
                 THEN coalesce(n.doc_ids, []) + [$doc_id]
                 ELSE coalesce(n.doc_ids, [])
+            END,
+            n.source_ids = CASE
+                WHEN $source_id <> '' AND NOT $source_id IN coalesce(n.source_ids, [])
+                THEN coalesce(n.source_ids, []) + [$source_id]
+                ELSE coalesce(n.source_ids, [])
+            END,
+            n.owner_user_ids = CASE
+                WHEN $owner_user_id <> '' AND NOT $owner_user_id IN coalesce(n.owner_user_ids, [])
+                THEN coalesce(n.owner_user_ids, []) + [$owner_user_id]
+                ELSE coalesce(n.owner_user_ids, [])
             END
         """
         props = properties or {}
         temp = temporal or {}
+        owner_user_id = str(props.get("owner_user_id", "") or "")
+        source_id = str(props.get("source_id", props.get("doc_id", "")) or "")
         async with self.driver.session() as session:
             await session.run(
                 cypher,
@@ -81,6 +95,8 @@ class Neo4jIndexer:
                 valid_from=temp.get("valid_from", "1970-01-01T00:00:00Z"),
                 valid_to=temp.get("valid_to"),
                 doc_id=props.get("doc_id", ""),
+                source_id=source_id,
+                owner_user_id=owner_user_id,
                 **_acl_props(acl_scope),
             )
 
@@ -100,16 +116,8 @@ class Neo4jIndexer:
         props = properties or {}
         chunk_id = props.get("chunk_id") or props.get("doc_id") or ""
         cypher = f"""
-        MERGE (a:Entity {{id: $source_id}})
-        ON CREATE SET a.acl_tenant_id = $acl_tenant_id,
-                      a.acl_is_public = $acl_is_public,
-                      a.acl_allowed_roles = $acl_allowed_roles,
-                      a.acl_allowed_groups = $acl_allowed_groups
-        MERGE (b:Entity {{id: $target_id}})
-        ON CREATE SET b.acl_tenant_id = $acl_tenant_id,
-                      b.acl_is_public = $acl_is_public,
-                      b.acl_allowed_roles = $acl_allowed_roles,
-                      b.acl_allowed_groups = $acl_allowed_groups
+        MATCH (a:Entity {{id: $source_id}})
+        MATCH (b:Entity {{id: $target_id}})
         MERGE (a)-[r:{rel_type_clean} {{chunk_id: $chunk_id}}]->(b)
         SET r.relation_type = $relation_type,
             r.acl_scope = $acl_scope,
@@ -120,7 +128,12 @@ class Neo4jIndexer:
             r.valid_from = $valid_from,
             r.valid_to = $valid_to,
             r.doc_id = $doc_id,
-            r.chunk_id = $chunk_id
+            r.chunk_id = $chunk_id,
+            r.source_id = $source_ref,
+            r.thread_id = $thread_id,
+            r.message_id = $message_id,
+            r.owner_user_id = $owner_user_id,
+            r.source_kind = $source_kind
         RETURN elementId(r) AS rel_id
         """
         temp = temporal or {}
@@ -135,10 +148,23 @@ class Neo4jIndexer:
                 valid_to=temp.get("valid_to"),
                 doc_id=props.get("doc_id", ""),
                 chunk_id=chunk_id,
+                source_ref=str(props.get("source_id", props.get("doc_id", "")) or ""),
+                thread_id=str(props.get("thread_id", "") or ""),
+                message_id=str(props.get("message_id", "") or ""),
+                owner_user_id=str(props.get("owner_user_id", "") or ""),
+                source_kind=str(props.get("source_kind", "document") or "document"),
                 **_acl_props(acl_scope),
             )
             record = await res.single()
-            return str(record["rel_id"]) if record else f"{source_id}-{relation_type}->{target_id}"
+            if record:
+                return str(record["rel_id"])
+            logger.warning(
+                "Skipped edge %s (%s)->(%s): endpoint entity missing; create entities via merge_node first",
+                relation_type,
+                source_id,
+                target_id,
+            )
+            return ""
 
     async def merge_chunk(
         self,
@@ -147,12 +173,14 @@ class Neo4jIndexer:
         text: str,
         acl_scope: dict[str, Any] | None = None,
         temporal: dict[str, Any] | None = None,
+        owner_user_id: str | None = None,
     ) -> None:
         """Idempotently create or update a Chunk node in Neo4j."""
         cypher = """
         MERGE (c:Chunk {chunk_id: $chunk_id})
         SET c.doc_id = $doc_id,
             c.text = $text,
+            c.owner_user_id = $owner_user_id,
             c.acl_scope = $acl_scope,
             c.acl_tenant_id = $acl_tenant_id,
             c.acl_is_public = $acl_is_public,
@@ -168,6 +196,7 @@ class Neo4jIndexer:
                 chunk_id=chunk_id,
                 doc_id=doc_id,
                 text=text,
+                owner_user_id=owner_user_id or "",
                 acl_scope=json.dumps(acl_scope or {}),
                 valid_from=temp.get("valid_from", "1970-01-01T00:00:00Z"),
                 valid_to=temp.get("valid_to"),
@@ -292,6 +321,54 @@ class Neo4jIndexer:
                 if row and row[0]:
                     chunk_ids.add(str(row[0]))
         return chunk_ids
+
+    async def delete_chat_graph(
+        self,
+        source_id: str | None = None,
+        thread_id: str | None = None,
+        owner_user_id: str | None = None,
+    ) -> int:
+        """Delete chat-sourced graph edges/nodes and remove orphaned entities."""
+        if not source_id and not thread_id:
+            return 0
+        async with self.driver.session() as session:
+            match_clause = "MATCH ()-[r]->() WHERE (r.source_kind = 'chat' OR r.source_id STARTS WITH 'chat:')"
+            params: dict[str, Any] = {}
+            if source_id:
+                match_clause += " AND r.source_id = $source_id"
+                params["source_id"] = source_id
+            if thread_id:
+                match_clause += " AND r.thread_id = $thread_id"
+                params["thread_id"] = thread_id
+            if owner_user_id:
+                match_clause += " AND r.owner_user_id = $owner_user_id"
+                params["owner_user_id"] = owner_user_id
+            res = await session.run(
+                match_clause
+                + " WITH collect(DISTINCT startNode(r).id) + collect(DISTINCT endNode(r).id) AS ids, collect(r) AS rels "
+                + " FOREACH (_ IN rels | DELETE _) RETURN ids",
+                **params,
+            )
+            rec = await res.single()
+            entity_ids = [str(e) for e in (rec["ids"] if rec and rec["ids"] else []) if e]
+
+            # Remove source refs from entities; delete entity if no remaining sources/mentions/edges.
+            for eid in set(entity_ids):
+                await session.run(
+                    """
+                    MATCH (e:Entity {id: $entity_id})
+                    SET e.source_ids = [s IN coalesce(e.source_ids, []) WHERE s <> $source_id]
+                    WITH e
+                    OPTIONAL MATCH (e)-[r]-()
+                    OPTIONAL MATCH (:Chunk)-[:MENTIONS]->(e)
+                    WITH e, count(r) AS rel_count, count(*) AS mention_rows
+                    WHERE rel_count = 0 AND mention_rows = 0 AND size(coalesce(e.source_ids, [])) = 0 AND size(coalesce(e.doc_ids, [])) = 0
+                    DETACH DELETE e
+                    """,
+                    entity_id=eid,
+                    source_id=source_id or "",
+                )
+            return len(set(entity_ids))
 
     async def close(self) -> None:
         await self.driver.close()
