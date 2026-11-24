@@ -71,7 +71,9 @@ async def run_reconciliation(repair: bool = False) -> int:
                 RETURN e.id AS entity_id, c.doc_id AS source_id, 'document' AS source_kind
                 UNION
                 MATCH (m:Message)-[:MENTIONS]->(e:Entity)
-                RETURN e.id AS entity_id, coalesce(m.message_id, m.id) AS source_id, 'chat' AS source_kind
+                RETURN e.id AS entity_id,
+                       coalesce(m.source_id, m.id, m.message_id) AS source_id,
+                       'chat' AS source_kind
                 """
             )
             neo4j_mentions = {
@@ -205,7 +207,8 @@ async def run_reconciliation(repair: bool = False) -> int:
                     await s.run(
                         """
                         MATCH (e:Entity {id: $entity_id})
-                        MATCH (m:Message) WHERE coalesce(m.message_id, m.id) = $source_id
+                        MATCH (m:Message)
+                        WHERE coalesce(m.source_id, m.id, m.message_id) = $source_id
                         MERGE (m)-[:MENTIONS]->(e)
                         """,
                         entity_id=entity_id,
@@ -229,7 +232,7 @@ async def run_reconciliation(repair: bool = False) -> int:
                     await s.run(
                         """
                         MATCH (m:Message)-[r:MENTIONS]->(e:Entity {id: $entity_id})
-                        WHERE coalesce(m.message_id, m.id) = $source_id
+                        WHERE coalesce(m.source_id, m.id, m.message_id) = $source_id
                         DELETE r
                         """,
                         entity_id=entity_id,

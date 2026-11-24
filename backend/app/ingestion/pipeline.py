@@ -109,15 +109,18 @@ class IngestionPipeline:
             )
             existing = (await session.execute(existing_stmt)).scalar_one_or_none()
             if existing is not None:
+                # Do not include parsed.valid_from/valid_to here: parse_markdown()
+                # synthesizes valid_from=now() for documents without an explicit
+                # date, which would make otherwise unchanged re-ingests look new.
+                # Explicit temporal changes are part of the content hash already.
                 existing_fp = (
-                    existing.content_hash or hashlib.sha256(existing.content.encode("utf-8")).hexdigest(),
+                    existing.content_hash
+                    or hashlib.sha256(existing.content.encode("utf-8")).hexdigest(),
                     existing.owner_user_id,
                     existing.acl_tenant_id,
                     tuple(sorted(existing.acl_allowed_roles or [])),
                     tuple(sorted(existing.acl_allowed_groups or [])),
                     existing.acl_is_public,
-                    existing.valid_from.isoformat() if existing.valid_from else None,
-                    existing.valid_to.isoformat() if existing.valid_to else None,
                     (existing.metadata_json or {}).get("extractor_version", ""),
                 )
                 extractor_version = _extractor_version()
@@ -128,8 +131,6 @@ class IngestionPipeline:
                     tuple(sorted(scope.allowed_roles)),
                     tuple(sorted(scope.allowed_groups)),
                     scope.is_public,
-                    (parsed.valid_from.isoformat() if parsed.valid_from else None),
-                    (parsed.valid_to.isoformat() if parsed.valid_to else None),
                     extractor_version,
                 )
                 if existing_fp == new_fp:

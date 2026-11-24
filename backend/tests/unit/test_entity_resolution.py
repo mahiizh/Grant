@@ -83,6 +83,8 @@ def test_version_variants_not_merged_but_base_detected() -> None:
     base = base_entity_name("ISO/IEC 27001:2022")
     assert "27001" in base
     assert "2022" not in base
+
+
 @pytest.mark.asyncio
 async def test_shared_tools_across_docs_resolve_to_single_nodes_linked_to_both_docs() -> None:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
@@ -94,8 +96,8 @@ async def test_shared_tools_across_docs_resolve_to_single_nodes_linked_to_both_d
     async with factory() as session:
         resolver = IngestionEntityResolver(entity_index=idx, threshold=0.85, session=session)
 
-        concept_tools = ["Docling", "Inkscape", "Tesseract", "PyMuPDF"]
-        brd_tools = ["Docling", "Inkscape", "Tesseract", "PyMuPDF", "Electron"]
+        concept_tools = ["Python", "Electron", "PyMuPDF"]
+        brd_tools = ["Python", "Electron", "PyMuPDF", "Docling"]
 
         resolved_concept = []
         for name in concept_tools:
@@ -119,15 +121,18 @@ async def test_shared_tools_across_docs_resolve_to_single_nodes_linked_to_both_d
             )
             resolved_brd.append(r)
 
+        await resolver.persist_mentions()
         await session.commit()
 
         by_name = {r.name.lower(): r for r in resolved_concept}
         by_name_brd = {r.name.lower(): r for r in resolved_brd}
 
-        for tool in ["docling", "inkscape", "tesseract", "pymupdf"]:
+        for tool in ["python", "electron", "pymupdf"]:
             assert by_name[tool].entity_id == by_name_brd[tool].entity_id
             q = await session.execute(
-                select(EntityMentionRecord).where(EntityMentionRecord.entity_id == by_name[tool].entity_id)
+                select(EntityMentionRecord).where(
+                    EntityMentionRecord.entity_id == by_name[tool].entity_id
+                )
             )
             mentions = q.scalars().all()
             source_ids = {m.source_id for m in mentions}

@@ -84,6 +84,10 @@ class FakeNeo4jIndexer:
             await self.link_chunk_entity(chunk_id, eid)
         return len(entity_ids)
 
+    async def refresh_entity_props(self, entity_ids: list[str]) -> None:
+        for entity_id in entity_ids:
+            self._recompute_entity_acl(entity_id)
+
     def _recompute_entity_acl(self, entity_id: str) -> None:
         if entity_id not in self._nodes:
             return

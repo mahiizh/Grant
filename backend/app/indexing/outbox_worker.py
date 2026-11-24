@@ -67,9 +67,12 @@ class OutboxWorker:
                 )
 
                 # 3. If extracted entities/relations are bundled with chunk
+                entity_ids: list[str] = []
                 for ent in payload.get("entities", []):
+                    entity_id = ent.get("entity_id", ent.get("name"))
+                    entity_ids.append(entity_id)
                     await self.neo4j.merge_node(
-                        entity_id=ent.get("entity_id", ent.get("name")),
+                        entity_id=entity_id,
                         name=ent.get("name", ""),
                         entity_type=ent.get("entity_type", "Concept"),
                         acl_scope=acl_scope,
@@ -84,8 +87,9 @@ class OutboxWorker:
                     )
                     await self.neo4j.link_chunk_entity(
                         chunk_id=chunk_id,
-                        entity_id=ent.get("entity_id", ent.get("name")),
+                        entity_id=entity_id,
                     )
+                await self.neo4j.refresh_entity_props(entity_ids)
 
                 for rel in payload.get("relations", []):
                     await self.neo4j.merge_edge(
@@ -111,8 +115,9 @@ class OutboxWorker:
                 acl_scope = payload.get("acl_scope", {})
                 temporal = payload.get("temporal", {})
                 for ent in payload.get("entities", []):
+                    entity_id = ent.get("entity_id", ent.get("name"))
                     await self.neo4j.merge_node(
-                        entity_id=ent.get("entity_id", ent.get("name")),
+                        entity_id=entity_id,
                         name=ent.get("name", ""),
                         entity_type=ent.get("entity_type", "Concept"),
                         acl_scope=acl_scope,
@@ -127,6 +132,15 @@ class OutboxWorker:
                             "source_kind": "chat",
                             "aliases": ent.get("aliases", []),
                         },
+                    )
+                    await self.neo4j.merge_chat_mention(
+                        message_id=message_id,
+                        source_id=source_id,
+                        thread_id=thread_id,
+                        entity_id=entity_id,
+                        acl_scope=acl_scope,
+                        temporal=temporal,
+                        owner_user_id=owner_user_id,
                     )
                 for rel in payload.get("relations", []):
                     await self.neo4j.merge_edge(

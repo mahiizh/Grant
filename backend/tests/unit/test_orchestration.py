@@ -4,7 +4,7 @@ from typing import Any, cast
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.routes.query import set_orchestrator
+from app.api.routes.query import get_orchestrator, set_orchestrator
 from app.cache.exact import ExactCache
 from app.cache.semantic import SemanticCache
 from app.core.acl import ACLScope
@@ -330,17 +330,21 @@ async def test_orchestrator_no_cache_never_returns_cached_answer() -> None:
 
 
 def test_fastapi_query_endpoint() -> None:
+    previous_orchestrator = get_orchestrator()
     orchestrator = build_test_orchestrator()
     set_orchestrator(orchestrator)
 
-    client = TestClient(app)
-    response = client.post(
-        "/api/v1/query",
-        json={
-            "query": "Which database acts as the single source of truth?",
-            "tenant_id": "default",
-        },
-    )
+    try:
+        client = TestClient(app)
+        response = client.post(
+            "/api/v1/query",
+            json={
+                "query": "Which database acts as the single source of truth?",
+                "tenant_id": "default",
+            },
+        )
+    finally:
+        set_orchestrator(previous_orchestrator)
 
     assert response.status_code == 200
     data = response.json()

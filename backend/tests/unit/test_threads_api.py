@@ -31,16 +31,19 @@ async def client(test_session: AsyncSession) -> AsyncGenerator[AsyncClient, None
 
     app.dependency_overrides[get_db_session] = override_get_db
 
+    previous_orchestrator = query_route.get_orchestrator()
     orchestrator = build_hermetic_orchestrator(load_corpus_chunks())[0]
     query_route.set_orchestrator(orchestrator)
 
     transport = ASGITransport(app=app)
-    async with AsyncClient(
-        transport=transport, base_url="http://test", headers={"X-Dev-User": "admin"}
-    ) as ac:
-        yield ac
-
-    app.dependency_overrides.clear()
+    try:
+        async with AsyncClient(
+            transport=transport, base_url="http://test", headers={"X-Dev-User": "admin"}
+        ) as ac:
+            yield ac
+    finally:
+        query_route.set_orchestrator(previous_orchestrator)
+        app.dependency_overrides.clear()
 
 
 @pytest.mark.anyio
