@@ -59,6 +59,29 @@ services:
     networks:
       - graphrag-network
 
+  neo4j-test:
+    image: neo4j:5.26-community
+    container_name: graphrag-neo4j-test
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD:-graphrag_password}
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+    ports:
+      - "7475:7474"
+      - "${NEO4J_TEST_PORT:-7688}:7687"
+    volumes:
+      - neo4j_test_data:/data
+      - neo4j_test_logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:7474 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - graphrag-network
+
   redis:
     image: redis:7-alpine
     container_name: graphrag-redis
@@ -85,4 +108,6 @@ volumes:
   qdrant_data:
   neo4j_data:
   neo4j_logs:
+  neo4j_test_data:
+  neo4j_test_logs:
   redis_data:

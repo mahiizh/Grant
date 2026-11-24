@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     NEO4J_URI: str = "bolt://localhost:7687"
     NEO4J_USER: str = "neo4j"
     NEO4J_PASSWORD: str = "graphrag_password"
+    NEO4J_DATABASE: str = "neo4j"
 
     # Redis
     REDIS_HOST: str = "localhost"

@@ -62,7 +62,7 @@ async def run_reconciliation(repair: bool = False) -> int:
 
         # 3. Fetch from Neo4j
         neo4j_ids = await neo4j.get_all_chunk_ids()
-        async with neo4j.driver.session() as s:
+        async with neo4j.driver.session(database=neo4j.database) as s:
             ent_res = await s.run("MATCH (e:Entity) RETURN e.id AS id")
             neo4j_entity_ids = {str(r["id"]) for r in await ent_res.data() if r.get("id")}
             ment_res = await s.run(
@@ -168,7 +168,7 @@ async def run_reconciliation(repair: bool = False) -> int:
             print(f"  Deleted ghost chunk {gid} from Qdrant.")
 
         for gid in ghost_neo4j:
-            async with neo4j.driver.session() as s:
+            async with neo4j.driver.session(database=neo4j.database) as s:
                 await s.run("MATCH (c:Chunk {chunk_id: $cid}) DETACH DELETE c", cid=gid)
             print(f"  Deleted ghost chunk {gid} from Neo4j.")
 
@@ -184,13 +184,13 @@ async def run_reconciliation(repair: bool = False) -> int:
             print(f"  Synced missing entity {eid} to Neo4j.")
 
         for eid in ghost_neo4j_entities:
-            async with neo4j.driver.session() as s:
+            async with neo4j.driver.session(database=neo4j.database) as s:
                 await s.run("MATCH (e:Entity {id: $eid}) DETACH DELETE e", eid=eid)
             print(f"  Deleted ghost entity {eid} from Neo4j.")
 
         for entity_id, source_id, source_kind in missing_neo4j_mentions:
             if source_kind == "document":
-                async with neo4j.driver.session() as s:
+                async with neo4j.driver.session(database=neo4j.database) as s:
                     await s.run(
                         """
                         MATCH (e:Entity {id: $entity_id})
@@ -201,7 +201,7 @@ async def run_reconciliation(repair: bool = False) -> int:
                         source_id=source_id,
                     )
             else:
-                async with neo4j.driver.session() as s:
+                async with neo4j.driver.session(database=neo4j.database) as s:
                     await s.run(
                         """
                         MATCH (e:Entity {id: $entity_id})
@@ -215,7 +215,7 @@ async def run_reconciliation(repair: bool = False) -> int:
 
         for entity_id, source_id, source_kind in ghost_neo4j_mentions:
             if source_kind == "document":
-                async with neo4j.driver.session() as s:
+                async with neo4j.driver.session(database=neo4j.database) as s:
                     await s.run(
                         """
                         MATCH (c:Chunk {doc_id: $source_id})-[r:MENTIONS]->(e:Entity {id: $entity_id})
@@ -225,7 +225,7 @@ async def run_reconciliation(repair: bool = False) -> int:
                         source_id=source_id,
                     )
             else:
-                async with neo4j.driver.session() as s:
+                async with neo4j.driver.session(database=neo4j.database) as s:
                     await s.run(
                         """
                         MATCH (m:Message)-[r:MENTIONS]->(e:Entity {id: $entity_id})

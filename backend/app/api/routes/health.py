@@ -77,7 +77,7 @@ async def check_neo4j() -> ComponentHealth:
             settings.NEO4J_URI,
             auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),
         )
-        async with driver.session() as session:
+        async with driver.session(database=settings.NEO4J_DATABASE) as session:
             res = await session.run("RETURN 1 AS ping")
             record = await res.single()
             if not record or record["ping"] != 1:

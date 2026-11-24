@@ -118,7 +118,7 @@ async def verify_infrastructure_live() -> None:
             settings.NEO4J_URI,
             auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),
         )
-        async with driver.session() as session:
+        async with driver.session(database=settings.NEO4J_DATABASE) as session:
             result = await session.run("RETURN 1 AS ping")
             record = await result.single()
             if not record or record["ping"] != 1:

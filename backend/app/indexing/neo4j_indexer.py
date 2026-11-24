@@ -30,6 +30,7 @@ class Neo4jIndexer:
         settings = get_settings()
         self.uri = settings.NEO4J_URI
         self.auth = (settings.NEO4J_USER, settings.NEO4J_PASSWORD)
+        self.database = settings.NEO4J_DATABASE
         self.driver = driver or AsyncGraphDatabase.driver(self.uri, auth=self.auth)
 
     async def merge_node(
@@ -88,7 +89,7 @@ class Neo4jIndexer:
         owner_user_id = str(props.get("owner_user_id", "") or "")
         source_id = str(props.get("source_id", props.get("doc_id", "")) or "")
         aliases = [str(a) for a in (props.get("aliases") or []) if str(a).strip()]
-        async with self.driver.session() as session:
+        async with self.driver.session(database=self.database) as session:
             await session.run(
                 cypher,
                 entity_id=entity_id,
@@ -141,7 +142,7 @@ class Neo4jIndexer:
         RETURN elementId(r) AS rel_id
         """
         temp = temporal or {}
-        async with self.driver.session() as session:
+        async with self.driver.session(database=self.database) as session:
             res = await session.run(
                 cypher,
                 source_id=source_id,
@@ -194,7 +195,7 @@ class Neo4jIndexer:
             c.valid_to = $valid_to
         """
         temp = temporal or {}
-        async with self.driver.session() as session:
+        async with self.driver.session(database=self.database) as session:
             await session.run(
                 cypher,
                 chunk_id=chunk_id,
@@ -229,12 +230,12 @@ class Neo4jIndexer:
                 acc + [g IN g_list WHERE NOT g IN acc]
             )
         """
-        async with self.driver.session() as session:
+        async with self.driver.session(database=self.database) as session:
             await session.run(cypher, chunk_id=chunk_id, entity_id=entity_id)
 
     async def delete_by_doc_id(self, doc_id: str) -> int:
         """Remove chunks, edges, and recompute or delete orphaned entities for doc_id."""
-        async with self.driver.session() as session:
+        async with self.driver.session(database=self.database) as session:
             # 1. Find all entities mentioned by chunks of this doc
             find_entities_cypher = """
             MATCH (c:Chunk {doc_id: $doc_id})-[:MENTIONS]->(e:Entity)
@@ -303,14 +304,14 @@ class Neo4jIndexer:
 
     async def count_nodes(self) -> int:
         cypher = "MATCH (n:Entity) RETURN count(n) AS cnt"
-        async with self.driver.session() as session:
+        async with self.driver.session(database=self.database) as session:
             res = await session.run(cypher)
             rec = await res.single()
             return int(rec["cnt"]) if rec else 0
 
     async def count_edges(self) -> int:
         cypher = "MATCH ()-[r]->() RETURN count(r) AS cnt"
-        async with self.driver.session() as session:
+        async with self.driver.session(database=self.database) as session:
             res = await session.run(cypher)
             rec = await res.single()
             return int(rec["cnt"]) if rec else 0
@@ -318,7 +319,7 @@ class Neo4jIndexer:
     async def get_all_chunk_ids(self) -> set[str]:
         cypher = "MATCH (c:Chunk) RETURN c.chunk_id AS chunk_id"
         chunk_ids: set[str] = set()
-        async with self.driver.session() as session:
+        async with self.driver.session(database=self.database) as session:
             res = await session.run(cypher)
             records = await res.values()
             for row in records:
@@ -335,8 +336,10 @@ class Neo4jIndexer:
         """Delete chat-sourced graph edges/nodes and remove orphaned entities."""
         if not source_id and not thread_id:
             return 0
-        async with self.driver.session() as session:
-            match_clause = "MATCH ()-[r]->() WHERE (r.source_kind = 'chat' OR r.source_id STARTS WITH 'chat:')"
+        async with self.driver.session(database=self.database) as session:
+            match_clause = (
+                "MATCH ()-[r]->() WHERE (r.source_kind = 'chat' OR r.source_id STARTS WITH 'chat:')"
+            )
             params: dict[str, Any] = {}
             if source_id:
                 match_clause += " AND r.source_id = $source_id"

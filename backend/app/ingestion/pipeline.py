@@ -1,4 +1,5 @@
 import hashlib
+import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,23 @@ logger = logging.getLogger(__name__)
 
 # Cache for chunk extraction results keyed by chunk text SHA-256 hash
 _CHUNK_EXTRACTION_CACHE: dict[str, dict[str, Any]] = {}
+
+
+def _extractor_version(settings: Any | None = None) -> str:
+    """Hash extraction config so a model/label/threshold/stoplist change re-extracts."""
+    settings = settings or get_settings()
+    return hashlib.sha256(
+        json.dumps(
+            {
+                "model": settings.GLINER_MODEL,
+                "labels": list(settings.GLINER_LABELS),
+                "threshold": settings.GLINER_THRESHOLD,
+                "threshold_by_type": settings.GLINER_THRESHOLD_BY_TYPE,
+                "stoplist": list(settings.GLINER_STOPLIST),
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    ).hexdigest()
 
 
 class IngestionSummary(BaseModel):
@@ -100,7 +118,9 @@ class IngestionPipeline:
                     existing.acl_is_public,
                     existing.valid_from.isoformat() if existing.valid_from else None,
                     existing.valid_to.isoformat() if existing.valid_to else None,
+                    (existing.metadata_json or {}).get("extractor_version", ""),
                 )
+                extractor_version = _extractor_version()
                 new_fp = (
                     content_hash,
                     owner_user_id,
@@ -110,6 +130,7 @@ class IngestionPipeline:
                     scope.is_public,
                     (parsed.valid_from.isoformat() if parsed.valid_from else None),
                     (parsed.valid_to.isoformat() if parsed.valid_to else None),
+                    extractor_version,
                 )
                 if existing_fp == new_fp:
                     meta = existing.metadata_json or {}
@@ -315,8 +336,10 @@ class IngestionPipeline:
         doc_meta["cost_usd"] = round(total_cost, 6)
         doc_meta["entity_count"] = len(all_entities)
         doc_meta["relation_count"] = len(all_relations)
+        settings = get_settings()
         doc_meta["extraction_engine"] = "gliner" if gliner_used and not fallback_used else ("mixed" if gliner_used and fallback_used else "heuristic")
-        doc_meta["extraction_model"] = get_settings().GLINER_MODEL if gliner_used else ""
+        doc_meta["extraction_model"] = settings.GLINER_MODEL if gliner_used else ""
+        doc_meta["extractor_version"] = _extractor_version(settings)
         doc_meta["extraction_status"] = "completed"
 
         doc = Document(

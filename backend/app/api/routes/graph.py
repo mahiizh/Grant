@@ -54,7 +54,7 @@ async def get_graph(
     links: list[GraphLink] = []
 
     try:
-        async with driver.session() as session:
+        async with driver.session(database=get_settings().NEO4J_DATABASE) as session:
             # Query entity nodes
             node_cypher = f"""
             MATCH (n:Entity)
@@ -139,7 +139,7 @@ async def get_node_neighbors(
     links: list[GraphLink] = []
 
     try:
-        async with driver.session() as session:
+        async with driver.session(database=get_settings().NEO4J_DATABASE) as session:
             # Fetch center node
             center_cypher = f"""
             MATCH (n:Entity)
@@ -231,7 +231,7 @@ async def get_graph_path(
 
     driver = _get_driver()
     try:
-        async with driver.session() as session:
+        async with driver.session(database=get_settings().NEO4J_DATABASE) as session:
             cypher = f"""
             MATCH (a:Entity), (b:Entity)
             WHERE (a.id = $from OR toLower(a.name) = toLower($from))

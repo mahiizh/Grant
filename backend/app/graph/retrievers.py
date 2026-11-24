@@ -58,7 +58,7 @@ class GraphRetriever:
         ORDER BY length(path)
         LIMIT 1
         """
-        async with self.driver.session() as session:
+        async with self.driver.session(database=get_settings().NEO4J_DATABASE) as session:
             res = await session.run(
                 cypher,
                 start=start_entity_name.strip(),
@@ -106,7 +106,7 @@ class GraphRetriever:
         LIMIT $limit
         """
         evidence_list: list[Evidence] = []
-        async with self.driver.session() as session:
+        async with self.driver.session(database=get_settings().NEO4J_DATABASE) as session:
             res = await session.run(
                 cypher,
                 entity_names=entity_names,
@@ -160,7 +160,7 @@ class GraphRetriever:
         RETURN e.id AS id, e.name AS name, e.entity_type AS type
         LIMIT $limit
         """
-        async with self.driver.session() as session:
+        async with self.driver.session(database=get_settings().NEO4J_DATABASE) as session:
             res = await session.run(cypher, q=query.strip(), limit=top_k, **params)
             return await res.data()
 

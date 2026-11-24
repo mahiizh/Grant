@@ -25,6 +25,13 @@ os.environ["EVAL_GOLDEN_DIR"] = str(_GOLDEN_DIR)
 os.environ["EVAL_CANDIDATES_DIR"] = tempfile.mkdtemp(prefix="graphrag-candidates-")
 os.environ["LLM_CACHE_DIR"] = tempfile.mkdtemp(prefix="graphrag-llm-cache-")
 
+# Test isolation: never touch dev stores. Allow explicit override via env.
+os.environ.setdefault("POSTGRES_DB", "graphrag_lab_test")
+os.environ.setdefault("QDRANT_COLLECTION", "grant_chunks_test")
+os.environ.setdefault("QDRANT_ENTITY_COLLECTION", "grant_entities_test")
+os.environ.setdefault("NEO4J_DATABASE", os.environ.get("NEO4J_TEST_DATABASE", "neo4j"))
+os.environ.setdefault("NEO4J_URI", os.environ.get("NEO4J_TEST_URI", "bolt://localhost:7688"))
+
 from app.main import create_app  # noqa: E402
 
 

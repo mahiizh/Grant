@@ -73,7 +73,7 @@ async def get_system_settings() -> SettingsResponse:
         driver = AsyncGraphDatabase.driver(
             settings.NEO4J_URI, auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
         )
-        async with driver.session() as s:
+        async with driver.session(database=settings.NEO4J_DATABASE) as s:
             await s.run("RETURN 1")
         await driver.close()
         latency = (time.perf_counter() - started) * 1000
