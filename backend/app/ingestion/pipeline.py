@@ -215,6 +215,23 @@ class IngestionPipeline:
 
                             src_id = vr["source_entity_id"]
                             tgt_id = vr["target_entity_id"]
+                            if not any(e.entity_id == tgt_id for e in resolved_entities):
+                                resolved_entities.append(
+                                    Entity(
+                                        entity_id=tgt_id,
+                                        name=str(vr.get("target_name") or tgt_id),
+                                        entity_type=str(vr.get("target_entity_type") or resolved.entity_type),
+                                        canonical_id=tgt_id,
+                                        properties={
+                                            "aliases": list(vr.get("target_aliases", []) or []),
+                                            "type_group": str(vr.get("target_type_group") or ""),
+                                            "owner_user_id": owner_user_id or "",
+                                        },
+                                        acl_scope=chunk.acl_scope,
+                                        temporal=chunk.temporal,
+                                        provenance=chunk.provenance,
+                                    )
+                                )
                             extra_version_rels.append(
                                 Relation(
                                     relation_id=_gen_rel_id(src_id, "VERSION_OF", tgt_id),
@@ -257,7 +274,12 @@ class IngestionPipeline:
 
             # Store extracted entities/relations on chunk metadata so outbox can pass them
             chunk.metadata["entities"] = [
-                {"entity_id": e.entity_id, "name": e.name, "entity_type": e.entity_type}
+                {
+                    "entity_id": e.entity_id,
+                    "name": e.name,
+                    "entity_type": e.entity_type,
+                    "aliases": list(e.properties.get("aliases", []) or []),
+                }
                 for e in ents
             ]
             chunk.metadata["relations"] = [

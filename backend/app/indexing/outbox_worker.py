@@ -79,6 +79,7 @@ class OutboxWorker:
                             "chunk_id": chunk_id,
                             "source_id": doc_id,
                             "owner_user_id": owner_user_id or "",
+                            "aliases": ent.get("aliases", []),
                         },
                     )
                     await self.neo4j.link_chunk_entity(
@@ -124,6 +125,7 @@ class OutboxWorker:
                             "message_id": message_id,
                             "owner_user_id": owner_user_id or "",
                             "source_kind": "chat",
+                            "aliases": ent.get("aliases", []),
                         },
                     )
                 for rel in payload.get("relations", []):

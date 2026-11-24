@@ -25,7 +25,7 @@ TYPE_GROUPS: dict[str, str] = {
     "Control": "control",
     "Process": "process",
     "Concept": "concept",
-    "Document": "document",
+    "Document": "standard",
     "Location": "location",
     "Incident": "incident",
     "Role": "role",
@@ -37,6 +37,33 @@ VERSION_RE = re.compile(
     r"\b(?:v\d+(?:\.\d+)*|\d{4}(?:-\d{2})?|\d+(?:\.\d+)+)\b",
     re.IGNORECASE,
 )
+
+ISO_STANDARD_RE = re.compile(
+    r"\b(?P<base>ISO(?:/IEC|/IEEE|/TS|/TR)?\s*[\d][\d\s.-]*\d|ISO(?:/IEC|/IEEE|/TS|/TR)?\s*\d+)\b"
+    r"(?P<suffix>(?:\s*[:/\-]\s*(?:19|20)\d{2})?(?:\s*/(?:Amd|Cor)\.?\s*\d+(?:\s*[:/\-]\s*(?:19|20)\d{2})?)*)",
+    re.IGNORECASE,
+)
+ISO_YEAR_RE = re.compile(r"(?:19|20)\d{2}")
+
+
+def parse_standard_identifier(name: str) -> dict[str, str] | None:
+    """Parse ISO/IEC-like standard identifiers.
+
+    Returns base (ISO/IEC number), version (year), and normalized display base.
+    Amendments/corrigenda are stripped from base/version identity.
+    """
+    m = ISO_STANDARD_RE.search(name or "")
+    if not m:
+        return None
+    base = re.sub(r"\s+", " ", m.group("base")).strip().upper()
+    base = base.replace("ISO / IEC", "ISO/IEC").replace("ISO/ IEC", "ISO/IEC").replace("ISO /IEC", "ISO/IEC")
+    suffix = m.group("suffix") or ""
+    years = ISO_YEAR_RE.findall(suffix)
+    # First year is the standard version; amendment years are stripped from identity.
+    version = years[0] if years else ""
+    if not base:
+        return None
+    return {"base": base, "version": version}
 
 
 def _norm_text(value: str) -> str:
@@ -65,6 +92,12 @@ def type_group(entity_type: str) -> str:
 
 def extract_version_tokens(name: str) -> tuple[str, tuple[str, ...]]:
     """Return (base_name_without_versions, version_tokens)."""
+    iso = parse_standard_identifier(name)
+    if iso:
+        base = iso["base"].lower()
+        version = iso["version"].lower()
+        versions = (version,) if version else ()
+        return base, versions
     versions = tuple(sorted(m.group(0).lower() for m in VERSION_RE.finditer(name)))
     base = VERSION_RE.sub(" ", name)
     base = re.sub(r"[^\w\s-]", " ", base.lower())
@@ -73,6 +106,14 @@ def extract_version_tokens(name: str) -> tuple[str, tuple[str, ...]]:
 
 
 def names_differ_in_version_or_number(name_a: str, name_b: str) -> bool:
+    iso_a = parse_standard_identifier(name_a)
+    iso_b = parse_standard_identifier(name_b)
+    if iso_a and iso_b:
+        if iso_a["base"] != iso_b["base"]:
+            return False
+        # Amendments/corrigenda stripped from identity; only year version distinguishes.
+        return iso_a["version"] != iso_b["version"]
+
     base_a, ver_a = extract_version_tokens(name_a)
     base_b, ver_b = extract_version_tokens(name_b)
     if not base_a or not base_b:
@@ -95,6 +136,9 @@ def names_differ_in_version_or_number(name_a: str, name_b: str) -> bool:
 
 
 def base_entity_name(name: str) -> str:
+    iso = parse_standard_identifier(name)
+    if iso:
+        return iso["base"]
     base, _ = extract_version_tokens(name)
     base = re.sub(r"\s+", " ", base).strip(" -_:")
     return base or name.strip()
@@ -495,6 +539,17 @@ class IngestionEntityResolver:
                     source_id=source_id,
                 )
                 if base_resolved.entity_id != resolved.entity_id:
+                    # Show versioned name as alias on base node for discoverability.
+                    if resolved.name not in base_resolved.aliases:
+                        base_resolved.aliases = list(dict.fromkeys([*base_resolved.aliases, resolved.name]))
+                        await self._upsert_entity_record(base_resolved, owner_user_id)
+                        await self.entity_index.upsert_entity(
+                            entity_id=base_resolved.entity_id,
+                            name=base_resolved.name,
+                            entity_type=base_resolved.entity_type,
+                            type_group=base_resolved.type_group,
+                            owner_user_id=owner_user_id,
+                        )
                     extra_relations.append(
                         {
                             "source_entity_id": resolved.entity_id,
@@ -502,6 +557,9 @@ class IngestionEntityResolver:
                             "relation_type": "VERSION_OF",
                             "source_name": resolved.name,
                             "target_name": base_resolved.name,
+                            "target_entity_type": base_resolved.entity_type,
+                            "target_aliases": list(base_resolved.aliases),
+                            "target_type_group": base_resolved.type_group,
                         }
                     )
 

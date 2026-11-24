@@ -60,6 +60,7 @@ async def get_graph(
             MATCH (n:Entity)
             WHERE {node_pred}
             RETURN n.id AS id, n.name AS name, n.entity_type AS type,
+                   coalesce(n.aliases, []) AS aliases,
                    n.valid_from AS valid_from, n.valid_to AS valid_to,
                    count {{ (n)--() }} AS degree
             LIMIT $limit
@@ -79,6 +80,7 @@ async def get_graph(
                         id=node_id,
                         name=node_name,
                         type=r.get("type") or "CONCEPT",
+                        aliases=[str(a) for a in (r.get("aliases") or []) if str(a).strip()],
                         valid_from=r.get("valid_from"),
                         valid_to=r.get("valid_to"),
                         degree=int(r.get("degree") or 0),
@@ -143,6 +145,7 @@ async def get_node_neighbors(
             MATCH (n:Entity)
             WHERE (n.id = $id OR toLower(n.name) = toLower($id)) AND {center_pred}
             RETURN n.id AS id, n.name AS name, n.entity_type AS type,
+                   coalesce(n.aliases, []) AS aliases,
                    n.valid_from AS valid_from, n.valid_to AS valid_to,
                    count {{ (n)--() }} AS degree
             """
@@ -157,6 +160,7 @@ async def get_node_neighbors(
                     id=c_id,
                     name=center["name"],
                     type=center["type"] or "CONCEPT",
+                    aliases=[str(a) for a in (center.get("aliases") or []) if str(a).strip()],
                     valid_from=center.get("valid_from"),
                     valid_to=center.get("valid_to"),
                     degree=int(center.get("degree") or 0),
@@ -168,6 +172,7 @@ async def get_node_neighbors(
             MATCH (a:Entity)-[r]-(b:Entity)
             WHERE a.id = $id AND {neighbor_pred} AND {rel_pred}
             RETURN b.id AS id, b.name AS name, b.entity_type AS type,
+                   coalesce(b.aliases, []) AS aliases,
                    b.valid_from AS valid_from, b.valid_to AS valid_to,
                    count {{ (b)--() }} AS degree,
                    startNode(r).id AS source, endNode(r).id AS target, type(r) AS label
@@ -185,6 +190,7 @@ async def get_node_neighbors(
                             id=row["id"],
                             name=row["name"],
                             type=row["type"] or "CONCEPT",
+                            aliases=[str(a) for a in (row.get("aliases") or []) if str(a).strip()],
                             valid_from=row.get("valid_from"),
                             valid_to=row.get("valid_to"),
                             degree=int(row.get("degree") or 0),

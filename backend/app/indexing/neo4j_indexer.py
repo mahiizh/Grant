@@ -57,7 +57,8 @@ class Neo4jIndexer:
             n.owner_user_ids = CASE WHEN $owner_user_id <> '' THEN [$owner_user_id] ELSE [] END,
             n.valid_from = $valid_from,
             n.valid_to = $valid_to,
-            n.doc_id = $doc_id
+            n.doc_id = $doc_id,
+            n.aliases = $aliases
         ON MATCH SET
             n.name = $name,
             n.entity_type = $entity_type,
@@ -79,12 +80,14 @@ class Neo4jIndexer:
                 WHEN $owner_user_id <> '' AND NOT $owner_user_id IN coalesce(n.owner_user_ids, [])
                 THEN coalesce(n.owner_user_ids, []) + [$owner_user_id]
                 ELSE coalesce(n.owner_user_ids, [])
-            END
+            END,
+            n.aliases = REDUCE(acc = coalesce(n.aliases, []), a IN $aliases | CASE WHEN a IN acc OR a = '' THEN acc ELSE acc + [a] END)
         """
         props = properties or {}
         temp = temporal or {}
         owner_user_id = str(props.get("owner_user_id", "") or "")
         source_id = str(props.get("source_id", props.get("doc_id", "")) or "")
+        aliases = [str(a) for a in (props.get("aliases") or []) if str(a).strip()]
         async with self.driver.session() as session:
             await session.run(
                 cypher,
@@ -97,6 +100,7 @@ class Neo4jIndexer:
                 doc_id=props.get("doc_id", ""),
                 source_id=source_id,
                 owner_user_id=owner_user_id,
+                aliases=aliases,
                 **_acl_props(acl_scope),
             )
 

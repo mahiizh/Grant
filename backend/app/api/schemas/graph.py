@@ -5,6 +5,7 @@ class GraphNode(BaseModel):
     id: str
     name: str
     type: str
+    aliases: list[str] = Field(default_factory=list)
     # Analytics that Neo4j does not currently store or compute are ``None``.
     # Clients may compute them from the returned topology.
     pagerank: float | None = None
