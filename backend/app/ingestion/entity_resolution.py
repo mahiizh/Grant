@@ -213,6 +213,7 @@ class IngestionEntityResolver:
         self._session = session
         self._local_cache: dict[tuple[str, str, str], ResolvedMention] = {}
         self._registry: dict[str, dict[str, Any]] = {}
+        self._pending_mentions: dict[tuple[str, str], dict[str, Any]] = {}
 
     @property
     def entity_index(self) -> Any:
@@ -303,51 +304,60 @@ class IngestionEntityResolver:
         doc_id: str | None,
         surface_form: str,
     ) -> None:
-        if not source_id or self._session is None:
+        if not source_id:
             return
-        try:
-            from sqlalchemy import select
+        source_kind = "chat" if source_id.startswith("chat:") else "document"
+        key = (entity_id, source_id)
+        existing = self._pending_mentions.get(key)
+        if existing is None:
+            self._pending_mentions[key] = {
+                "entity_id": entity_id,
+                "source_id": source_id,
+                "source_kind": source_kind,
+                "doc_id": doc_id if source_kind == "document" else None,
+                "owner_user_id": owner_user_id,
+                "surface_form": surface_form,
+                "mention_count": 1,
+                "entity_type": entity_type,
+            }
+        else:
+            existing["mention_count"] = int(existing.get("mention_count", 0)) + 1
+            if not existing.get("surface_form"):
+                existing["surface_form"] = surface_form
+            existing["entity_type"] = entity_type
+            if source_kind == "document" and doc_id:
+                existing["doc_id"] = doc_id
 
-            from app.db.models import DocumentRecord, EntityMentionRecord
+    async def persist_mentions(self, session: Any = None) -> int:
+        """Persist buffered mentions. Call after document save in same transaction."""
+        db = session or self._session
+        if db is None or not self._pending_mentions:
+            self._pending_mentions.clear()
+            return 0
+        from sqlalchemy import select
 
-            resolved_doc_id = doc_id
-            if doc_id:
-                with self._session.no_autoflush:
-                    exists = (
-                        await self._session.execute(
-                            select(DocumentRecord.doc_id).where(DocumentRecord.doc_id == doc_id)
-                        )
-                    ).scalar_one_or_none()
-                if exists is None:
-                    resolved_doc_id = None
+        from app.db.models import EntityMentionRecord
 
+        count = 0
+        for mention in self._pending_mentions.values():
             stmt = select(EntityMentionRecord).where(
-                EntityMentionRecord.entity_id == entity_id,
-                EntityMentionRecord.source_id == source_id,
+                EntityMentionRecord.entity_id == mention["entity_id"],
+                EntityMentionRecord.source_id == mention["source_id"],
             )
-            with self._session.no_autoflush:
-                existing = (await self._session.execute(stmt)).scalar_one_or_none()
+            existing = (await db.execute(stmt)).scalar_one_or_none()
             if existing is None:
-                self._session.add(
-                    EntityMentionRecord(
-                        entity_id=entity_id,
-                        source_id=source_id,
-                        source_kind="chat" if source_id.startswith("chat:") else "document",
-                        doc_id=resolved_doc_id,
-                        owner_user_id=owner_user_id,
-                        surface_form=surface_form,
-                        mention_count=1,
-                        entity_type=entity_type,
-                    )
-                )
+                db.add(EntityMentionRecord(**mention))
             else:
-                existing.mention_count = int(existing.mention_count or 0) + 1
-                existing.surface_form = existing.surface_form or surface_form
-                existing.entity_type = entity_type
-                if resolved_doc_id and not existing.doc_id:
-                    existing.doc_id = resolved_doc_id
-        except Exception:
-            logger.debug("Failed to record mention for %s in %s", entity_id, source_id, exc_info=True)
+                existing.mention_count = int(existing.mention_count or 0) + int(mention["mention_count"] or 1)
+                existing.surface_form = existing.surface_form or mention["surface_form"]
+                existing.entity_type = mention["entity_type"]
+                if mention.get("doc_id") and not existing.doc_id:
+                    existing.doc_id = mention["doc_id"]
+                if mention.get("owner_user_id") and not existing.owner_user_id:
+                    existing.owner_user_id = mention["owner_user_id"]
+            count += 1
+        self._pending_mentions.clear()
+        return count
 
     async def resolve(
         self,

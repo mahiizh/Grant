@@ -310,8 +310,23 @@ class IngestionPipeline:
             metadata=doc_meta,
         )
 
-        # Persist to PostgreSQL within the caller's transaction
+        # Persist to PostgreSQL within the caller's transaction.
+        # Order: save document -> delete that doc's old mentions -> insert new mentions.
         await DocumentRepository.save_document(session=session, document=doc)
+
+        from sqlalchemy import delete as sa_delete
+
+        from app.db.models import EntityMentionRecord
+
+        await session.execute(
+            sa_delete(EntityMentionRecord).where(
+                EntityMentionRecord.source_id == doc.doc_id,
+                EntityMentionRecord.source_kind == "document",
+            )
+        )
+
+        if resolver is not None and hasattr(resolver, "persist_mentions"):
+            await resolver.persist_mentions(session)
 
         # Invalidate / close validity on superseded prior versions (e.g. v1 when v2 arrives)
         await close_superseded_document_versions(session=session, new_doc=doc)

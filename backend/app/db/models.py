@@ -4,6 +4,7 @@ from typing import Any
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     Float,
     ForeignKey,
@@ -234,6 +235,10 @@ class EntityMentionRecord(Base):
 
     __table_args__ = (
         UniqueConstraint("entity_id", "source_id", name="uq_entity_mentions_entity_source"),
+        CheckConstraint(
+            "source_kind <> 'document' OR doc_id IS NOT NULL",
+            name="ck_entity_mentions_doc_source_has_doc_id",
+        ),
         Index("ix_entity_mentions_owner_entity", "owner_user_id", "entity_id"),
         Index("ix_entity_mentions_source_kind", "source_kind", "source_id"),
     )

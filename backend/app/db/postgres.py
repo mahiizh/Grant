@@ -415,13 +415,9 @@ class DocumentRepository:
             doc_record.provenance_verified = document.provenance.verified
             doc_record.metadata_json = document.metadata
 
-            # Clear old chunks and mentions for clean replacement
+            # Clear old chunks for clean replacement. Mentions are managed by the
+            # ingestion pipeline in explicit order: save doc -> delete old mentions -> insert new.
             await session.execute(delete(ChunkRecord).where(ChunkRecord.doc_id == document.doc_id))
-            from app.db.models import EntityMentionRecord
-
-            await session.execute(
-                delete(EntityMentionRecord).where(EntityMentionRecord.source_id == document.doc_id)
-            )
 
         # Insert new chunks
         for chunk in document.chunks:
