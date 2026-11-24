@@ -308,20 +308,32 @@ class IngestionEntityResolver:
         try:
             from sqlalchemy import select
 
-            from app.db.models import EntityMentionRecord
+            from app.db.models import DocumentRecord, EntityMentionRecord
+
+            resolved_doc_id = doc_id
+            if doc_id:
+                with self._session.no_autoflush:
+                    exists = (
+                        await self._session.execute(
+                            select(DocumentRecord.doc_id).where(DocumentRecord.doc_id == doc_id)
+                        )
+                    ).scalar_one_or_none()
+                if exists is None:
+                    resolved_doc_id = None
 
             stmt = select(EntityMentionRecord).where(
                 EntityMentionRecord.entity_id == entity_id,
                 EntityMentionRecord.source_id == source_id,
             )
-            existing = (await self._session.execute(stmt)).scalar_one_or_none()
+            with self._session.no_autoflush:
+                existing = (await self._session.execute(stmt)).scalar_one_or_none()
             if existing is None:
                 self._session.add(
                     EntityMentionRecord(
                         entity_id=entity_id,
                         source_id=source_id,
                         source_kind="chat" if source_id.startswith("chat:") else "document",
-                        doc_id=doc_id,
+                        doc_id=resolved_doc_id,
                         owner_user_id=owner_user_id,
                         surface_form=surface_form,
                         mention_count=1,
@@ -332,6 +344,8 @@ class IngestionEntityResolver:
                 existing.mention_count = int(existing.mention_count or 0) + 1
                 existing.surface_form = existing.surface_form or surface_form
                 existing.entity_type = entity_type
+                if resolved_doc_id and not existing.doc_id:
+                    existing.doc_id = resolved_doc_id
         except Exception:
             logger.debug("Failed to record mention for %s in %s", entity_id, source_id, exc_info=True)
 
