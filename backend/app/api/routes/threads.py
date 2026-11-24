@@ -184,6 +184,7 @@ async def _stage_chat_graph(
             rr.setdefault("relation_type", rr.get("predicate", "RELATED_TO"))
             remapped.append(rr)
         relations_payload = remapped
+        await resolver.persist_mentions(session)
     except Exception:
         logger.exception("Chat entity resolution failed for %s; staging unresolved entities", role)
         entities_payload = [

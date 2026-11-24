@@ -102,6 +102,7 @@ class Settings(BaseSettings):
             "supplier",
             "suppliers",
             "documented information",
+            "changes",
             "information",
             "requirements",
             "requirement",

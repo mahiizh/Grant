@@ -148,6 +148,8 @@ class GLiNEREntityExtractor:
         for wi, window in enumerate(windows):
             try:
                 preds = model.predict_entities(window, self.labels, threshold=0.0)
+                if "docling" in window.lower():
+                    logger.info("GLiNER raw output for Docling window %s: %s", wi, preds)
             except Exception:
                 logger.exception("GLiNER prediction failed for window %s", wi)
                 continue
