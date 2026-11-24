@@ -45,6 +45,7 @@ async def query_pipeline(
         acl_scope=acl_scope,
         as_of_time=request.as_of,
         thread_id=request.thread_id,
+        owner_user_id=current_user.user_id,
     )
 
     evidence_items = [
