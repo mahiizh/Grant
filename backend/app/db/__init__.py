@@ -1,4 +1,11 @@
-from app.db.models import Base, ChunkRecord, DocumentRecord, OutboxEventRecord
+from app.db.models import (
+    Base,
+    ChunkRecord,
+    DocumentRecord,
+    EntityMentionRecord,
+    EntityRecord,
+    OutboxEventRecord,
+)
 from app.db.outbox import OutboxEventType, OutboxService, OutboxStatus
 from app.db.postgres import (
     DocumentRepository,
@@ -18,6 +25,8 @@ __all__ = [
     "ChunkRecord",
     "DocumentRecord",
     "DocumentRepository",
+    "EntityMentionRecord",
+    "EntityRecord",
     "OutboxEventRecord",
     "OutboxEventType",
     "OutboxService",

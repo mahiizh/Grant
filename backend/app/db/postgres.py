@@ -199,6 +199,7 @@ class DocumentRepository:
             chunk_index=chunk.index,
             text=chunk.text,
             tokens=chunk.tokens,
+            owner_user_id=chunk.owner_user_id,
             acl_tenant_id=chunk.acl_scope.tenant_id,
             acl_allowed_roles=list(chunk.acl_scope.allowed_roles),
             acl_allowed_groups=list(chunk.acl_scope.allowed_groups),
@@ -236,6 +237,7 @@ class DocumentRepository:
             index=record.chunk_index,
             text=record.text,
             tokens=record.tokens,
+            owner_user_id=getattr(record, "owner_user_id", None),
             acl_scope=acl,
             temporal=temporal,
             provenance=prov,
@@ -271,6 +273,7 @@ class DocumentRepository:
             title=record.title,
             content=record.content,
             chunks=domain_chunks,
+            owner_user_id=getattr(record, "owner_user_id", None),
             acl_scope=acl,
             temporal=temporal,
             provenance=prov,
@@ -309,6 +312,7 @@ class DocumentRepository:
         """
         return (
             DocumentRepository._effective_content_hash(document),
+            document.owner_user_id,
             document.acl_scope.tenant_id,
             tuple(sorted(document.acl_scope.allowed_roles)),
             tuple(sorted(document.acl_scope.allowed_groups)),
@@ -343,6 +347,7 @@ class DocumentRepository:
             existing_fingerprint = (
                 existing_doc.content_hash
                 or hashlib.sha256(existing_doc.content.encode("utf-8")).hexdigest(),
+                getattr(existing_doc, "owner_user_id", None),
                 existing_doc.acl_tenant_id,
                 tuple(sorted(existing_doc.acl_allowed_roles or [])),
                 tuple(sorted(existing_doc.acl_allowed_groups or [])),
@@ -356,6 +361,7 @@ class DocumentRepository:
                 # fields such as title, version, and metadata.
                 existing_doc.title = document.title
                 existing_doc.version = document.version
+                existing_doc.owner_user_id = document.owner_user_id
                 existing_doc.content_hash = cls._effective_content_hash(document)
                 existing_doc.metadata_json = document.metadata
                 existing_doc.source_version = document.temporal.source_version
@@ -373,6 +379,7 @@ class DocumentRepository:
                 content=document.content,
                 version=document.version,
                 content_hash=cls._effective_content_hash(document),
+                owner_user_id=document.owner_user_id,
                 acl_tenant_id=document.acl_scope.tenant_id,
                 acl_allowed_roles=list(document.acl_scope.allowed_roles),
                 acl_allowed_groups=list(document.acl_scope.allowed_groups),
@@ -393,6 +400,7 @@ class DocumentRepository:
             doc_record.title = document.title
             doc_record.content = document.content
             doc_record.version = document.version
+            doc_record.owner_user_id = document.owner_user_id
             doc_record.content_hash = cls._effective_content_hash(document)
             doc_record.acl_tenant_id = document.acl_scope.tenant_id
             doc_record.acl_allowed_roles = list(document.acl_scope.allowed_roles)
@@ -407,8 +415,13 @@ class DocumentRepository:
             doc_record.provenance_verified = document.provenance.verified
             doc_record.metadata_json = document.metadata
 
-            # Clear old chunks for clean replacement
+            # Clear old chunks and mentions for clean replacement
             await session.execute(delete(ChunkRecord).where(ChunkRecord.doc_id == document.doc_id))
+            from app.db.models import EntityMentionRecord
+
+            await session.execute(
+                delete(EntityMentionRecord).where(EntityMentionRecord.source_id == document.doc_id)
+            )
 
         # Insert new chunks
         for chunk in document.chunks:
@@ -436,6 +449,7 @@ class DocumentRepository:
             "title": document.title,
             "version": document.version,
             "chunk_count": len(document.chunks),
+            "owner_user_id": document.owner_user_id,
             "tenant_id": document.acl_scope.tenant_id,
             "source_uri": document.provenance.source_uri,
         }
@@ -455,6 +469,7 @@ class DocumentRepository:
                 "index": chunk.index,
                 "text": chunk.text,
                 "tokens": chunk.tokens,
+                "owner_user_id": chunk.owner_user_id or document.owner_user_id,
                 "acl_scope": {
                     "tenant_id": chunk.acl_scope.tenant_id,
                     "allowed_roles": list(chunk.acl_scope.allowed_roles),

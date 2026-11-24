@@ -9,7 +9,7 @@ from app.db.models import OutboxEventRecord
 from app.db.outbox import OutboxEventType, OutboxService
 from app.db.postgres import get_session
 from app.indexing.neo4j_indexer import Neo4jIndexer
-from app.indexing.qdrant_indexer import QdrantIndexer
+from app.indexing.qdrant_indexer import EntityVectorIndex, QdrantIndexer
 
 logger = logging.getLogger(__name__)
 
@@ -22,10 +22,12 @@ class OutboxWorker:
         qdrant_indexer: QdrantIndexer | None = None,
         neo4j_indexer: Neo4jIndexer | None = None,
         cache_invalidator: CacheInvalidator | None = None,
+        entity_indexer: EntityVectorIndex | None = None,
     ) -> None:
         self.qdrant = qdrant_indexer or QdrantIndexer()
         self.neo4j = neo4j_indexer or Neo4jIndexer()
         self.cache_invalidator = cache_invalidator or CacheInvalidator()
+        self.entity_indexer = entity_indexer or EntityVectorIndex()
 
     async def process_event(
         self,
@@ -44,6 +46,8 @@ class OutboxWorker:
                 acl_scope = payload.get("acl_scope", {})
                 temporal = payload.get("temporal", {})
 
+                owner_user_id = payload.get("owner_user_id")
+
                 # 1. Sync to Qdrant (dense + sparse embeddings)
                 await self.qdrant.upsert_chunk(
                     chunk_id=chunk_id,
@@ -59,6 +63,7 @@ class OutboxWorker:
                     text=text,
                     acl_scope=acl_scope,
                     temporal=temporal,
+                    owner_user_id=owner_user_id,
                 )
 
                 # 3. If extracted entities/relations are bundled with chunk
@@ -69,7 +74,12 @@ class OutboxWorker:
                         entity_type=ent.get("entity_type", "Concept"),
                         acl_scope=acl_scope,
                         temporal=temporal,
-                        properties={"doc_id": doc_id, "chunk_id": chunk_id},
+                        properties={
+                            "doc_id": doc_id,
+                            "chunk_id": chunk_id,
+                            "source_id": doc_id,
+                            "owner_user_id": owner_user_id or "",
+                        },
                     )
                     await self.neo4j.link_chunk_entity(
                         chunk_id=chunk_id,
@@ -90,6 +100,59 @@ class OutboxWorker:
                 doc_id = payload.get("doc_id", event.aggregate_id)
                 await self.qdrant.delete_by_doc_id(doc_id)
                 await self.neo4j.delete_by_doc_id(doc_id)
+                await self._cleanup_orphan_entities(session)
+
+            elif event_type == OutboxEventType.CHAT_GRAPH_UPSERTED.value:
+                owner_user_id = payload.get("owner_user_id")
+                thread_id = payload.get("thread_id", "")
+                message_id = payload.get("message_id", event.aggregate_id)
+                source_id = payload.get("source_id", f"chat:{message_id}")
+                acl_scope = payload.get("acl_scope", {})
+                temporal = payload.get("temporal", {})
+                for ent in payload.get("entities", []):
+                    await self.neo4j.merge_node(
+                        entity_id=ent.get("entity_id", ent.get("name")),
+                        name=ent.get("name", ""),
+                        entity_type=ent.get("entity_type", "Concept"),
+                        acl_scope=acl_scope,
+                        temporal=temporal,
+                        properties={
+                            "doc_id": "",
+                            "chunk_id": "",
+                            "source_id": source_id,
+                            "thread_id": thread_id,
+                            "message_id": message_id,
+                            "owner_user_id": owner_user_id or "",
+                            "source_kind": "chat",
+                        },
+                    )
+                for rel in payload.get("relations", []):
+                    await self.neo4j.merge_edge(
+                        source_id=rel.get("source_entity_id"),
+                        target_id=rel.get("target_entity_id"),
+                        relation_type=rel.get("relation_type", "RELATED_TO"),
+                        acl_scope=acl_scope,
+                        temporal=temporal,
+                        properties={
+                            "doc_id": source_id,
+                            "chunk_id": source_id,
+                            "source_id": source_id,
+                            "thread_id": thread_id,
+                            "message_id": message_id,
+                            "owner_user_id": owner_user_id or "",
+                            "source_kind": "chat",
+                        },
+                    )
+
+            elif event_type == OutboxEventType.CHAT_GRAPH_DELETED.value:
+                source_id = payload.get("source_id", event.aggregate_id)
+                thread_id = payload.get("thread_id")
+                owner_user_id = payload.get("owner_user_id")
+                await self.neo4j.delete_chat_graph(
+                    source_id=source_id,
+                    thread_id=thread_id,
+                    owner_user_id=owner_user_id,
+                )
 
             elif event_type == OutboxEventType.CACHE_INVALIDATED.value:
                 summary = self.cache_invalidator.handle_outbox_event(
@@ -129,6 +192,30 @@ class OutboxWorker:
                 processed_count += 1
 
         return processed_count
+
+    async def _cleanup_orphan_entities(self, session: AsyncSession) -> list[str]:
+        """Delete entities with no remaining mentions from Postgres and Qdrant."""
+        from sqlalchemy import delete, select
+
+        from app.db.models import EntityMentionRecord, EntityRecord
+
+        orphan_ids = list(
+            (
+                await session.execute(
+                    select(EntityRecord.entity_id).where(
+                        ~EntityRecord.entity_id.in_(select(EntityMentionRecord.entity_id).distinct())
+                    )
+                )
+            ).scalars().all()
+        )
+        if not orphan_ids:
+            return []
+        await session.execute(delete(EntityRecord).where(EntityRecord.entity_id.in_(orphan_ids)))
+        try:
+            await self.entity_indexer.delete_entities(orphan_ids)
+        except Exception:
+            logger.exception("Failed to delete orphan entity vectors for %s", orphan_ids)
+        return orphan_ids
 
     async def drain(self) -> int:
         """Continuously process pending events until the outbox queue is empty."""

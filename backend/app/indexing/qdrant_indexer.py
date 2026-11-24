@@ -136,3 +136,119 @@ class QdrantIndexer:
     async def close(self) -> None:
         """Close Qdrant client connection."""
         await self.client.close()
+
+
+def entity_id_to_point_id(entity_id: str) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"entity:{entity_id}"))
+
+
+class EntityVectorIndex:
+    """Qdrant collection storing entity embeddings for SBERT-based resolution.
+
+    Payload is intentionally minimal: vector + entity_id + type_group + owner_user_id.
+    Entity-doc/source links live in Postgres entity_mentions and are synced via outbox.
+    """
+
+    def __init__(self, client: AsyncQdrantClient | None = None) -> None:
+        settings = get_settings()
+        self.collection_name = settings.QDRANT_ENTITY_COLLECTION
+        self.client = client or AsyncQdrantClient(
+            url=f"http://{settings.QDRANT_HOST}:{settings.QDRANT_PORT}",
+            check_compatibility=False,
+        )
+        self.embedding_service = get_embedding_service()
+
+    async def upsert_entity(
+        self,
+        *,
+        entity_id: str,
+        name: str,
+        entity_type: str,
+        type_group: str,
+        owner_user_id: str | None,
+    ) -> None:
+        text = f"{name} [{entity_type}]"
+        dense = self.embedding_service.embed_query_dense(text)
+        payload = {
+            "entity_id": entity_id,
+            "type_group": type_group,
+            "owner_user_id": owner_user_id or "",
+        }
+        await self.client.upsert(
+            collection_name=self.collection_name,
+            points=[
+                models.PointStruct(
+                    id=entity_id_to_point_id(entity_id),
+                    vector=dense,
+                    payload=payload,
+                )
+            ],
+        )
+
+    async def search_similar(
+        self,
+        *,
+        name: str,
+        entity_type: str,
+        type_group: str,
+        owner_user_id: str | None,
+        limit: int = 5,
+        threshold: float = 0.0,
+    ) -> list[dict[str, Any]]:
+        query_vec = self.embedding_service.embed_query_dense(f"{name} [{entity_type}]")
+        must: list[models.Condition] = [
+            models.FieldCondition(key="type_group", match=models.MatchValue(value=type_group))
+        ]
+        if owner_user_id:
+            must.append(
+                models.FieldCondition(key="owner_user_id", match=models.MatchValue(value=owner_user_id))
+            )
+        flt = models.Filter(must=must)
+        try:
+            res = await self.client.query_points(
+                collection_name=self.collection_name,
+                query=query_vec,
+                query_filter=flt,
+                limit=limit,
+                with_payload=True,
+            )
+            points = res.points
+        except Exception:
+            points = await self.client.search(
+                collection_name=self.collection_name,
+                query_vector=query_vec,
+                query_filter=flt,
+                limit=limit,
+                with_payload=True,
+            )
+        out: list[dict[str, Any]] = []
+        for p in points:
+            score = float(getattr(p, "score", 0.0) or 0.0)
+            if score < threshold:
+                continue
+            payload = dict(getattr(p, "payload", None) or {})
+            payload["_score"] = score
+            out.append(payload)
+        return out
+
+    async def delete_by_owner(self, owner_user_id: str) -> None:
+        flt = models.Filter(
+            must=[models.FieldCondition(key="owner_user_id", match=models.MatchValue(value=owner_user_id))]
+        )
+        await self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=models.FilterSelector(filter=flt),
+        )
+
+    async def delete_entities(self, entity_ids: list[str]) -> None:
+        if not entity_ids:
+            return
+        await self.client.delete(
+            collection_name=self.collection_name,
+            points_selector=models.PointIdsList(
+                points=[entity_id_to_point_id(eid) for eid in entity_ids]
+            ),
+        )
+
+    async def close(self) -> None:
+        await self.client.close()

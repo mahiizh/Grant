@@ -11,6 +11,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -33,6 +34,7 @@ class DocumentRecord(Base):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
 
     # ACL Scope
     acl_tenant_id: Mapped[str] = mapped_column(String(64), default="default", index=True)
@@ -79,6 +81,7 @@ class ChunkRecord(Base):
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
 
     # ACL Scope
     acl_tenant_id: Mapped[str] = mapped_column(String(64), default="default", index=True)
@@ -132,6 +135,7 @@ class ThreadRecord(Base):
 
     thread_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     title: Mapped[str] = mapped_column(String(256), nullable=False)
+    owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     acl_scope: Mapped[str] = mapped_column(String(64), default="data-platform", nullable=False)
     as_of_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -158,6 +162,7 @@ class MessageRecord(Base):
     thread_id: Mapped[str] = mapped_column(
         String(64), ForeignKey("threads.thread_id", ondelete="CASCADE"), nullable=False, index=True
     )
+    owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     role: Mapped[str] = mapped_column(String(16), nullable=False)  # "user" | "assistant" | "system"
     content: Mapped[str] = mapped_column(Text, nullable=False)
     raw_query: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -179,6 +184,59 @@ class MessageRecord(Base):
     )
 
     thread: Mapped["ThreadRecord"] = relationship("ThreadRecord", back_populates="messages")
+
+
+class EntityRecord(Base):
+    """Canonical entity registry. Qdrant holds only vector+entity_id+type_group+owner_user_id."""
+
+    __tablename__ = "entities"
+
+    entity_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    canonical_name: Mapped[str] = mapped_column(Text, nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    type_group: Mapped[str] = mapped_column(String(64), nullable=False)
+    owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    aliases: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    __table_args__ = (
+        Index("ix_entities_owner_type_group", "owner_user_id", "type_group"),
+    )
+
+
+class EntityMentionRecord(Base):
+    """PostgreSQL table linking canonical entities to documents/sources."""
+
+    __tablename__ = "entity_mentions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entity_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    source_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    source_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="document")
+    doc_id: Mapped[str | None] = mapped_column(
+        String(128), ForeignKey("documents.doc_id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    surface_form: Mapped[str] = mapped_column(Text, nullable=False)
+    mention_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    entity_type: Mapped[str] = mapped_column(String(64), nullable=False, default="Concept")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+
+    __table_args__ = (
+        UniqueConstraint("entity_id", "source_id", name="uq_entity_mentions_entity_source"),
+        Index("ix_entity_mentions_owner_entity", "owner_user_id", "entity_id"),
+        Index("ix_entity_mentions_source_kind", "source_kind", "source_id"),
+    )
 
 
 class SpanRecord(Base):

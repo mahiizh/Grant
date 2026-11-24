@@ -64,11 +64,13 @@ class FakeNeo4jIndexer:
         text: str,
         acl_scope: dict[str, Any] | None = None,
         temporal: dict[str, Any] | None = None,
+        owner_user_id: str | None = None,
     ) -> None:
         self._chunks[chunk_id] = {
             "chunk_id": chunk_id,
             "doc_id": doc_id,
             "text": text,
+            "owner_user_id": owner_user_id,
             "acl_scope": acl_scope or {},
             "temporal": temporal or {},
         }
@@ -248,6 +250,99 @@ class FakeNeo4jIndexer:
 
     def get_edge(self, edge_id: str) -> dict[str, Any] | None:
         return self._edges.get(edge_id)
+
+    async def delete_chat_graph(
+        self,
+        source_id: str | None = None,
+        thread_id: str | None = None,
+        owner_user_id: str | None = None,
+    ) -> int:
+        to_delete = []
+        for edge_id, edge in self._edges.items():
+            props = edge.get("properties", {})
+            if thread_id and props.get("thread_id") != thread_id:
+                continue
+            if source_id and props.get("source_id") != source_id:
+                continue
+            if owner_user_id and props.get("owner_user_id") != owner_user_id:
+                continue
+            if (
+                props.get("source_kind") == "chat"
+                or str(props.get("source_id", "")).startswith("chat:")
+                or thread_id
+                or source_id
+            ):
+                to_delete.append(edge_id)
+        for edge_id in to_delete:
+            del self._edges[edge_id]
+        return len(to_delete)
+
+    async def close(self) -> None:
+        return None
+
+
+class FakeEntityVectorIndex:
+    """In-memory entity vector index for tests. Payload is minimal like real Qdrant."""
+
+    def __init__(self) -> None:
+        self._entities: dict[str, dict[str, Any]] = {}
+
+    async def upsert_entity(
+        self,
+        *,
+        entity_id: str,
+        name: str,
+        entity_type: str,
+        type_group: str,
+        owner_user_id: str | None,
+    ) -> None:
+        self._entities[entity_id] = {
+            "entity_id": entity_id,
+            "type_group": type_group,
+            "owner_user_id": owner_user_id or "",
+            # internal-only test aid; real Qdrant payload does not store name
+            "_name": name,
+            "_entity_type": entity_type,
+        }
+
+    async def search_similar(
+        self,
+        *,
+        name: str,
+        entity_type: str,
+        type_group: str,
+        owner_user_id: str | None,
+        limit: int = 5,
+        threshold: float = 0.0,
+    ) -> list[dict[str, Any]]:
+        out = []
+        for rec in self._entities.values():
+            if rec.get("type_group") != type_group:
+                continue
+            if owner_user_id and rec.get("owner_user_id") != owner_user_id:
+                continue
+            from app.ingestion.entity_resolution import normalize_text_token
+
+            n1 = normalize_text_token(name)
+            n2 = normalize_text_token(str(rec.get("_name", "")))
+            score = 1.0 if n1 == n2 else (0.92 if n1 in n2 or n2 in n1 else 0.0)
+            if score >= threshold:
+                out.append(
+                    {
+                        "entity_id": rec["entity_id"],
+                        "type_group": rec["type_group"],
+                        "owner_user_id": rec["owner_user_id"],
+                        "_score": score,
+                        "_name": rec.get("_name", ""),
+                        "_entity_type": rec.get("_entity_type", ""),
+                    }
+                )
+        out.sort(key=lambda x: -x["_score"])
+        return out[:limit]
+
+    async def delete_entities(self, entity_ids: list[str]) -> None:
+        for eid in entity_ids:
+            self._entities.pop(eid, None)
 
     async def close(self) -> None:
         return None

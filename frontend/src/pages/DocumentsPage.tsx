@@ -91,8 +91,8 @@ export function DocumentsPage() {
     accept: {
       "text/markdown": [".md"],
       "text/plain": [".txt"],
+      "text/csv": [".csv"],
       "application/json": [".json"],
-      "application/pdf": [".pdf"],
     },
     multiple: false,
   });
@@ -201,7 +201,7 @@ export function DocumentsPage() {
             Drag & drop files or click to ingest
           </h2>
           <p className="text-xs text-zinc-400 mt-1 max-w-sm leading-relaxed">
-            Accepts Markdown (<code className="text-amber-300 font-mono">.md</code>), Plain Text (<code className="text-amber-300 font-mono">.txt</code>), JSON (<code className="text-amber-300 font-mono">.json</code>), or PDF.
+            Accepts Markdown (<code className="text-amber-300 font-mono">.md</code>), Plain Text (<code className="text-amber-300 font-mono">.txt</code>), CSV (<code className="text-amber-300 font-mono">.csv</code>), or JSON (<code className="text-amber-300 font-mono">.json</code>). PDF is not yet supported.
           </p>
           <div className="flex items-center gap-2 mt-4 text-[10px] font-mono text-zinc-500">
             <span>Automatic entity extraction</span>
@@ -335,7 +335,7 @@ export function DocumentsPage() {
                 <TableHead>Type</TableHead>
                 <TableHead className="text-right">Size</TableHead>
                 <TableHead className="text-right">Chunks</TableHead>
-                <TableHead className="text-right">Entities / Relations</TableHead>
+                <TableHead className="text-right">Extraction</TableHead>
                 <TableHead>Provenance</TableHead>
                 <TableHead>Ingested At</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
@@ -362,7 +362,10 @@ export function DocumentsPage() {
                     {doc.chunks}
                   </TableCell>
                   <TableCell className="text-right font-mono text-amber-400 tabular-nums">
-                    {doc.entities_extracted ?? (doc as any).entitiesExtracted ?? 0}e / {doc.relations_extracted ?? (doc as any).relationsExtracted ?? 0}r
+                    <div>{doc.entities_extracted ?? (doc as any).entitiesExtracted ?? 0}e / {doc.relations_extracted ?? (doc as any).relationsExtracted ?? 0}r</div>
+                    <div className="text-[10px] text-zinc-500">
+                      {(doc as any).extraction_engine || "unknown"}{(doc as any).extraction_model ? ` · ${(doc as any).extraction_model.split("/").pop()}` : ""}
+                    </div>
                   </TableCell>
                   <TableCell>
                     <Badge

@@ -78,8 +78,35 @@ async def verify_infrastructure_live() -> None:
                 f"Qdrant vector dimension mismatch: collection '{settings.QDRANT_COLLECTION}' "
                 f"has dense dim {actual_dim}, but config expects {settings.EMBEDDING_DIM}."
             )
+
+        entity_exists = await qdrant.collection_exists(settings.QDRANT_ENTITY_COLLECTION)
+        if not entity_exists:
+            logger.info(
+                "Creating Qdrant entity collection '%s' with %d-dim dense cosine vectors...",
+                settings.QDRANT_ENTITY_COLLECTION,
+                settings.EMBEDDING_DIM,
+            )
+            await qdrant.create_collection(
+                collection_name=settings.QDRANT_ENTITY_COLLECTION,
+                vectors_config=models.VectorParams(
+                    size=settings.EMBEDDING_DIM,
+                    distance=models.Distance.COSINE,
+                ),
+            )
+        entity_info = await qdrant.get_collection(settings.QDRANT_ENTITY_COLLECTION)
+        entity_dim = getattr(entity_info.config.params.vectors, "size", None)
+        if entity_dim != settings.EMBEDDING_DIM:
+            raise RuntimeError(
+                f"Qdrant entity vector dimension mismatch: collection '{settings.QDRANT_ENTITY_COLLECTION}' "
+                f"has dim {entity_dim}, but config expects {settings.EMBEDDING_DIM}."
+            )
+
         await qdrant.close()
-        logger.info("Qdrant connection and collection schema (%d-dim) verified.", actual_dim)
+        logger.info(
+            "Qdrant connection and collection schemas (%d-dim chunks, %d-dim entities) verified.",
+            actual_dim,
+            entity_dim,
+        )
     except Exception as e:
         raise RuntimeError(
             f"Startup failed: Qdrant check failed at {settings.QDRANT_HOST}:{settings.QDRANT_PORT}: {e}"

@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
@@ -14,13 +14,14 @@ from app.api.schemas.documents import (
     StoreDeleteResult,
 )
 from app.cache.invalidation import CacheInvalidator
+from app.core.auth import AuthenticatedUser, get_current_user
 from app.db.models import DocumentRecord as DBDocumentRecord
 from app.db.models import OutboxEventRecord
 from app.db.postgres import DocumentRepository, get_session
 from app.indexing.deletion import verify_document_deleted
 from app.indexing.neo4j_indexer import Neo4jIndexer
 from app.indexing.outbox_worker import OutboxWorker
-from app.indexing.qdrant_indexer import QdrantIndexer
+from app.indexing.qdrant_indexer import EntityVectorIndex, QdrantIndexer
 from app.ingestion.pipeline import IngestionPipeline
 
 logger = logging.getLogger(__name__)
@@ -29,10 +30,16 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 
 @router.get("", response_model=DocumentsResponse)
-async def list_documents() -> DocumentsResponse:
-    """List all ingested documents with tokens, cost, and extracted entity counts."""
+async def list_documents(
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> DocumentsResponse:
+    """List ingested documents owned by the current user."""
     async with get_session() as session:
-        stmt = select(DBDocumentRecord).options(selectinload(DBDocumentRecord.chunks))
+        stmt = (
+            select(DBDocumentRecord)
+            .options(selectinload(DBDocumentRecord.chunks))
+            .where(DBDocumentRecord.owner_user_id == current_user.user_id)
+        )
         result = await session.execute(stmt)
         docs = list(result.scalars().all())
 
@@ -46,14 +53,17 @@ async def list_documents() -> DocumentsResponse:
                 file_type="markdown" if d.source_uri.endswith(".md") else "text",
                 size_kb=max(1, len(d.content.encode("utf-8")) // 1024),
                 chunks=len(d.chunks),
-                entities_extracted=meta.get("entity_count", len(d.chunks) * 2),
-                relations_extracted=meta.get("relation_count", len(d.chunks)),
+                entities_extracted=meta.get("entity_count", 0),
+                relations_extracted=meta.get("relation_count", 0),
                 tier=d.source_tier,
                 ingested_at=d.ingested_at.isoformat() if d.ingested_at else "",
                 target_node_id=d.doc_id,
                 valid_from=d.valid_from.isoformat() if d.valid_from else "",
                 tokens=meta.get("tokens", 0),
                 cost_usd=float(meta.get("cost_usd", 0.0)),
+                extraction_engine=str(meta.get("extraction_engine", "unknown")),
+                extraction_model=str(meta.get("extraction_model", "")),
+                extraction_status=str(meta.get("extraction_status", "unknown")),
             )
         )
 
@@ -63,6 +73,7 @@ async def list_documents() -> DocumentsResponse:
 @router.post("", response_model=DocumentUploadResponse, status_code=status.HTTP_202_ACCEPTED)
 async def upload_document(
     file: UploadFile = File(...),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> DocumentUploadResponse:
     """Upload document for parsing, chunking, outbox staging, and automatic indexing."""
     filename = (file.filename or "").lower()
@@ -81,6 +92,7 @@ async def upload_document(
             session=session,
             content=content_str,
             source_uri=file.filename or "uploaded.md",
+            owner_user_id=current_user.user_id,
         )
 
     # Process staged outbox events to sync Qdrant and Neo4j immediately
@@ -99,13 +111,19 @@ async def upload_document(
 
 
 @router.get("/{document_id}/status", response_model=DocumentStatusResponse)
-async def get_document_status(document_id: str) -> DocumentStatusResponse:
+async def get_document_status(
+    document_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> DocumentStatusResponse:
     """Get current ingestion pipeline progress for document."""
     async with get_session() as session:
         stmt = (
             select(DBDocumentRecord)
             .options(selectinload(DBDocumentRecord.chunks))
-            .where(DBDocumentRecord.doc_id == document_id)
+            .where(
+                DBDocumentRecord.doc_id == document_id,
+                DBDocumentRecord.owner_user_id == current_user.user_id,
+            )
         )
         res = await session.execute(stmt)
         doc = res.scalar_one_or_none()
@@ -128,19 +146,28 @@ async def get_document_status(document_id: str) -> DocumentStatusResponse:
         active_step="outbox_sync" if is_processing else "complete",
         step_index=3 if is_processing else 4,
         total_steps=4,
-        entities=meta.get("entity_count", len(doc.chunks) * 2),
-        relations=meta.get("relation_count", len(doc.chunks)),
+        entities=meta.get("entity_count", 0),
+        relations=meta.get("relation_count", 0),
+        extraction_engine=str(meta.get("extraction_engine", "unknown")),
+        extraction_model=str(meta.get("extraction_model", "")),
+        extraction_status=str(meta.get("extraction_status", "unknown")),
     )
 
 
 @router.get("/{document_id}/impact", response_model=DocumentImpactResponse)
-async def get_document_impact(document_id: str) -> DocumentImpactResponse:
+async def get_document_impact(
+    document_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> DocumentImpactResponse:
     """Calculate blast radius before deleting a document."""
     async with get_session() as session:
         stmt = (
             select(DBDocumentRecord)
             .options(selectinload(DBDocumentRecord.chunks))
-            .where(DBDocumentRecord.doc_id == document_id)
+            .where(
+                DBDocumentRecord.doc_id == document_id,
+                DBDocumentRecord.owner_user_id == current_user.user_id,
+            )
         )
         res = await session.execute(stmt)
         doc = res.scalar_one_or_none()
@@ -161,13 +188,19 @@ async def get_document_impact(document_id: str) -> DocumentImpactResponse:
 
 
 @router.delete("/{document_id}", response_model=DocumentDeleteResponse)
-async def delete_document(document_id: str) -> DocumentDeleteResponse:
+async def delete_document(
+    document_id: str,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+) -> DocumentDeleteResponse:
     """Cascade delete a document and verify that every store is actually clean."""
     async with get_session() as session:
         stmt = (
             select(DBDocumentRecord)
             .options(selectinload(DBDocumentRecord.chunks))
-            .where(DBDocumentRecord.doc_id == document_id)
+            .where(
+                DBDocumentRecord.doc_id == document_id,
+                DBDocumentRecord.owner_user_id == current_user.user_id,
+            )
         )
         doc = (await session.execute(stmt)).scalar_one_or_none()
         if doc is None:
@@ -180,12 +213,14 @@ async def delete_document(document_id: str) -> DocumentDeleteResponse:
     qdrant = QdrantIndexer()
     neo4j = Neo4jIndexer()
     invalidator = CacheInvalidator()
+    entity_index = EntityVectorIndex()
     try:
         # Process outbox events (delete from Qdrant and Neo4j, purge caches).
         worker = OutboxWorker(
             qdrant_indexer=qdrant,
             neo4j_indexer=neo4j,
             cache_invalidator=invalidator,
+            entity_indexer=entity_index,
         )
         await worker.drain()
 
@@ -201,6 +236,7 @@ async def delete_document(document_id: str) -> DocumentDeleteResponse:
     finally:
         await qdrant.close()
         await neo4j.close()
+        await entity_index.close()
 
     stores = [
         StoreDeleteResult(

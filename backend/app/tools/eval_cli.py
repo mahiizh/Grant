@@ -24,6 +24,7 @@ from app.core.config import Settings
 _BOOTSTRAP = Settings()
 os.environ["POSTGRES_DB"] = _BOOTSTRAP.EVAL_POSTGRES_DB
 os.environ["QDRANT_COLLECTION"] = _BOOTSTRAP.EVAL_QDRANT_COLLECTION
+os.environ["QDRANT_ENTITY_COLLECTION"] = _BOOTSTRAP.EVAL_QDRANT_ENTITY_COLLECTION
 
 # Imported after the overrides above on purpose. ruff: noqa: E402
 import asyncpg  # type: ignore[import-untyped]  # noqa: E402
@@ -139,9 +140,21 @@ async def _reset_qdrant_collection() -> None:
             },
             sparse_vectors_config={"sparse": models.SparseVectorParams()},
         )
+        if await client.collection_exists(settings.QDRANT_ENTITY_COLLECTION):
+            await client.delete_collection(settings.QDRANT_ENTITY_COLLECTION)
+        await client.create_collection(
+            collection_name=settings.QDRANT_ENTITY_COLLECTION,
+            vectors_config=models.VectorParams(
+                size=settings.EMBEDDING_DIM,
+                distance=models.Distance.COSINE,
+            ),
+        )
     finally:
         await client.close()
-    print(f"Reset eval Qdrant collection {settings.QDRANT_COLLECTION!r}.")
+    print(
+        f"Reset eval Qdrant collections {settings.QDRANT_COLLECTION!r}, "
+        f"{settings.QDRANT_ENTITY_COLLECTION!r}."
+    )
 
 
 async def _ingest_corpus() -> None:

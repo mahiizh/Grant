@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -30,8 +31,13 @@ from app.core.acl import ACLScope
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.core.config import get_settings
 from app.db.models import MessageRecord, ThreadRecord
+from app.db.outbox import OutboxEventType, OutboxService
 from app.db.postgres import get_db_session, get_session
+from app.ingestion.extraction import EntityRelationExtractor
+from app.ingestion.gliner_extraction import get_gliner_extractor
 from app.observability.tracer import export_spans_to_db
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/threads", tags=["threads"])
 
@@ -123,6 +129,88 @@ def _to_thread_detail(thread: ThreadRecord) -> ThreadDetail:
     )
 
 
+async def _stage_chat_graph(
+    *,
+    session: AsyncSession,
+    text: str,
+    thread_id: str,
+    acl_scope: str,
+    message_id: str,
+    owner_user_id: str,
+    role: str,
+) -> None:
+    try:
+        extraction = get_gliner_extractor().extract_from_text(text)
+    except Exception:
+        logger.exception("GLiNER chat extraction failed for %s; falling back to heuristic", role)
+        extraction = EntityRelationExtractor.extract_from_text(text)
+    if not extraction.entities:
+        return
+    chat_acl = {
+        "tenant_id": "default",
+        "allowed_roles": [acl_scope] if acl_scope and acl_scope != "public" else [],
+        "allowed_groups": [acl_scope] if acl_scope and acl_scope != "public" else [],
+        "is_public": acl_scope == "public",
+    }
+    entities_payload = []
+    relations_payload = [r.model_dump() for r in extraction.relations]
+    try:
+        from app.ingestion.entity_resolution import IngestionEntityResolver
+
+        resolver = IngestionEntityResolver(session=session)
+        id_map: dict[str, str] = {}
+        for e in extraction.entities:
+            resolved, version_rels = await resolver.resolve(
+                name=e.name,
+                entity_type=e.entity_type,
+                owner_user_id=owner_user_id,
+                source_id=f"chat:{message_id}",
+            )
+            id_map[e.name.strip().lower()] = resolved.entity_id
+            id_map[resolved.name.strip().lower()] = resolved.entity_id
+            entities_payload.append(
+                {"entity_id": resolved.entity_id, "name": resolved.name, "entity_type": resolved.entity_type}
+            )
+            relations_payload.extend(version_rels)
+        remapped = []
+        for r in relations_payload:
+            src = r.get("source", r.get("source_entity_id", ""))
+            tgt = r.get("target", r.get("target_entity_id", ""))
+            src_id = id_map.get(str(src).strip().lower(), r.get("source_entity_id", src))
+            tgt_id = id_map.get(str(tgt).strip().lower(), r.get("target_entity_id", tgt))
+            rr = dict(r)
+            rr["source_entity_id"] = src_id
+            rr["target_entity_id"] = tgt_id
+            rr.setdefault("relation_type", rr.get("predicate", "RELATED_TO"))
+            remapped.append(rr)
+        relations_payload = remapped
+    except Exception:
+        logger.exception("Chat entity resolution failed for %s; staging unresolved entities", role)
+        entities_payload = [
+            {"entity_id": e.name, "name": e.name, "entity_type": e.entity_type}
+            for e in extraction.entities
+        ]
+        relations_payload = [r.model_dump() for r in extraction.relations]
+
+    OutboxService.stage_event(
+        session=session,
+        event_type=OutboxEventType.CHAT_GRAPH_UPSERTED,
+        aggregate_type="chat_message",
+        aggregate_id=message_id,
+        payload={
+            "thread_id": thread_id,
+            "message_id": message_id,
+            "source_id": f"chat:{message_id}",
+            "owner_user_id": owner_user_id,
+            "role": role,
+            "acl_scope": chat_acl,
+            "temporal": {"valid_from": datetime.now(UTC).isoformat(), "valid_to": None},
+            "entities": entities_payload,
+            "relations": relations_payload,
+        },
+    )
+
+
 @router.post("", response_model=ThreadDetail, status_code=status.HTTP_201_CREATED)
 async def create_thread(
     req: CreateThreadRequest,
@@ -138,6 +226,7 @@ async def create_thread(
     thread = ThreadRecord(
         thread_id=thread_id,
         title=title,
+        owner_user_id=current_user.user_id,
         acl_scope=req.acl_scope,
         as_of_date=req.as_of_date,
         created_at=now,
@@ -159,11 +248,13 @@ async def create_thread(
 @router.get("", response_model=list[ThreadSummary])
 async def list_threads(
     session: AsyncSession = Depends(get_db_session),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> list[ThreadSummary]:
-    """List all threads ordered by updated_at descending."""
+    """List threads owned by the current user, ordered by updated_at descending."""
     stmt = (
         select(ThreadRecord)
         .options(selectinload(ThreadRecord.messages))
+        .where(ThreadRecord.owner_user_id == current_user.user_id)
         .order_by(ThreadRecord.updated_at.desc())
     )
     result = await session.execute(stmt)
@@ -192,11 +283,15 @@ async def list_threads(
 async def get_thread(
     thread_id: str,
     session: AsyncSession = Depends(get_db_session),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> ThreadDetail:
     """Retrieve thread details and full message history."""
     stmt = (
         select(ThreadRecord)
-        .where(ThreadRecord.thread_id == thread_id)
+        .where(
+            ThreadRecord.thread_id == thread_id,
+            ThreadRecord.owner_user_id == current_user.user_id,
+        )
         .options(selectinload(ThreadRecord.messages))
     )
     result = await session.execute(stmt)
@@ -214,11 +309,15 @@ async def update_thread(
     thread_id: str,
     req: UpdateThreadRequest,
     session: AsyncSession = Depends(get_db_session),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> ThreadDetail:
     """Update thread title, ACL scope, or as-of date."""
     stmt = (
         select(ThreadRecord)
-        .where(ThreadRecord.thread_id == thread_id)
+        .where(
+            ThreadRecord.thread_id == thread_id,
+            ThreadRecord.owner_user_id == current_user.user_id,
+        )
         .options(selectinload(ThreadRecord.messages))
     )
     result = await session.execute(stmt)
@@ -232,6 +331,7 @@ async def update_thread(
     if req.title is not None:
         thread.title = req.title
     if req.acl_scope is not None:
+        current_user.check_scope(req.acl_scope)
         thread.acl_scope = req.acl_scope
     if req.as_of_date is not None:
         thread.as_of_date = req.as_of_date
@@ -245,9 +345,13 @@ async def update_thread(
 async def delete_thread(
     thread_id: str,
     session: AsyncSession = Depends(get_db_session),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Delete thread and cascade messages."""
-    stmt = select(ThreadRecord).where(ThreadRecord.thread_id == thread_id)
+    """Delete thread, cascade messages, and stage chat-graph cleanup."""
+    stmt = select(ThreadRecord).where(
+        ThreadRecord.thread_id == thread_id,
+        ThreadRecord.owner_user_id == current_user.user_id,
+    )
     result = await session.execute(stmt)
     thread = result.scalar_one_or_none()
     if not thread:
@@ -256,7 +360,25 @@ async def delete_thread(
             detail=f"Thread '{thread_id}' not found",
         )
 
+    OutboxService.stage_event(
+        session=session,
+        event_type=OutboxEventType.CHAT_GRAPH_DELETED,
+        aggregate_type="thread",
+        aggregate_id=thread_id,
+        payload={
+            "thread_id": thread_id,
+            "owner_user_id": current_user.user_id,
+        },
+    )
     await session.delete(thread)
+    await session.flush()
+    try:
+        from app.indexing.outbox_worker import OutboxWorker
+
+        worker = OutboxWorker()
+        await worker.drain()
+    except Exception:
+        logger.exception("Failed to drain outbox after thread deletion for %s", thread_id)
     return {"deleted": True, "thread_id": thread_id}
 
 
@@ -271,7 +393,10 @@ async def send_message(
     """Execute glass-box turn within conversation thread, supporting SSE streaming."""
     stmt = (
         select(ThreadRecord)
-        .where(ThreadRecord.thread_id == thread_id)
+        .where(
+            ThreadRecord.thread_id == thread_id,
+            ThreadRecord.owner_user_id == current_user.user_id,
+        )
         .options(selectinload(ThreadRecord.messages))
     )
     result = await session.execute(stmt)
@@ -305,6 +430,7 @@ async def send_message(
     user_record = MessageRecord(
         message_id=user_msg_id,
         thread_id=thread_id,
+        owner_user_id=current_user.user_id,
         role="user",
         content=req.content,
         raw_query=req.content,
@@ -314,6 +440,16 @@ async def send_message(
     if user_record not in thread.messages:
         thread.messages.append(user_record)
     await session.flush()
+
+    await _stage_chat_graph(
+        session=session,
+        text=req.content,
+        thread_id=thread_id,
+        acl_scope=thread.acl_scope,
+        message_id=user_msg_id,
+        owner_user_id=current_user.user_id,
+        role="user",
+    )
 
     # Build chat history for rewriting from prior turns
     history = [
@@ -347,6 +483,7 @@ async def send_message(
                 acl_scope=scope,
                 thread_id=thread_id,
                 thread_history=history,
+                owner_user_id=current_user.user_id,
             )
 
             rewritten = state.get("rewritten_query", req.content)
@@ -430,6 +567,7 @@ async def send_message(
                 asst_record = MessageRecord(
                     message_id=asst_msg_id,
                     thread_id=thread_id,
+                    owner_user_id=current_user.user_id,
                     role="assistant",
                     content=answer,
                     raw_query=req.content,
@@ -447,6 +585,15 @@ async def send_message(
                     created_at=datetime.now(UTC),
                 )
                 persist_session.add(asst_record)
+                await _stage_chat_graph(
+                    session=persist_session,
+                    text=answer,
+                    thread_id=thread_id,
+                    acl_scope=thread.acl_scope,
+                    message_id=asst_msg_id,
+                    owner_user_id=current_user.user_id,
+                    role="assistant",
+                )
 
             final_msg = {
                 "message_id": asst_msg_id,
@@ -478,6 +625,7 @@ async def send_message(
         acl_scope=scope,
         thread_id=thread_id,
         thread_history=history,
+        owner_user_id=current_user.user_id,
     )
 
     rewritten = state.get("rewritten_query", req.content)
@@ -544,6 +692,7 @@ async def send_message(
     asst_record = MessageRecord(
         message_id=asst_msg_id,
         thread_id=thread_id,
+        owner_user_id=current_user.user_id,
         role="assistant",
         content=answer,
         raw_query=req.content,
@@ -566,6 +715,17 @@ async def send_message(
     await session.flush()
     await session.refresh(asst_record)
 
+    await _stage_chat_graph(
+        session=session,
+        text=answer,
+        thread_id=thread_id,
+        acl_scope=thread.acl_scope,
+        message_id=asst_msg_id,
+        owner_user_id=current_user.user_id,
+        role="assistant",
+    )
+    await session.flush()
+
     # Export spans to PostgreSQL
     spans = state.get("spans", [])
     if trace_id and spans:
@@ -581,11 +741,13 @@ async def record_feedback(
     msg_id: str,
     req: FeedbackRequest,
     session: AsyncSession = Depends(get_db_session),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> MessageItem:
     """Record upvote/downvote and optional notes on an assistant response."""
     stmt = select(MessageRecord).where(
         MessageRecord.thread_id == thread_id,
         MessageRecord.message_id == msg_id,
+        MessageRecord.owner_user_id == current_user.user_id,
     )
     result = await session.execute(stmt)
     record = result.scalar_one_or_none()
@@ -608,11 +770,15 @@ async def add_to_golden_dataset(
     msg_id: str,
     req: AddToGoldenRequest,
     session: AsyncSession = Depends(get_db_session),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Export thread turn question, answer, and citations into candidate evaluation dataset."""
     stmt = (
         select(ThreadRecord)
-        .where(ThreadRecord.thread_id == thread_id)
+        .where(
+            ThreadRecord.thread_id == thread_id,
+            ThreadRecord.owner_user_id == current_user.user_id,
+        )
         .options(selectinload(ThreadRecord.messages))
     )
     result = await session.execute(stmt)
@@ -688,11 +854,15 @@ async def regenerate_message(
     thread_id: str,
     msg_id: str,
     session: AsyncSession = Depends(get_db_session),
+    current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> MessageItem:
     """Regenerate assistant response and archive prior generation."""
     stmt = (
         select(ThreadRecord)
-        .where(ThreadRecord.thread_id == thread_id)
+        .where(
+            ThreadRecord.thread_id == thread_id,
+            ThreadRecord.owner_user_id == current_user.user_id,
+        )
         .options(selectinload(ThreadRecord.messages))
     )
     result = await session.execute(stmt)
@@ -759,6 +929,7 @@ async def regenerate_message(
         acl_scope=scope,
         thread_id=thread_id,
         thread_history=history,
+        owner_user_id=current_user.user_id,
     )
 
     rewritten = state.get("rewritten_query", user_query)

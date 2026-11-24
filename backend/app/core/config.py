@@ -76,6 +76,61 @@ class Settings(BaseSettings):
     MAX_ACQUISITION_CALLS: int = 3
     MIN_TRUST_TO_CITE: float = 0.7
 
+    # Extraction (GLiNER, local, no LLM in ingestion)
+    GLINER_MODEL: str = "urchade/gliner_medium-v2.1"
+    GLINER_LABELS: list[str] = Field(
+        default_factory=lambda: [
+            "Person",
+            "Organization",
+            "Software",
+            "Standard",
+            "Control",
+            "Process",
+            "Concept",
+            "Document",
+            "Location",
+        ]
+    )
+    GLINER_THRESHOLD: float = 0.5
+    GLINER_THRESHOLD_BY_TYPE: dict[str, float] = Field(
+        default_factory=lambda: {"Concept": 0.55, "Document": 0.55, "Location": 0.55}
+    )
+    GLINER_STOPLIST: list[str] = Field(
+        default_factory=lambda: [
+            "the organization",
+            "organization",
+            "supplier",
+            "suppliers",
+            "documented information",
+            "information",
+            "requirements",
+            "requirement",
+            "processes",
+            "process",
+            "controls",
+            "control",
+            "document",
+            "documents",
+            "personnel",
+            "persons",
+            "management",
+            "top management",
+            "interested parties",
+            "relevant interested parties",
+            "this document",
+            "the document",
+        ]
+    )
+    GLINER_WINDOW_TOKENS: int = 384
+    GLINER_WINDOW_OVERLAP_TOKENS: int = 48
+
+    # Entity resolution / co-occurrence
+    QDRANT_ENTITY_COLLECTION: str = "grant_entities"
+    ENTITY_RESOLUTION_THRESHOLD: float = 0.85
+    ENTITY_RESOLUTION_TOP_K: int = 5
+    COOCCURRENCE_MIN_COUNT: int = 2
+    COOCCURRENCE_TOP_K_PMI: int = 5
+
     # LLM response cache. Keyed by (model, prompt hash) so repeated eval runs
     # do not pay for the same completion twice. Cache hits cost $0 in the run.
     LLM_CACHE_ENABLED: bool = True
@@ -90,6 +145,7 @@ class Settings(BaseSettings):
     # collection so an eval run cannot mutate the developer database.
     EVAL_POSTGRES_DB: str = "graphrag_lab_eval"
     EVAL_QDRANT_COLLECTION: str = "grant_chunks_eval"
+    EVAL_QDRANT_ENTITY_COLLECTION: str = "grant_entities_eval"
     EVAL_CONCURRENCY: int = 2
     # LLM judge (DeepEval GEval). Off by default so hermetic runs never call a
     # provider; `make eval JUDGE=1` turns it on.

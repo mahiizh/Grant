@@ -15,6 +15,9 @@ class DocumentRecord(BaseModel):
     valid_from: str
     tokens: int = 0
     cost_usd: float = 0.0
+    extraction_engine: str = "unknown"
+    extraction_model: str = ""
+    extraction_status: str = "unknown"
 
 
 class DocumentsResponse(BaseModel):
@@ -37,6 +40,9 @@ class DocumentStatusResponse(BaseModel):
     total_steps: int = 4
     entities: int = 0
     relations: int = 0
+    extraction_engine: str = "unknown"
+    extraction_model: str = ""
+    extraction_status: str = "unknown"
 
 
 class DocumentImpactResponse(BaseModel):
