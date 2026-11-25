@@ -16,6 +16,8 @@ class GraphNode(BaseModel):
     tx_time: str | None = None
     chunk_hash: str | None = None
     degree: int = 0
+    source_kind: str | None = None
+    source_kinds: list[str] = Field(default_factory=list)
 
 
 class GraphLink(BaseModel):

@@ -18,7 +18,9 @@ _orchestrator: RAGOrchestrator | None = None
 def get_orchestrator() -> RAGOrchestrator:
     global _orchestrator
     if _orchestrator is None:
-        _orchestrator = RAGOrchestrator()
+        # The API defaults to grounded_plus_web with history enabled. Tests inject
+        # a hermetic orchestrator via set_orchestrator().
+        _orchestrator = RAGOrchestrator(history_enabled=True)
     return _orchestrator
 
 
@@ -46,6 +48,7 @@ async def query_pipeline(
         as_of_time=request.as_of,
         thread_id=request.thread_id,
         owner_user_id=current_user.user_id,
+        answer_policy=request.answer_policy,
     )
 
     evidence_items = [
@@ -79,4 +82,8 @@ async def query_pipeline(
         path=state.get("path"),
         cost_usd=round(state.get("cost_usd", 0.0), 6),
         latency_ms=round(state.get("latency_ms", 0.0), 2),
+        source_kind=state.get("source_kind", "docs"),
+        web_sources=list(state.get("web_sources", []) or []),
+        query_id=state.get("query_id"),
+        answer_id=state.get("answer_id"),
     )

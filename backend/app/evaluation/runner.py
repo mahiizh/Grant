@@ -297,6 +297,7 @@ class EvaluationRunner:
                     acl_scope=admin_scope,
                     retrieval_config=self.retrieval_config,
                     retrieval_only=self.retrieval_only,
+                    answer_policy="grounded_only",
                 )
                 return self._score_question(question, state)
 

@@ -77,6 +77,20 @@ class Settings(BaseSettings):
     MAX_ACQUISITION_CALLS: int = 3
     MIN_TRUST_TO_CITE: float = 0.7
 
+    # Answer policy and web grounding. The chat API defaults to grounded_plus_web;
+    # the eval runner explicitly defaults to grounded_only.
+    ANSWER_POLICY: Literal["grounded_only", "grounded_plus_web"] = "grounded_plus_web"
+    EVAL_ANSWER_POLICY: Literal["grounded_only", "grounded_plus_web"] = "grounded_only"
+    GRASPREACH_SRC_PATH: str = r"C:\projects\grasp_agent\src"
+    GRASPREACH_PYTHON: str | None = None
+    WEB_SEARCH_RESULTS: int = 3
+    WEB_MAX_PAGE_CHARS: int = 12000
+    WEB_MAX_PAGE_BYTES: int = 64 * 1024
+    WEB_SEARCH_TIMEOUT_SECONDS: float = 8.0
+    WEB_FETCH_TIMEOUT_SECONDS: float = 8.0
+    WEB_TOTAL_BUDGET_SECONDS: float = 20.0
+    WEB_CACHE_TTL_SECONDS: int = 600
+
     # Extraction (GLiNER, local, no LLM in ingestion)
     GLINER_MODEL: str = "urchade/gliner_medium-v2.1"
     GLINER_LABELS: list[str] = Field(

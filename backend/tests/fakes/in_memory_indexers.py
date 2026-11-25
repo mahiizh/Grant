@@ -56,6 +56,10 @@ class FakeNeo4jIndexer:
         self._edges: dict[str, dict[str, Any]] = {}
         self._chunks: dict[str, dict[str, Any]] = {}
         self._entity_to_chunks: dict[str, set[str]] = {}
+        self._queries: dict[str, dict[str, Any]] = {}
+        self._answers: dict[str, dict[str, Any]] = {}
+        self._query_answer_edges: list[tuple[str, str]] = []
+        self._next_edges: list[tuple[str, str]] = []
 
     async def merge_chunk(
         self,
@@ -65,6 +69,7 @@ class FakeNeo4jIndexer:
         acl_scope: dict[str, Any] | None = None,
         temporal: dict[str, Any] | None = None,
         owner_user_id: str | None = None,
+        properties: dict[str, Any] | None = None,
     ) -> None:
         self._chunks[chunk_id] = {
             "chunk_id": chunk_id,
@@ -73,6 +78,7 @@ class FakeNeo4jIndexer:
             "owner_user_id": owner_user_id,
             "acl_scope": acl_scope or {},
             "temporal": temporal or {},
+            "properties": properties or {},
         }
 
     async def link_chunk_entity(self, chunk_id: str, entity_id: str) -> None:
@@ -254,6 +260,53 @@ class FakeNeo4jIndexer:
 
     def get_edge(self, edge_id: str) -> dict[str, Any] | None:
         return self._edges.get(edge_id)
+
+    async def upsert_query_answer(
+        self,
+        *,
+        query_id: str,
+        answer_id: str,
+        previous_query_id: str | None,
+        thread_id: str | None,
+        owner_user_id: str | None,
+        raw_query: str,
+        rewritten_query: str | None,
+        answer: str,
+        answer_policy: str,
+        source_kind: str,
+        is_abstention: bool,
+        acl_scope: dict[str, Any] | None,
+        temporal: dict[str, Any] | None,
+        query_entities: list[dict[str, Any]],
+        answer_entities: list[dict[str, Any]],
+        cites: list[dict[str, Any]],
+        web_sources: list[dict[str, Any]],
+    ) -> None:
+        self._queries[query_id] = {
+            "query_id": query_id,
+            "raw_query": raw_query,
+            "rewritten_query": rewritten_query,
+            "thread_id": thread_id,
+            "owner_user_id": owner_user_id,
+            "answer_policy": answer_policy,
+            "acl_scope": acl_scope or {},
+            "entities": query_entities,
+        }
+        self._answers[answer_id] = {
+            "answer_id": answer_id,
+            "query_id": query_id,
+            "content": answer,
+            "source_kind": source_kind,
+            "is_abstention": is_abstention,
+            "entities": answer_entities,
+            "cites": cites,
+            "web_sources": web_sources,
+            "acl_scope": acl_scope or {},
+            "temporal": temporal or {},
+        }
+        self._query_answer_edges.append((query_id, answer_id))
+        if previous_query_id:
+            self._next_edges.append((previous_query_id, query_id))
 
     async def delete_chat_graph(
         self,

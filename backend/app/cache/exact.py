@@ -72,7 +72,7 @@ class ExactCache:
                     verified=prov_data.get("verified", True),
                 )
                 method = ev_data.get("retrieval_method", "hybrid")
-                if method not in ("dense", "sparse", "graph", "hybrid", "rerank"):
+                if method not in ("dense", "sparse", "graph", "hybrid", "rerank", "web"):
                     method = "hybrid"
                 evidence_items.append(
                     Evidence(
@@ -93,6 +93,8 @@ class ExactCache:
                 router_strategy="cache",
                 cost_usd=0.0,
                 latency_ms=1.2,
+                source_kind=data.get("source_kind", "docs"),
+                web_sources=list(data.get("web_sources", []) or []),
             )
         except Exception as e:
             logger.error("Error reading from Redis exact cache: %s", e)
@@ -143,6 +145,8 @@ class ExactCache:
                 "answer": answer.answer,
                 "evidence": evidence_dicts,
                 "is_abstention": answer.is_abstention,
+                "source_kind": answer.source_kind,
+                "web_sources": list(answer.web_sources or []),
                 "tenant_id": acl_scope.tenant_id,
                 "owner_user_id": owner_user_id,
             }

@@ -54,6 +54,9 @@ class DocumentRecord(Base):
     # Provenance
     source_tier: Mapped[int] = mapped_column(Integer, nullable=False)
     source_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(32), default="document", nullable=False, index=True)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     provenance_confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
     provenance_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
@@ -97,6 +100,9 @@ class ChunkRecord(Base):
     # Provenance
     source_tier: Mapped[int] = mapped_column(Integer, nullable=False)
     source_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(32), default="document", nullable=False, index=True)
+    url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     provenance_confidence: Mapped[float] = mapped_column(Float, default=1.0, nullable=False)
     provenance_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
@@ -180,11 +186,67 @@ class MessageRecord(Base):
     feedback: Mapped[str | None] = mapped_column(String(16), nullable=True)  # "up" | "down"
     feedback_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     generations: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    source_kind: Mapped[str] = mapped_column(String(16), default="docs", nullable=False)
+    web_sources: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    query_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    answer_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False, index=True
     )
 
     thread: Mapped["ThreadRecord"] = relationship("ThreadRecord", back_populates="messages")
+
+
+class QueryRecord(Base):
+    """PostgreSQL source of truth for a user question in answer history."""
+
+    __tablename__ = "queries"
+
+    query_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    thread_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("threads.thread_id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    raw_query: Mapped[str] = mapped_column(Text, nullable=False)
+    rewritten_query: Mapped[str | None] = mapped_column(Text, nullable=True)
+    query_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    answer_policy: Mapped[str] = mapped_column(String(32), default="grounded_plus_web", nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False, index=True
+    )
+
+    answers: Mapped[list["AnswerRecord"]] = relationship(
+        "AnswerRecord", back_populates="query", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("ix_queries_owner_hash", "owner_user_id", "query_hash"),
+    )
+
+
+class AnswerRecord(Base):
+    """PostgreSQL source of truth for an answer and its source label in history."""
+
+    __tablename__ = "answers"
+
+    answer_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    query_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("queries.query_id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    thread_id: Mapped[str | None] = mapped_column(
+        String(64), ForeignKey("threads.thread_id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(16), default="docs", nullable=False, index=True)
+    is_abstention: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    citations: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    web_sources: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False, index=True
+    )
+
+    query: Mapped["QueryRecord"] = relationship("QueryRecord", back_populates="answers")
 
 
 class EntityRecord(Base):

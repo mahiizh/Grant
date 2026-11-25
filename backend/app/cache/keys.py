@@ -3,6 +3,21 @@ import re
 
 from app.core.acl import ACLScope
 
+LEGACY_PROMPT_VERSION = "v1"
+GROUNDED_ONLY_PROMPT_VERSION = f"{LEGACY_PROMPT_VERSION}:grounded_only"
+
+
+def prompt_version_lookup_chain(prompt_version: str) -> tuple[str, ...]:
+    """Return policy-scoped keys plus the legacy grounded-only key when compatible.
+
+    Entries written before answer policies existed used ``v1`` and were always
+    grounded-only. They can safely be read only by the grounded-only policy;
+    policy-specific keys are still preferred and remain write-isolated.
+    """
+    if prompt_version == GROUNDED_ONLY_PROMPT_VERSION:
+        return (prompt_version, LEGACY_PROMPT_VERSION)
+    return (prompt_version,)
+
 
 def normalize_query(query: str) -> str:
     """Normalize query text by lowercasing, stripping whitespace, and normalizing spaces."""

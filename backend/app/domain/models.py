@@ -76,7 +76,7 @@ class Relation(BaseModel):
     provenance: Provenance
 
 
-RetrievalMethodType = Literal["dense", "sparse", "graph", "hybrid", "rerank"]
+RetrievalMethodType = Literal["dense", "sparse", "graph", "hybrid", "rerank", "web"]
 
 
 class Evidence(BaseModel):
@@ -93,6 +93,9 @@ class Evidence(BaseModel):
     path: list[str] | None = None
 
 
+AnswerSourceKind = Literal["docs", "web", "unverified"]
+
+
 class Answer(BaseModel):
     """Final synthesized answer accompanied by claim-level citations and execution metrics."""
 
@@ -105,3 +108,5 @@ class Answer(BaseModel):
     router_strategy: str = "hybrid"
     cost_usd: float = 0.0
     latency_ms: float = 0.0
+    source_kind: AnswerSourceKind = "docs"
+    web_sources: list[dict[str, Any]] = Field(default_factory=list)

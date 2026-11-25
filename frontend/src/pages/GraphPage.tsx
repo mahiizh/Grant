@@ -40,6 +40,7 @@ export function GraphPage() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [zoomTrigger, setZoomTrigger] = useState(0);
   const [asOfDate, setAsOfDate] = useState("2026-04-12");
+  const [sourceKind, setSourceKind] = useState("");
   const [tableCollapsed, setTableCollapsed] = useState(false);
 
   // Active reasoning path state
@@ -54,7 +55,10 @@ export function GraphPage() {
   );
 
   // API Hook for graph data
-  const { data: graphResponse } = useGraph({ asOf: asOfDate });
+  const { data: graphResponse } = useGraph({
+    asOf: asOfDate,
+    sourceKind: sourceKind || undefined,
+  });
 
   const graphData = useMemo(() => {
     if (!graphResponse) {
@@ -203,6 +207,24 @@ export function GraphPage() {
               </ToggleGroupItem>
             </ToggleGroup>
           </div>
+
+          {/* Source-kind filter */}
+          <div className="hidden lg:flex items-center gap-1.5 text-xs text-zinc-400 border-l border-zinc-800/80 pl-3">
+            <span className="text-[10px] font-mono text-zinc-500 uppercase">Source:</span>
+            <select
+              value={sourceKind}
+              onChange={(event) => setSourceKind(event.target.value)}
+              className="h-6 rounded-md border border-zinc-800 bg-zinc-900 px-1.5 text-[10px] font-mono text-zinc-300 outline-none hover:bg-zinc-800 focus:border-amber-500/40"
+              aria-label="Filter graph by source kind"
+            >
+              <option value="">All</option>
+              <option value="document">Docs</option>
+              <option value="web">Web</option>
+              <option value="chat">Chat</option>
+              <option value="query">Query</option>
+              <option value="answer">Answer</option>
+            </select>
+          </div>
         </div>
 
         {/* Muted Tabular Stats Bar & Actions */}
@@ -227,6 +249,7 @@ export function GraphPage() {
             onClick={() => {
               setActivePath(null);
               setSelectedNodeId(null);
+              setSourceKind("");
               setZoomTrigger((prev) => prev + 1);
               toast.info("Knowledge graph view reset");
             }}

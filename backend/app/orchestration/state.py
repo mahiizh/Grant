@@ -11,6 +11,8 @@ from app.domain import Evidence
 # ``graph_forced`` bypasses the router and always takes the graph branch, then
 # uses the same RRF pool and CrossEncoder reranking as ``full``.
 RetrievalConfig = Literal["dense", "sparse", "hybrid", "full", "graph_forced"]
+AnswerPolicy = Literal["grounded_only", "grounded_plus_web"]
+AnswerSourceKind = Literal["docs", "web", "unverified"]
 RETRIEVAL_CONFIGS: tuple[RetrievalConfig, ...] = (
     "dense",
     "sparse",
@@ -34,11 +36,19 @@ class RAGState(TypedDict, total=False):
     as_of_time: datetime | None
     prompt_version: str
     retrieval_config: RetrievalConfig
+    answer_policy: AnswerPolicy
+    source_kind: AnswerSourceKind
     # Retrieval-only evals skip answer generation; multi-turn rewrites still run.
     retrieval_only: bool
     route: str  # "cache", "vector", "graph", "hybrid", "abstain"
     is_cached: bool
+    from_graph_history: bool
     evidence: list[Evidence]
+    web_pages: list[dict[str, Any]]
+    web_sources: list[dict[str, Any]]
+    web_error: str | None
+    query_id: str | None
+    answer_id: str | None
     path: list[str] | None
     answer: str
     is_abstention: bool

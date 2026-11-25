@@ -83,7 +83,7 @@ class SemanticCache:
                         verified=True,
                     )
                     method = ev.get("retrieval_method", "hybrid")
-                    if method not in ("dense", "sparse", "graph", "hybrid", "rerank"):
+                    if method not in ("dense", "sparse", "graph", "hybrid", "rerank", "web"):
                         method = "hybrid"
                     evidence_items.append(
                         Evidence(
@@ -103,6 +103,8 @@ class SemanticCache:
                     router_strategy="semantic_cache",
                     cost_usd=0.0,
                     latency_ms=2.5,
+                    source_kind=data.get("source_kind", "docs"),
+                    web_sources=list(data.get("web_sources", []) or []),
                 )
                 self._entries.append(
                     SemanticCacheEntry(
@@ -224,6 +226,8 @@ class SemanticCache:
                     "embedding": query_vec,
                     "answer": answer.answer,
                     "is_abstention": answer.is_abstention,
+                    "source_kind": answer.source_kind,
+                    "web_sources": list(answer.web_sources or []),
                     "index_version": index_version,
                     "prompt_version": prompt_version,
                     "as_of": as_of,

@@ -5,6 +5,7 @@ import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { StageStepper, PipelineStage } from "../features/StageStepper";
 import { EvidenceInspector, EvidenceChunk, SpanRecord } from "../features/EvidenceInspector";
+import { AnswerSourceBadge } from "../features/AnswerSourceBadge";
 import { PromptComposer, RetrievalMode, GOLDEN_SUGGESTIONS } from "../features/PromptComposer";
 import { useGraph } from "../lib/api/hooks/useGraph";
 import { useGraphAnalytics } from "../hooks/useGraphAnalytics";
@@ -367,6 +368,10 @@ export function AskPage() {
       ],
       subgraph_nodes: [],
       generations: [],
+      source_kind: "docs",
+      web_sources: [],
+      query_id: null,
+      answer_id: null,
       created_at: new Date().toISOString(),
     };
     setLiveStreamingMessage(streamingTempMsg);
@@ -914,6 +919,14 @@ export function AskPage() {
                     currentVerIdx === 0
                       ? msg.citations
                       : msg.generations[currentVerIdx - 1]?.citations || msg.citations;
+                  const displayedSourceKind =
+                    currentVerIdx === 0
+                      ? msg.source_kind
+                      : msg.generations[currentVerIdx - 1]?.source_kind || msg.source_kind;
+                  const displayedWebSources =
+                    currentVerIdx === 0
+                      ? msg.web_sources
+                      : msg.generations[currentVerIdx - 1]?.web_sources || msg.web_sources;
 
                   const stages: PipelineStage[] = (msg.pipeline_stages || []).map((s) => ({
                     id: s.id,
@@ -978,6 +991,11 @@ export function AskPage() {
                           <div className="pt-3 border-t border-zinc-800/60 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono select-none">
                             {/* Metadata Strip */}
                             <div className="flex flex-wrap items-center gap-2 text-zinc-400">
+                              <AnswerSourceBadge
+                                sourceKind={displayedSourceKind}
+                                webSources={displayedWebSources}
+                              />
+
                               <Badge variant="outline" className="text-[10px] font-mono border-zinc-800 text-zinc-300 bg-zinc-950 uppercase">
                                 {msg.route || "hybrid"}
                               </Badge>
@@ -1149,6 +1167,12 @@ export function AskPage() {
                             <span>Retrieving verified candidates and streaming synthesis...</span>
                           </div>
                         )}
+                        <div className="pt-2">
+                          <AnswerSourceBadge
+                            sourceKind={liveStreamingMessage.source_kind}
+                            webSources={liveStreamingMessage.web_sources}
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>

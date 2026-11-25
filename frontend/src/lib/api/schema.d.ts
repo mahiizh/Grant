@@ -1090,6 +1090,13 @@ export interface components {
              * @default 0
              */
             degree: number;
+            /** Source Kind */
+            source_kind?: string | null;
+            /**
+             * Source Kinds
+             * @default []
+             */
+            source_kinds: string[];
         };
         /** GraphPathResponse */
         GraphPathResponse: {
@@ -1171,6 +1178,19 @@ export interface components {
              * @default []
              */
             citations: components["schemas"]["CitationItem"][];
+            /** Source Kind */
+            source_kind?: string | null;
+            /**
+             * Web Sources
+             * @default []
+             */
+            web_sources: {
+                [key: string]: unknown;
+            }[];
+            /** Query Id */
+            query_id?: string | null;
+            /** Answer Id */
+            answer_id?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -1227,6 +1247,19 @@ export interface components {
              * @default []
              */
             generations: components["schemas"]["MessageGeneration"][];
+            /** Source Kind */
+            source_kind?: string | null;
+            /**
+             * Web Sources
+             * @default []
+             */
+            web_sources: {
+                [key: string]: unknown;
+            }[];
+            /** Query Id */
+            query_id?: string | null;
+            /** Answer Id */
+            answer_id?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -1271,7 +1304,7 @@ export interface components {
         };
         /**
          * QueryRequest
-         * @description User query payload with optional requested scope and temporal filter.
+         * @description User query payload with optional scope, temporal filter, and answer policy.
          */
         QueryRequest: {
             /** Query */
@@ -1282,6 +1315,11 @@ export interface components {
             as_of?: string | null;
             /** Thread Id */
             thread_id?: string | null;
+            /**
+             * Answer Policy
+             * @default grounded_plus_web
+             */
+            answer_policy?: "grounded_only" | "grounded_plus_web";
         };
         /**
          * QueryResponse
@@ -1306,6 +1344,22 @@ export interface components {
             cost_usd: number;
             /** Latency Ms */
             latency_ms: number;
+            /**
+             * Source Kind
+             * @default docs
+             */
+            source_kind?: "docs" | "web" | "unverified";
+            /**
+             * Web Sources
+             * @default []
+             */
+            web_sources: {
+                [key: string]: unknown;
+            }[];
+            /** Query Id */
+            query_id?: string | null;
+            /** Answer Id */
+            answer_id?: string | null;
         };
         /** ReadinessResponse */
         ReadinessResponse: {
@@ -1381,6 +1435,11 @@ export interface components {
              * @default true
              */
             use_rerank: boolean;
+            /**
+             * Answer Policy
+             * @default grounded_plus_web
+             */
+            answer_policy?: "grounded_only" | "grounded_plus_web";
         };
         /** SettingsResponse */
         SettingsResponse: {
@@ -1768,6 +1827,7 @@ export interface operations {
                 scope?: string | null;
                 as_of?: string | null;
                 limit?: number;
+                source_kind?: string | null;
             };
             header?: {
                 "X-Dev-User"?: string | null;

@@ -172,6 +172,8 @@ class FakeSemanticCache:
             router_strategy="semantic_cache",
             cost_usd=0.0,
             latency_ms=4.5,
+            source_kind=best_entry.answer.source_kind,
+            web_sources=list(best_entry.answer.web_sources or []),
         )
 
     def set(

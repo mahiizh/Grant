@@ -75,6 +75,10 @@ def _to_message_item(record: MessageRecord) -> MessageItem:
             cost_usd=g.get("cost_usd"),
             tokens=g.get("tokens"),
             trace_id=g.get("trace_id"),
+            source_kind=g.get("source_kind", "docs"),
+            web_sources=list(g.get("web_sources", []) or []),
+            query_id=g.get("query_id"),
+            answer_id=g.get("answer_id"),
             citations=[
                 CitationItem(
                     chunk_id=c.get("chunk_id", ""),
@@ -112,6 +116,10 @@ def _to_message_item(record: MessageRecord) -> MessageItem:
         feedback=record.feedback,
         feedback_note=record.feedback_note,
         generations=generations,
+        source_kind=getattr(record, "source_kind", "docs") or "docs",
+        web_sources=list(record.web_sources or []),
+        query_id=record.query_id,
+        answer_id=record.answer_id,
         created_at=record.created_at,
     )
 
@@ -485,6 +493,7 @@ async def send_message(
                 thread_id=thread_id,
                 thread_history=history,
                 owner_user_id=current_user.user_id,
+                answer_policy=req.answer_policy,
             )
 
             rewritten = state.get("rewritten_query", req.content)
@@ -497,6 +506,10 @@ async def send_message(
             trace_id = state.get("trace_id", f"tr-{uuid.uuid4().hex[:8]}")
             answer = state.get("answer", "")
             raw_evidence = state.get("evidence", [])
+            source_kind = state.get("source_kind", "docs")
+            web_sources = list(state.get("web_sources", []) or [])
+            query_id = state.get("query_id")
+            answer_id = state.get("answer_id")
 
             citations = [
                 {
@@ -583,6 +596,10 @@ async def send_message(
                     pipeline_stages=stages,
                     subgraph_nodes=[c["chunk_id"] for c in citations[:4]],
                     generations=[],
+                    source_kind=source_kind,
+                    web_sources=web_sources,
+                    query_id=query_id,
+                    answer_id=answer_id,
                     created_at=datetime.now(UTC),
                 )
                 persist_session.add(asst_record)
@@ -614,6 +631,10 @@ async def send_message(
                 "subgraph_nodes": [c["chunk_id"] for c in citations[:4]],
                 "feedback": None,
                 "generations": [],
+                "source_kind": source_kind,
+                "web_sources": web_sources,
+                "query_id": query_id,
+                "answer_id": answer_id,
                 "created_at": datetime.now(UTC).isoformat(),
             }
             yield f"event: done\ndata: {json.dumps(final_msg)}\n\n"
@@ -627,6 +648,7 @@ async def send_message(
         thread_id=thread_id,
         thread_history=history,
         owner_user_id=current_user.user_id,
+        answer_policy=req.answer_policy,
     )
 
     rewritten = state.get("rewritten_query", req.content)
@@ -639,6 +661,10 @@ async def send_message(
     trace_id = state.get("trace_id", f"tr-{uuid.uuid4().hex[:8]}")
     answer = state.get("answer", "")
     raw_evidence = state.get("evidence", [])
+    source_kind = state.get("source_kind", "docs")
+    web_sources = list(state.get("web_sources", []) or [])
+    query_id = state.get("query_id")
+    answer_id = state.get("answer_id")
 
     citations = [
         {
@@ -708,6 +734,10 @@ async def send_message(
         pipeline_stages=stages,
         subgraph_nodes=[c["chunk_id"] for c in citations[:4]],
         generations=[],
+        source_kind=source_kind,
+        web_sources=web_sources,
+        query_id=query_id,
+        answer_id=answer_id,
         created_at=datetime.now(UTC),
     )
     session.add(asst_record)
@@ -906,6 +936,10 @@ async def regenerate_message(
         "tokens": asst_msg.tokens,
         "trace_id": asst_msg.trace_id,
         "citations": asst_msg.citations,
+        "source_kind": asst_msg.source_kind,
+        "web_sources": list(asst_msg.web_sources or []),
+        "query_id": asst_msg.query_id,
+        "answer_id": asst_msg.answer_id,
         "created_at": asst_msg.created_at.isoformat(),
     }
     existing_gens = list(asst_msg.generations or [])
@@ -931,6 +965,7 @@ async def regenerate_message(
         thread_id=thread_id,
         thread_history=history,
         owner_user_id=current_user.user_id,
+        answer_policy="grounded_plus_web",
     )
 
     rewritten = state.get("rewritten_query", user_query)
@@ -944,6 +979,10 @@ async def regenerate_message(
     trace_id = state.get("trace_id", f"tr-{uuid.uuid4().hex[:8]}")
     answer = state.get("answer", "")
     raw_evidence = state.get("evidence", [])
+    source_kind = state.get("source_kind", "docs")
+    web_sources = list(state.get("web_sources", []) or [])
+    query_id = state.get("query_id")
+    answer_id = state.get("answer_id")
 
     citations = [
         {
@@ -968,6 +1007,10 @@ async def regenerate_message(
     asst_msg.citations = citations
     asst_msg.generations = existing_gens
     asst_msg.subgraph_nodes = [str(c["chunk_id"]) for c in citations[:4]]
+    asst_msg.source_kind = source_kind
+    asst_msg.web_sources = web_sources
+    asst_msg.query_id = query_id
+    asst_msg.answer_id = answer_id
 
     await session.flush()
     await session.refresh(asst_msg)

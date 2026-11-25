@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -31,6 +32,10 @@ class MessageGeneration(BaseModel):
     tokens: int | None = None
     trace_id: str | None = None
     citations: list[CitationItem] = []
+    source_kind: Literal["docs", "web", "unverified"] = "docs"
+    web_sources: list[dict[str, Any]] = Field(default_factory=list)
+    query_id: str | None = None
+    answer_id: str | None = None
     created_at: datetime
 
 
@@ -53,6 +58,10 @@ class MessageItem(BaseModel):
     feedback: str | None = None  # "up" | "down"
     feedback_note: str | None = None
     generations: list[MessageGeneration] = []
+    source_kind: Literal["docs", "web", "unverified"] = "docs"
+    web_sources: list[dict[str, Any]] = Field(default_factory=list)
+    query_id: str | None = None
+    answer_id: str | None = None
     created_at: datetime
 
 
@@ -96,6 +105,7 @@ class SendMessageRequest(BaseModel):
     retrieval_mode: str | None = None  # "hybrid" | "vector" | "graph"
     use_cache: bool = True
     use_rerank: bool = True
+    answer_policy: Literal["grounded_only", "grounded_plus_web"] = "grounded_plus_web"
 
 
 class FeedbackRequest(BaseModel):

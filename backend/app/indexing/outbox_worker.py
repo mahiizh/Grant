@@ -64,6 +64,11 @@ class OutboxWorker:
                     acl_scope=acl_scope,
                     temporal=temporal,
                     owner_user_id=owner_user_id,
+                    properties={
+                        "source_kind": payload.get("source_kind", "document"),
+                        "url": payload.get("url"),
+                        "fetched_at": payload.get("fetched_at"),
+                    },
                 )
 
                 # 3. If extracted entities/relations are bundled with chunk
@@ -83,6 +88,8 @@ class OutboxWorker:
                             "source_id": doc_id,
                             "owner_user_id": owner_user_id or "",
                             "aliases": ent.get("aliases", []),
+                            "source_kind": payload.get("source_kind", "document"),
+                            "url": payload.get("url"),
                         },
                     )
                     await self.neo4j.link_chunk_entity(
@@ -168,6 +175,67 @@ class OutboxWorker:
                     source_id=source_id,
                     thread_id=thread_id,
                     owner_user_id=owner_user_id,
+                )
+
+            elif event_type == OutboxEventType.QUERY_ANSWER_UPSERTED.value:
+                query_id = payload.get("query_id", event.aggregate_id)
+                answer_id = payload.get("answer_id", "")
+                source_kind = payload.get("source_kind", "docs")
+                owner_user_id = payload.get("owner_user_id")
+                acl_scope = payload.get("acl_scope", {})
+                temporal = payload.get("temporal", {})
+                query_entities = payload.get("query_entities", [])
+                # Unverified answers never contribute extracted facts.
+                answer_entities = (
+                    payload.get("answer_entities", [])
+                    if source_kind != "unverified"
+                    else []
+                )
+
+                # History entities are resolved in Postgres when the answer is
+                # recorded. Ensure their Neo4j nodes exist before linking the
+                # Query/Answer nodes, otherwise newly resolved entities are
+                # silently dropped from the graph.
+                for source_id, entities in (
+                    (f"chat:query:{query_id}", query_entities),
+                    (f"chat:answer:{answer_id}", answer_entities),
+                ):
+                    for ent in entities:
+                        entity_id = ent.get("entity_id") or ent.get("name")
+                        if not entity_id:
+                            continue
+                        await self.neo4j.merge_node(
+                            entity_id=entity_id,
+                            name=ent.get("name") or entity_id,
+                            entity_type=ent.get("entity_type") or "Concept",
+                            acl_scope=acl_scope,
+                            temporal=temporal,
+                            properties={
+                                "source_id": source_id,
+                                "owner_user_id": owner_user_id or "",
+                                "aliases": ent.get("aliases", []),
+                                "source_kind": "chat",
+                            },
+                        )
+
+                await self.neo4j.upsert_query_answer(
+                    query_id=query_id,
+                    answer_id=answer_id,
+                    previous_query_id=payload.get("previous_query_id"),
+                    thread_id=payload.get("thread_id"),
+                    owner_user_id=owner_user_id,
+                    raw_query=payload.get("raw_query", ""),
+                    rewritten_query=payload.get("rewritten_query"),
+                    answer=payload.get("answer", ""),
+                    answer_policy=payload.get("answer_policy", "grounded_plus_web"),
+                    source_kind=source_kind,
+                    is_abstention=bool(payload.get("is_abstention", False)),
+                    acl_scope=acl_scope,
+                    temporal=temporal,
+                    query_entities=query_entities,
+                    answer_entities=answer_entities,
+                    cites=payload.get("cites", []),
+                    web_sources=payload.get("web_sources", []),
                 )
 
             elif event_type == OutboxEventType.CACHE_INVALIDATED.value:

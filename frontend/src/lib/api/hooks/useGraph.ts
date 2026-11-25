@@ -2,18 +2,24 @@ import { useQuery } from "@tanstack/react-query";
 import { apiClient, formatApiError } from "../client";
 import { useApp } from "../../../context/AppContext";
 
-export function useGraph(options?: { scope?: string; asOf?: string; limit?: number }) {
+export function useGraph(options?: {
+  scope?: string;
+  asOf?: string;
+  limit?: number;
+  sourceKind?: string;
+}) {
   const { aclScope, asOfDate } = useApp();
   const scope = options?.scope ?? aclScope;
   const as_of = options?.asOf ?? asOfDate;
   const limit = options?.limit ?? 100;
+  const source_kind = options?.sourceKind;
 
   return useQuery({
-    queryKey: ["graph", { scope, as_of, limit }],
+    queryKey: ["graph", { scope, as_of, limit, source_kind }],
     queryFn: async () => {
       const { data, error } = await apiClient.GET("/graph", {
         params: {
-          query: { scope, as_of, limit },
+          query: { scope, as_of, limit, source_kind },
         },
       });
       if (error) throw new Error(formatApiError(error, "Failed to fetch knowledge graph"));

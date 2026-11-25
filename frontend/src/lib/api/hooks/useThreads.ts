@@ -11,6 +11,13 @@ export interface CitationItem {
   path?: string[] | null;
 }
 
+export interface WebSourceItem {
+  url?: string | null;
+  title?: string | null;
+}
+
+export type AnswerSourceKind = "docs" | "web" | "unverified";
+
 export interface PipelineStageItem {
   id: string;
   label: string;
@@ -30,6 +37,10 @@ export interface MessageGeneration {
   tokens?: number | null;
   trace_id?: string | null;
   citations: CitationItem[];
+  source_kind?: AnswerSourceKind;
+  web_sources?: WebSourceItem[];
+  query_id?: string | null;
+  answer_id?: string | null;
   created_at: string;
 }
 
@@ -52,6 +63,10 @@ export interface MessageItem {
   feedback?: "up" | "down" | null;
   feedback_note?: string | null;
   generations: MessageGeneration[];
+  source_kind?: AnswerSourceKind;
+  web_sources?: WebSourceItem[];
+  query_id?: string | null;
+  answer_id?: string | null;
   created_at: string;
 }
 

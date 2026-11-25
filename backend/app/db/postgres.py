@@ -192,7 +192,21 @@ class DocumentRepository:
     """Repository handling CRUD operations and transactional outbox event staging."""
 
     @staticmethod
-    def _chunk_to_record(chunk: Chunk) -> ChunkRecord:
+    def _parse_optional_datetime(value: Any) -> datetime | None:
+        if not value or isinstance(value, datetime):
+            return value if isinstance(value, datetime) else None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+        except ValueError:
+            return None
+
+    @classmethod
+    def _chunk_to_record(cls, chunk: Chunk) -> ChunkRecord:
+        source_kind = str(chunk.metadata.get("source_kind", "document") or "document")
+        url = chunk.metadata.get("url") or (
+            chunk.provenance.source_uri if source_kind == "web" else None
+        )
         return ChunkRecord(
             chunk_id=chunk.chunk_id,
             doc_id=chunk.doc_id,
@@ -208,6 +222,9 @@ class DocumentRepository:
             valid_to=chunk.temporal.valid_to,
             source_tier=int(chunk.provenance.tier),
             source_uri=chunk.provenance.source_uri,
+            source_kind=source_kind,
+            url=str(url) if url else None,
+            fetched_at=cls._parse_optional_datetime(chunk.metadata.get("fetched_at")),
             provenance_confidence=chunk.provenance.confidence,
             provenance_verified=chunk.provenance.verified,
             metadata_json=chunk.metadata,
@@ -231,6 +248,12 @@ class DocumentRepository:
             confidence=record.provenance_confidence,
             verified=record.provenance_verified,
         )
+        metadata = dict(record.metadata_json or {})
+        metadata.setdefault("source_kind", getattr(record, "source_kind", "document"))
+        if getattr(record, "url", None):
+            metadata.setdefault("url", record.url)
+        if getattr(record, "fetched_at", None):
+            metadata.setdefault("fetched_at", record.fetched_at.isoformat())
         return Chunk(
             chunk_id=record.chunk_id,
             doc_id=record.doc_id,
@@ -241,7 +264,7 @@ class DocumentRepository:
             acl_scope=acl,
             temporal=temporal,
             provenance=prov,
-            metadata=record.metadata_json or {},
+            metadata=metadata,
         )
 
     @staticmethod
@@ -268,6 +291,12 @@ class DocumentRepository:
             DocumentRepository._record_to_domain_chunk(c)
             for c in sorted(record.chunks, key=lambda x: x.chunk_index)
         ]
+        metadata = dict(record.metadata_json or {})
+        metadata.setdefault("source_kind", getattr(record, "source_kind", "document"))
+        if getattr(record, "url", None):
+            metadata.setdefault("url", record.url)
+        if getattr(record, "fetched_at", None):
+            metadata.setdefault("fetched_at", record.fetched_at.isoformat())
         return Document(
             doc_id=record.doc_id,
             title=record.title,
@@ -279,7 +308,7 @@ class DocumentRepository:
             provenance=prov,
             version=record.version,
             content_hash=record.content_hash,
-            metadata=record.metadata_json or {},
+            metadata=metadata,
         )
 
     @staticmethod
@@ -342,6 +371,11 @@ class DocumentRepository:
         )
         result = await session.execute(stmt)
         existing_doc = result.scalar_one_or_none()
+        source_kind = str(document.metadata.get("source_kind", "document") or "document")
+        url = document.metadata.get("url") or (
+            document.provenance.source_uri if source_kind == "web" else None
+        )
+        fetched_at = cls._parse_optional_datetime(document.metadata.get("fetched_at"))
 
         if existing_doc is not None:
             existing_fingerprint = (
@@ -367,6 +401,9 @@ class DocumentRepository:
                 existing_doc.source_version = document.temporal.source_version
                 existing_doc.source_tier = int(document.provenance.tier)
                 existing_doc.source_uri = document.provenance.source_uri
+                existing_doc.source_kind = source_kind
+                existing_doc.url = str(url) if url else None
+                existing_doc.fetched_at = fetched_at
                 existing_doc.provenance_confidence = document.provenance.confidence
                 existing_doc.provenance_verified = document.provenance.verified
                 logger.debug("Document %s unchanged; skipping re-index", document.doc_id)
@@ -390,6 +427,9 @@ class DocumentRepository:
                 source_version=document.temporal.source_version,
                 source_tier=int(document.provenance.tier),
                 source_uri=document.provenance.source_uri,
+                source_kind=source_kind,
+                url=str(url) if url else None,
+                fetched_at=fetched_at,
                 provenance_confidence=document.provenance.confidence,
                 provenance_verified=document.provenance.verified,
                 metadata_json=document.metadata,
@@ -411,6 +451,9 @@ class DocumentRepository:
             doc_record.source_version = document.temporal.source_version
             doc_record.source_tier = int(document.provenance.tier)
             doc_record.source_uri = document.provenance.source_uri
+            doc_record.source_kind = source_kind
+            doc_record.url = str(url) if url else None
+            doc_record.fetched_at = fetched_at
             doc_record.provenance_confidence = document.provenance.confidence
             doc_record.provenance_verified = document.provenance.verified
             doc_record.metadata_json = document.metadata
@@ -448,6 +491,9 @@ class DocumentRepository:
             "owner_user_id": document.owner_user_id,
             "tenant_id": document.acl_scope.tenant_id,
             "source_uri": document.provenance.source_uri,
+            "source_kind": source_kind,
+            "url": str(url) if url else None,
+            "fetched_at": fetched_at.isoformat() if fetched_at else None,
         }
         OutboxService.stage_event(
             session=session,
@@ -479,6 +525,9 @@ class DocumentRepository:
                     else None,
                 },
                 "source_tier": int(chunk.provenance.tier),
+                "source_kind": str(chunk.metadata.get("source_kind", "document") or "document"),
+                "url": chunk.metadata.get("url"),
+                "fetched_at": chunk.metadata.get("fetched_at"),
                 "entities": chunk.metadata.get("entities", []),
                 "relations": chunk.metadata.get("relations", []),
             }

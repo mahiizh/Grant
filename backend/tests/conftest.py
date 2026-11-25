@@ -3,6 +3,8 @@ import shutil
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -33,6 +35,27 @@ os.environ.setdefault("NEO4J_DATABASE", os.environ.get("NEO4J_TEST_DATABASE", "n
 os.environ.setdefault("NEO4J_URI", os.environ.get("NEO4J_TEST_URI", "bolt://localhost:7688"))
 
 from app.main import create_app  # noqa: E402
+from tests.fakes.fake_web import FakeWebClient, FakeWebIngestor  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def mock_graspreach(monkeypatch: pytest.MonkeyPatch) -> Generator[Any, None, None]:
+    """No test may reach the real web; inject configurable in-memory fakes."""
+    from app.acquisition import web as web_module
+    from app.acquisition import web_ingest as web_ingest_module
+    from app.orchestration import workflow as workflow_module
+
+    client = FakeWebClient()
+    ingestor = FakeWebIngestor()
+    harness = SimpleNamespace(client=client, ingestor=ingestor)
+
+    monkeypatch.setattr(web_module, "get_web_client", lambda: client)
+    monkeypatch.setattr(web_module, "set_web_client", lambda _client: None)
+    monkeypatch.setattr(web_ingest_module, "get_web_ingestor", lambda: ingestor)
+    monkeypatch.setattr(web_ingest_module, "set_web_ingestor", lambda _ingestor: None)
+    monkeypatch.setattr(workflow_module, "get_web_client", lambda: client)
+    monkeypatch.setattr(workflow_module, "get_web_ingestor", lambda: ingestor)
+    yield harness
 
 
 @pytest.fixture(scope="session")

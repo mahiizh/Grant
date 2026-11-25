@@ -7,6 +7,7 @@ from app.domain.ids import (
 )
 from app.domain.models import (
     Answer,
+    AnswerSourceKind,
     Chunk,
     Document,
     Entity,
@@ -19,6 +20,7 @@ from app.domain.temporal import TemporalBounds
 
 __all__ = [
     "Answer",
+    "AnswerSourceKind",
     "Chunk",
     "Document",
     "Entity",

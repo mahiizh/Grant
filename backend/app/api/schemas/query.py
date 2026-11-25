@@ -1,15 +1,17 @@
 from datetime import datetime
+from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class QueryRequest(BaseModel):
-    """User query payload with optional requested scope and temporal filter."""
+    """User query payload with optional scope, temporal filter, and answer policy."""
 
     query: str
     scope: str | None = None
     as_of: datetime | None = None
     thread_id: str | None = None
+    answer_policy: Literal["grounded_only", "grounded_plus_web"] = "grounded_plus_web"
 
 
 class EvidenceItem(BaseModel):
@@ -35,3 +37,7 @@ class QueryResponse(BaseModel):
     path: list[str] | None = None
     cost_usd: float
     latency_ms: float
+    source_kind: Literal["docs", "web", "unverified"] = "docs"
+    web_sources: list[dict[str, Any]] = Field(default_factory=list)
+    query_id: str | None = None
+    answer_id: str | None = None

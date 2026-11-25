@@ -9,6 +9,7 @@ from app.db.models import ChunkRecord
 from app.db.outbox import OutboxService
 from app.db.postgres import announce_database_identity, get_session, verify_schema
 from app.indexing.neo4j_indexer import Neo4jIndexer
+from app.indexing.outbox_worker import OutboxWorker
 from app.indexing.qdrant_indexer import QdrantIndexer
 
 logger = logging.getLogger(__name__)
@@ -56,6 +57,14 @@ async def run_reconciliation(repair: bool = False) -> int:
     neo4j = Neo4jIndexer()
 
     try:
+        # 1b. Apply pending outbox mutations before comparing downstream stores.
+        # History writes are visible in Postgres immediately while Neo4j and
+        # Qdrant are updated asynchronously, so a raw comparison would report
+        # false drift for queries answered moments earlier.
+        worker = OutboxWorker(qdrant_indexer=qdrant, neo4j_indexer=neo4j)
+        drained = await worker.drain()
+        print(f"Outbox sync:                 drained {drained} pending events")
+
         # 2. Fetch from Qdrant
         qdrant_ids = await qdrant.get_all_chunk_ids()
         print(f"Qdrant Vector Store:         {len(qdrant_ids)} chunks")
@@ -73,6 +82,16 @@ async def run_reconciliation(repair: bool = False) -> int:
                 MATCH (m:Message)-[:MENTIONS]->(e:Entity)
                 RETURN e.id AS entity_id,
                        coalesce(m.source_id, m.id, m.message_id) AS source_id,
+                       'chat' AS source_kind
+                UNION
+                MATCH (q:Query)-[r:MENTIONS]->(e:Entity)
+                RETURN e.id AS entity_id,
+                       coalesce(r.source_id, 'chat:query:' + q.id) AS source_id,
+                       'chat' AS source_kind
+                UNION
+                MATCH (a:Answer)-[r:MENTIONS]->(e:Entity)
+                RETURN e.id AS entity_id,
+                       coalesce(r.source_id, 'chat:answer:' + a.id) AS source_id,
                        'chat' AS source_kind
                 """
             )
@@ -202,6 +221,32 @@ async def run_reconciliation(repair: bool = False) -> int:
                         entity_id=entity_id,
                         source_id=source_id,
                     )
+            elif source_id.startswith("chat:query:"):
+                async with neo4j.driver.session(database=neo4j.database) as s:
+                    await s.run(
+                        """
+                        MATCH (e:Entity {id: $entity_id})
+                        MATCH (q:Query {id: $node_id})
+                        MERGE (q)-[r:MENTIONS]->(e)
+                        SET r.source_id = $source_id, r.source_kind = 'query'
+                        """,
+                        entity_id=entity_id,
+                        node_id=source_id.removeprefix("chat:query:"),
+                        source_id=source_id,
+                    )
+            elif source_id.startswith("chat:answer:"):
+                async with neo4j.driver.session(database=neo4j.database) as s:
+                    await s.run(
+                        """
+                        MATCH (e:Entity {id: $entity_id})
+                        MATCH (a:Answer {id: $node_id})
+                        MERGE (a)-[r:MENTIONS]->(e)
+                        SET r.source_id = $source_id, r.source_kind = 'answer'
+                        """,
+                        entity_id=entity_id,
+                        node_id=source_id.removeprefix("chat:answer:"),
+                        source_id=source_id,
+                    )
             else:
                 async with neo4j.driver.session(database=neo4j.database) as s:
                     await s.run(
@@ -226,6 +271,26 @@ async def run_reconciliation(repair: bool = False) -> int:
                         """,
                         entity_id=entity_id,
                         source_id=source_id,
+                    )
+            elif source_id.startswith("chat:query:"):
+                async with neo4j.driver.session(database=neo4j.database) as s:
+                    await s.run(
+                        """
+                        MATCH (q:Query {id: $node_id})-[r:MENTIONS]->(e:Entity {id: $entity_id})
+                        DELETE r
+                        """,
+                        entity_id=entity_id,
+                        node_id=source_id.removeprefix("chat:query:"),
+                    )
+            elif source_id.startswith("chat:answer:"):
+                async with neo4j.driver.session(database=neo4j.database) as s:
+                    await s.run(
+                        """
+                        MATCH (a:Answer {id: $node_id})-[r:MENTIONS]->(e:Entity {id: $entity_id})
+                        DELETE r
+                        """,
+                        entity_id=entity_id,
+                        node_id=source_id.removeprefix("chat:answer:"),
                     )
             else:
                 async with neo4j.driver.session(database=neo4j.database) as s:

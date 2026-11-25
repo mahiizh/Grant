@@ -16,8 +16,11 @@ class CitationCheckResult:
 
 
 def extract_citations(text: str) -> list[str]:
-    """Extract all bracketed chunk citation identifiers (e.g. [chunk_storage_01], [chk_...])."""
-    matches = re.findall(r"\[(chk_[a-zA-Z0-9_\-]+|chunk_[a-zA-Z0-9_\-]+)\]", text)
+    """Extract bracketed chunk IDs and bracketed URLs used as answer citations."""
+    matches = re.findall(
+        r"\[(chk_[a-zA-Z0-9_\-]+|chunk_[a-zA-Z0-9_\-]+|web_[a-zA-Z0-9_\-]+|https?://[^\]\s]+)\]",
+        text,
+    )
     return list(dict.fromkeys(matches))  # Preserve order, remove duplicates
 
 
@@ -42,16 +45,21 @@ def verify_claim_citations(
             reason="Answer contains claims but provides zero claim-level citations.",
         )
 
-    # Check that all cited chunks actually exist in the retrieved evidence set
+    # Check that all cited chunks/URLs actually exist in the retrieved evidence set.
     valid_evidence_ids = {ev.chunk_id for ev in evidence_list}
-    invalid_ids = [cid for cid in cited_ids if cid not in valid_evidence_ids]
+    valid_uris = {ev.provenance.source_uri for ev in evidence_list}
+    invalid_ids = [
+        citation
+        for citation in cited_ids
+        if citation not in valid_evidence_ids and citation not in valid_uris
+    ]
 
     if invalid_ids:
         return CitationCheckResult(
             is_valid=False,
             cited_chunk_ids=cited_ids,
             invalid_chunk_ids=invalid_ids,
-            reason=f"Answer cited chunks not present in retrieved context: {invalid_ids}",
+            reason=f"Answer cited sources not present in retrieved context: {invalid_ids}",
         )
 
     return CitationCheckResult(

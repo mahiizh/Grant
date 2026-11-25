@@ -64,7 +64,10 @@ class Neo4jIndexer:
             n.valid_from = $valid_from,
             n.valid_to = $valid_to,
             n.doc_id = $doc_id,
-            n.aliases = $aliases
+            n.aliases = $aliases,
+            n.source_kind = $source_kind,
+            n.source_kinds = [$source_kind],
+            n.url = $url
         ON MATCH SET
             n.name = $name,
             n.entity_type = $entity_type,
@@ -83,13 +86,21 @@ class Neo4jIndexer:
                 THEN coalesce(n.owner_user_ids, []) + [$owner_user_id]
                 ELSE coalesce(n.owner_user_ids, [])
             END,
-            n.aliases = REDUCE(acc = coalesce(n.aliases, []), a IN $aliases | CASE WHEN a IN acc OR a = '' THEN acc ELSE acc + [a] END)
+            n.aliases = REDUCE(acc = coalesce(n.aliases, []), a IN $aliases | CASE WHEN a IN acc OR a = '' THEN acc ELSE acc + [a] END),
+            n.source_kinds = CASE
+                WHEN $source_kind IN coalesce(n.source_kinds, [coalesce(n.source_kind, 'document')])
+                THEN coalesce(n.source_kinds, [coalesce(n.source_kind, 'document')])
+                ELSE coalesce(n.source_kinds, [coalesce(n.source_kind, 'document')]) + [$source_kind]
+            END,
+            n.url = CASE WHEN $url <> '' THEN $url ELSE coalesce(n.url, '') END
         """
         props = properties or {}
         temp = temporal or {}
         owner_user_id = str(props.get("owner_user_id", "") or "")
         source_id = str(props.get("source_id", props.get("doc_id", "")) or "")
         aliases = [str(a) for a in (props.get("aliases") or []) if str(a).strip()]
+        source_kind = str(props.get("source_kind", "document") or "document")
+        url = str(props.get("url", "") or "")
         async with self.driver.session(database=self.database) as session:
             await session.run(
                 cypher,
@@ -103,6 +114,8 @@ class Neo4jIndexer:
                 source_id=source_id,
                 owner_user_id=owner_user_id,
                 aliases=aliases,
+                source_kind=source_kind,
+                url=url,
                 **_acl_props(acl_scope),
             )
 
@@ -180,6 +193,7 @@ class Neo4jIndexer:
         acl_scope: dict[str, Any] | None = None,
         temporal: dict[str, Any] | None = None,
         owner_user_id: str | None = None,
+        properties: dict[str, Any] | None = None,
     ) -> None:
         """Idempotently create or update a Chunk node in Neo4j."""
         cypher = """
@@ -193,8 +207,12 @@ class Neo4jIndexer:
             c.acl_allowed_roles = $acl_allowed_roles,
             c.acl_allowed_groups = $acl_allowed_groups,
             c.valid_from = $valid_from,
-            c.valid_to = $valid_to
+            c.valid_to = $valid_to,
+            c.source_kind = $source_kind,
+            c.url = $url,
+            c.fetched_at = $fetched_at
         """
+        props = properties or {}
         temp = temporal or {}
         async with self.driver.session(database=self.database) as session:
             await session.run(
@@ -206,6 +224,9 @@ class Neo4jIndexer:
                 acl_scope=json.dumps(acl_scope or {}),
                 valid_from=temp.get("valid_from", "1970-01-01T00:00:00Z"),
                 valid_to=temp.get("valid_to"),
+                source_kind=str(props.get("source_kind", "document") or "document"),
+                url=str(props.get("url", "") or ""),
+                fetched_at=props.get("fetched_at"),
                 **_acl_props(acl_scope),
             )
 
@@ -223,7 +244,8 @@ class Neo4jIndexer:
                  collect(coalesce(c.acl_tenant_id, 'default')) AS tenants,
                  collect(coalesce(c.acl_is_public, false)) AS publics,
                  collect(coalesce(c.acl_allowed_roles, [])) AS role_lists,
-                 collect(coalesce(c.acl_allowed_groups, [])) AS group_lists
+                 collect(coalesce(c.acl_allowed_groups, [])) AS group_lists,
+                  collect(DISTINCT coalesce(c.source_kind, 'document')) AS source_kinds
             WITH e, [d IN raw_doc_ids WHERE d <> ''] AS doc_ids,
                  coalesce(head(tenants), 'default') AS tenant,
                  all(pub IN publics WHERE pub) AS all_public,
@@ -231,12 +253,13 @@ class Neo4jIndexer:
                      acc + [role IN roles WHERE NOT role IN acc]) AS all_roles,
                  REDUCE(acc = [], groups IN group_lists |
                      acc + [grp IN groups WHERE NOT grp IN acc]) AS all_groups,
-                 $priority AS priority
-            WITH e, doc_ids, tenant, all_public, all_roles, all_groups,
+                 source_kinds,
+                  $priority AS priority
+            WITH e, doc_ids, tenant, all_public, all_roles, all_groups, source_kinds,
                  [scope IN priority WHERE scope IN all_roles OR scope IN all_groups] AS primary
             WITH e, doc_ids, tenant,
                  CASE WHEN size(primary) > 0 THEN head(primary) ELSE '' END AS chosen,
-                 all_public, all_roles, all_groups
+                 all_public, all_roles, all_groups, source_kinds
             SET e.doc_ids = doc_ids,
                 e.acl_tenant_id = tenant,
                 e.acl_is_public = all_public AND size(all_roles) = 0 AND size(all_groups) = 0,
@@ -245,7 +268,10 @@ class Neo4jIndexer:
                     ELSE all_roles END,
                 e.acl_allowed_groups = CASE
                     WHEN chosen <> '' AND chosen IN all_groups THEN [chosen]
-                    ELSE all_groups END
+                    ELSE all_groups END,
+                e.source_kinds = source_kinds,
+                e.source_kind = CASE WHEN 'web' IN source_kinds THEN 'web'
+                                     ELSE coalesce(head(source_kinds), 'document') END
             RETURN count(*) AS refreshed
         }
         RETURN e.id AS id
@@ -320,6 +346,159 @@ class Neo4jIndexer:
                 valid_to=temp.get("valid_to"),
                 **_acl_props(acl_scope),
             )
+
+    async def upsert_query_answer(
+        self,
+        *,
+        query_id: str,
+        answer_id: str,
+        previous_query_id: str | None,
+        thread_id: str | None,
+        owner_user_id: str | None,
+        raw_query: str,
+        rewritten_query: str | None,
+        answer: str,
+        answer_policy: str,
+        source_kind: str,
+        is_abstention: bool,
+        acl_scope: dict[str, Any] | None,
+        temporal: dict[str, Any] | None,
+        query_entities: list[dict[str, Any]],
+        answer_entities: list[dict[str, Any]],
+        cites: list[dict[str, Any]],
+        web_sources: list[dict[str, Any]],
+    ) -> None:
+        """Create Query/Answer nodes and their evidence and conversation edges."""
+        acl = acl_scope or {}
+        temp = temporal or {}
+        acl_json = json.dumps(acl)
+        owner = owner_user_id or ""
+        thread = thread_id or ""
+        query_cypher = """
+        MERGE (q:Query {id: $query_id})
+        SET q.query_id = $query_id,
+            q.raw_query = $raw_query,
+            q.rewritten_query = $rewritten_query,
+            q.answer_policy = $answer_policy,
+            q.thread_id = $thread_id,
+            q.owner_user_id = $owner_user_id,
+            q.acl_scope = $acl_scope,
+            q.valid_from = $valid_from,
+            q.valid_to = $valid_to
+        MERGE (a:Answer {id: $answer_id})
+        SET a.answer_id = $answer_id,
+            a.content = $answer,
+            a.source_kind = $source_kind,
+            a.is_abstention = $is_abstention,
+            a.web_sources = $web_sources,
+            a.query_id = $query_id,
+            a.thread_id = $thread_id,
+            a.owner_user_id = $owner_user_id,
+            a.acl_scope = $acl_scope,
+            a.valid_from = $valid_from,
+            a.valid_to = $valid_to
+        MERGE (q)-[:ANSWERS]->(a)
+        """
+        async with self.driver.session(database=self.database) as session:
+            await session.run(
+                query_cypher,
+                query_id=query_id,
+                answer_id=answer_id,
+                raw_query=raw_query,
+                rewritten_query=rewritten_query or raw_query,
+                answer=answer,
+                answer_policy=answer_policy,
+                source_kind=source_kind,
+                is_abstention=bool(is_abstention),
+                thread_id=thread,
+                owner_user_id=owner,
+                acl_scope=acl_json,
+                valid_from=temp.get("valid_from", "1970-01-01T00:00:00Z"),
+                valid_to=temp.get("valid_to"),
+                web_sources=json.dumps(web_sources or [], default=str),
+                **_acl_props(acl),
+            )
+
+            for entities, node_cypher in (
+                (
+                    query_entities,
+                    """
+                    MATCH (q:Query {id: $node_id})
+                    MATCH (e:Entity {id: $entity_id})
+                    MERGE (q)-[r:MENTIONS]->(e)
+                    SET r.source_id = $source_id,
+                        r.source_kind = $relation_source_kind,
+                        r.thread_id = $thread_id,
+                        r.owner_user_id = $owner_user_id
+                    """,
+                ),
+                (
+                    answer_entities,
+                    """
+                    MATCH (a:Answer {id: $node_id})
+                    MATCH (e:Entity {id: $entity_id})
+                    MERGE (a)-[r:MENTIONS]->(e)
+                    SET r.source_id = $source_id,
+                        r.source_kind = $relation_source_kind,
+                        r.thread_id = $thread_id,
+                        r.owner_user_id = $owner_user_id
+                    """,
+                ),
+            ):
+                is_query = node_cypher.lstrip().startswith("MATCH (q:")
+                node_id = query_id if is_query else answer_id
+                source_id = f"chat:query:{query_id}" if is_query else f"chat:answer:{answer_id}"
+                for entity in entities:
+                    entity_id = entity.get("entity_id") or entity.get("name")
+                    if not entity_id:
+                        continue
+                    await session.run(
+                        node_cypher,
+                        node_id=node_id,
+                        entity_id=entity_id,
+                        source_id=source_id,
+                        relation_source_kind="query" if is_query else "answer",
+                        thread_id=thread,
+                        owner_user_id=owner,
+                    )
+
+            cites_cypher = """
+            MATCH (a:Answer {id: $answer_id})
+            MERGE (s:Source {id: $source_id})
+            SET s.source_kind = $source_kind,
+                s.url = $url
+            MERGE (a)-[r:CITES]->(s)
+            SET r.source_kind = $source_kind,
+                r.thread_id = $thread_id,
+                r.owner_user_id = $owner_user_id
+            """
+            for cite in cites:
+                source_id = cite.get("source_id")
+                if not source_id:
+                    continue
+                url = str(cite.get("url") or "")
+                if not url and str(cite.get("source_kind")) == "web":
+                    url = str(source_id)
+                await session.run(
+                    cites_cypher,
+                    answer_id=answer_id,
+                    source_id=str(source_id),
+                    source_kind=str(cite.get("source_kind", "document")),
+                    url=url,
+                    thread_id=thread,
+                    owner_user_id=owner,
+                )
+
+            if previous_query_id:
+                await session.run(
+                    """
+                    MATCH (prev:Query {id: $previous_query_id})
+                    MATCH (q:Query {id: $query_id})
+                    MERGE (prev)-[:NEXT]->(q)
+                    """,
+                    previous_query_id=previous_query_id,
+                    query_id=query_id,
+                )
 
     async def delete_by_doc_id(self, doc_id: str) -> int:
         """Remove chunks, edges, and recompute or delete orphaned entities for doc_id."""

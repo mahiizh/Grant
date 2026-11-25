@@ -1,3 +1,4 @@
+import hashlib
 import inspect
 import logging
 import time
@@ -8,18 +9,22 @@ from typing import Any
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, StateGraph
 
+from app.acquisition.web import WebClient, WebPage, get_web_client
+from app.acquisition.web_ingest import WebIngestor, get_web_ingestor
 from app.cache.exact import ExactCache
+from app.cache.keys import prompt_version_lookup_chain
 from app.cache.semantic import SemanticCache
 from app.core.acl import ACLScope
 from app.core.config import get_settings
-from app.domain import Answer
+from app.domain import Answer, Evidence, Provenance
 from app.graph.retrievers import GraphRetriever
+from app.history.service import QueryHistory, get_query_history
 from app.llm.citations import verify_claim_citations
 from app.llm.gateway import ModelGateway
 from app.orchestration.condense import condense_query
 from app.orchestration.grounding import asks_about_absent_entity
 from app.orchestration.router import QueryRouter
-from app.orchestration.state import RAGState, RetrievalConfig
+from app.orchestration.state import AnswerPolicy, AnswerSourceKind, RAGState, RetrievalConfig
 from app.retrieval.filters import RetrievalFilter
 from app.retrieval.hybrid import HybridRetriever
 from app.security.injection import wrap_context_for_prompt
@@ -51,6 +56,10 @@ class RAGOrchestrator:
         model_gateway: ModelGateway | None = None,
         checkpointer: Any | None = None,
         cache_enabled: bool = True,
+        web_client: WebClient | None = None,
+        web_ingestor: WebIngestor | None = None,
+        query_history: QueryHistory | None = None,
+        history_enabled: bool = False,
     ) -> None:
         self.hybrid_retriever = hybrid_retriever or HybridRetriever()
         self.graph_retriever = graph_retriever or GraphRetriever()
@@ -63,7 +72,23 @@ class RAGOrchestrator:
             self.semantic_cache = SemanticCache(enabled=False)
         self.gateway = model_gateway or ModelGateway()
         self.checkpointer = checkpointer or MemorySaver()
+        self._web_client = web_client
+        self._web_ingestor = web_ingestor
+        self._query_history = query_history
+        self.history_enabled = history_enabled or query_history is not None
         self.graph = self._build_graph()
+
+    @property
+    def web_client(self) -> WebClient:
+        return self._web_client or get_web_client()
+
+    @property
+    def web_ingestor(self) -> WebIngestor:
+        return self._web_ingestor or get_web_ingestor()
+
+    @property
+    def query_history(self) -> QueryHistory:
+        return self._query_history or get_query_history()
 
     def _build_graph(self) -> Any:
         workflow = StateGraph(RAGState)
@@ -101,6 +126,8 @@ class RAGOrchestrator:
                 semantic_cache=self.semantic_cache,
                 acl_scope=state.get("acl_scope"),
                 owner_user_id=state.get("owner_user_id"),
+                answer_policy=state.get("answer_policy", "grounded_only"),
+                prompt_version=state.get("prompt_version", PROMPT_VERSION),
             )
             route_span = {
                 "id": f"sp-{uuid.uuid4().hex[:6]}",
@@ -114,6 +141,60 @@ class RAGOrchestrator:
             spans = list(state.get("spans", []))
             spans.append(route_span)
             return {"route": route, "spans": spans}
+
+        # 1a. History Node (repeat answers come from Postgres/Neo4j, no web call)
+        async def history_node(state: RAGState) -> dict[str, Any]:
+            spans = list(state.get("spans", []))
+            try:
+                hit = await self.query_history.lookup(
+                    query=state.get("rewritten_query") or state["query"],
+                    owner_user_id=state.get("owner_user_id"),
+                    answer_policy=state.get("answer_policy", "grounded_only"),
+                )
+            except Exception as exc:
+                logger.warning("Query history lookup failed: %s", exc)
+                hit = None
+
+            if hit is None:
+                spans.append(
+                    {
+                        "id": f"sp-{uuid.uuid4().hex[:6]}",
+                        "name": "History: lookup",
+                        "service": "QueryHistory",
+                        "start_ms": 14.0,
+                        "duration_ms": 2.0,
+                        "status": "miss",
+                        "meta": "No prior answer for this owner and policy",
+                    }
+                )
+                return {"from_graph_history": False, "spans": spans}
+
+            spans.append(
+                {
+                    "id": f"sp-{uuid.uuid4().hex[:6]}",
+                    "name": "History: lookup",
+                    "service": "QueryHistory",
+                    "start_ms": 14.0,
+                    "duration_ms": 2.0,
+                    "status": "hit",
+                    "meta": f"Reusing answer {hit.answer_id} from query history",
+                }
+            )
+            return {
+                "answer": hit.answer,
+                "evidence": hit.evidence,
+                "is_abstention": False,
+                "citations_valid": True,
+                "is_cached": False,
+                "cost_usd": 0.0,
+                "source_kind": hit.source_kind,
+                "web_sources": list(hit.web_sources or []),
+                "query_id": hit.query_id,
+                "answer_id": hit.answer_id,
+                "from_graph_history": True,
+                "route": "history",
+                "spans": spans,
+            }
 
         # 2. Small Talk Node (skips retrieval entirely)
         def small_talk_node(state: RAGState) -> dict[str, Any]:
@@ -139,6 +220,8 @@ class RAGOrchestrator:
                 "is_abstention": False,
                 "citations_valid": True,
                 "cost_usd": 0.0,
+                "source_kind": "docs",
+                "web_sources": [],
                 "spans": spans,
             }
 
@@ -161,13 +244,18 @@ class RAGOrchestrator:
             as_of = state.get("as_of_time")
             as_of_key = as_of.isoformat() if as_of else None
 
-            # Check exact cache first
-            hit = self.exact_cache.get(
-                query,
-                scope,
-                prompt_version=prompt_version,
-                owner_user_id=state.get("owner_user_id"),
-            )
+            # Check exact cache first. Legacy v1 entries remain readable only
+            # for grounded_only; new writes always use the policy-scoped key.
+            hit = None
+            for probe_version in prompt_version_lookup_chain(prompt_version):
+                hit = self.exact_cache.get(
+                    query,
+                    scope,
+                    prompt_version=probe_version,
+                    owner_user_id=state.get("owner_user_id"),
+                )
+                if hit is not None:
+                    break
             if hit is not None:
                 spans.append(
                     {
@@ -186,17 +274,23 @@ class RAGOrchestrator:
                     "is_cached": True,
                     "cost_usd": 0.0,
                     "citations_valid": True,
+                    "source_kind": getattr(hit, "source_kind", state.get("source_kind", "docs")),
+                    "web_sources": list(getattr(hit, "web_sources", []) or []),
                     "spans": spans,
                 }
 
             # Check semantic cache
-            sem_hit = self.semantic_cache.get(
-                query,
-                scope,
-                prompt_version=prompt_version,
-                as_of=as_of_key,
-                owner_user_id=state.get("owner_user_id"),
-            )
+            sem_hit = None
+            for probe_version in prompt_version_lookup_chain(prompt_version):
+                sem_hit = self.semantic_cache.get(
+                    query,
+                    scope,
+                    prompt_version=probe_version,
+                    as_of=as_of_key,
+                    owner_user_id=state.get("owner_user_id"),
+                )
+                if sem_hit is not None:
+                    break
             if sem_hit is not None:
                 spans.append(
                     {
@@ -215,6 +309,8 @@ class RAGOrchestrator:
                     "is_cached": True,
                     "cost_usd": 0.0,
                     "citations_valid": True,
+                    "source_kind": getattr(sem_hit, "source_kind", state.get("source_kind", "docs")),
+                    "web_sources": list(getattr(sem_hit, "web_sources", []) or []),
                     "spans": spans,
                 }
 
@@ -462,6 +558,8 @@ class RAGOrchestrator:
                 "is_abstention": True,
                 "citations_valid": True,
                 "cost_usd": 0.0,
+                "source_kind": "docs",
+                "web_sources": [],
                 "spans": spans,
             }
 
@@ -482,6 +580,119 @@ class RAGOrchestrator:
             )
             return {"answer": "", "is_abstention": False, "spans": spans}
 
+        # 5b. Web fallback Node (only reached when retrieval returned no evidence)
+        async def web_node(state: RAGState) -> dict[str, Any]:
+            query = state.get("rewritten_query") or state["query"]
+            spans = list(state.get("spans", []))
+            started = time.perf_counter()
+            pages: list[WebPage] = []
+            try:
+                pages = await self.web_client.gather(query)
+            except Exception as exc:
+                logger.warning("Web grounding failed for %r: %s", query, exc)
+                spans.append(
+                    {
+                        "id": f"sp-{uuid.uuid4().hex[:6]}",
+                        "name": "Web Grounding: unavailable",
+                        "service": "graspreach",
+                        "start_ms": 62.0,
+                        "duration_ms": round((time.perf_counter() - started) * 1000.0, 2),
+                        "status": "warning",
+                        "meta": str(exc)[:200],
+                    }
+                )
+                return {
+                    "evidence": [],
+                    "source_kind": "unverified",
+                    "web_pages": [],
+                    "web_sources": [],
+                    "web_error": str(exc),
+                    "spans": spans,
+                }
+
+            if not pages:
+                spans.append(
+                    {
+                        "id": f"sp-{uuid.uuid4().hex[:6]}",
+                        "name": "Web Grounding: no results",
+                        "service": "graspreach",
+                        "start_ms": 62.0,
+                        "duration_ms": round((time.perf_counter() - started) * 1000.0, 2),
+                        "status": "warning",
+                        "meta": "No usable web pages; answering from model knowledge",
+                    }
+                )
+                return {
+                    "evidence": [],
+                    "source_kind": "unverified",
+                    "web_pages": [],
+                    "web_sources": [],
+                    "web_error": "no web results",
+                    "spans": spans,
+                }
+
+            page_dicts = [
+                {
+                    "url": page.url,
+                    "title": page.title,
+                    "text": page.text,
+                    "fetched_at": page.fetched_at,
+                    "provider": page.provider,
+                }
+                for page in pages
+            ]
+            web_sources = [
+                {
+                    "url": page.url,
+                    "title": page.title,
+                    "fetched_at": page.fetched_at,
+                    "provider": page.provider,
+                    "source_kind": "web",
+                }
+                for page in pages
+            ]
+
+            try:
+                evidence = await self.web_ingestor.ingest(
+                    pages=pages,
+                    owner_user_id=state.get("owner_user_id"),
+                    acl_scope=state.get("acl_scope"),
+                )
+            except Exception as exc:
+                logger.exception("Web write-back failed; using fetched pages for this answer only")
+                evidence = [
+                    Evidence(
+                        chunk_id=f"web_{hashlib.sha256(page.url.encode()).hexdigest()[:12]}",
+                        doc_id=f"web:{page.url}",
+                        text=page.text[:4000],
+                        score=1.0,
+                        retrieval_method="web",
+                        provenance=Provenance.from_agent(page.url, confidence=0.7),
+                    )
+                    for page in pages
+                ]
+                web_sources[-1]["write_back_error"] = str(exc)[:200] if web_sources else None
+
+            spans.append(
+                {
+                    "id": f"sp-{uuid.uuid4().hex[:6]}",
+                    "name": "Web Grounding: search + fetch + write-back",
+                    "service": "graspreach",
+                    "start_ms": 62.0,
+                    "duration_ms": round((time.perf_counter() - started) * 1000.0, 2),
+                    "status": "ok",
+                    "meta": f"Fetched {len(pages)} pages, staged {len(evidence)} web chunks",
+                }
+            )
+            return {
+                "evidence": evidence,
+                "source_kind": "web",
+                "web_pages": page_dicts,
+                "web_sources": web_sources,
+                "web_error": None,
+                "spans": spans,
+            }
+
         # 6. Generation Node
         async def generate_node(state: RAGState) -> dict[str, Any]:
             evidence = state.get("evidence", [])
@@ -489,23 +700,55 @@ class RAGOrchestrator:
             retry_count = state.get("retry_count", 0)
             spans = list(state.get("spans", []))
             settings = get_settings()
+            source_kind: AnswerSourceKind = state.get("source_kind", "docs")
+            web_sources = list(state.get("web_sources", []) or [])
 
-            # Wrap context in XML delimiters
-            context_block = wrap_context_for_prompt(evidence)
+            if source_kind == "unverified":
+                prompt = (
+                    f"Question: {query}\n\n"
+                    "Instructions:\n"
+                    "1. No retrieved documents or fetched web pages were available.\n"
+                    "2. Answer from general model knowledge only.\n"
+                    "3. Begin with 'Unverified:' and do not invent citations or source URLs.\n"
+                )
+            elif source_kind == "web":
+                context_block = wrap_context_for_prompt(evidence)
+                source_lines = "\n".join(
+                    f"- [{src.get('url')}] {src.get('title', '')}".rstrip()
+                    for src in web_sources
+                    if src.get("url")
+                )
+                prompt = (
+                    f"{context_block}\n\n"
+                    f"Fetched web sources:\n{source_lines}\n\n"
+                    f"Question: {query}\n\n"
+                    "Instructions:\n"
+                    "1. Answer using the fetched web pages above and general knowledge.\n"
+                    "2. Cite every web-sourced claim with the bracketed URL, e.g. [https://example.com].\n"
+                    "3. Do not cite documents that were not provided.\n"
+                )
+            else:
+                prompt = (
+                    f"{wrap_context_for_prompt(evidence)}\n\n"
+                    f"Question: {query}\n\n"
+                    "Instructions:\n"
+                    "1. Answer the question using ONLY the provided reference documents.\n"
+                    "2. Every claim must have inline bracket citations pointing to the chunk IDs, e.g. [chunk_id].\n"
+                    "3. If the context does not contain the answer, reply that you do not have sufficient information.\n"
+                )
 
-            prompt = (
-                f"{context_block}\n\n"
-                f"Question: {query}\n\n"
-                "Instructions:\n"
-                "1. Answer the question using ONLY the provided reference documents.\n"
-                "2. Every claim must have inline bracket citations pointing to the chunk IDs, e.g. [chunk_id].\n"
-                "3. If the context does not contain the answer, reply that you do not have sufficient information.\n"
-            )
-
-            # In test mode without API key, use fallback mock
+            # In test mode without API key, use deterministic fallback
             mock_ans: str | None = None
             if settings.APP_ENV == "test" and not settings.GEMINI_API_KEY:
-                if evidence:
+                if source_kind == "unverified":
+                    mock_ans = (
+                        "Unverified: I do not have retrieved documents or web sources "
+                        "for this question."
+                    )
+                elif source_kind == "web" and evidence:
+                    first_url = evidence[0].provenance.source_uri
+                    mock_ans = f"Based on fetched web sources, {evidence[0].text[:300]} [{first_url}]"
+                elif evidence:
                     chunk_citations = " ".join(f"[{ev.chunk_id}]" for ev in evidence[:2])
                     mock_ans = (
                         f"Based on system documentation, {evidence[0].text} {chunk_citations}"
@@ -534,6 +777,7 @@ class RAGOrchestrator:
                 answer_text=resp.content,
                 evidence_list=evidence,
                 is_abstention=False,
+                require_citations=source_kind != "unverified",
             )
 
             # Populate exact and semantic cache on successful generation (for live queries)
@@ -552,6 +796,8 @@ class RAGOrchestrator:
                     router_strategy=state.get("route", "vector"),
                     cost_usd=state.get("cost_usd", 0.0) + resp.usage.cost_usd,
                     latency_ms=0.0,
+                    source_kind=source_kind,
+                    web_sources=web_sources,
                 )
                 scope = state.get("acl_scope", ACLScope.public())
                 prompt_version = state.get("prompt_version", PROMPT_VERSION)
@@ -577,15 +823,19 @@ class RAGOrchestrator:
                 "cost_usd": state.get("cost_usd", 0.0) + resp.usage.cost_usd,
                 "citations_valid": cit_result.is_valid,
                 "retry_count": retry_count + 1,
+                "source_kind": source_kind,
+                "web_sources": web_sources,
                 "spans": spans,
             }
 
         # Register nodes in graph
         workflow.add_node("condense_step", condense_node)
         workflow.add_node("route_step", route_node)
+        workflow.add_node("history_step", history_node)
         workflow.add_node("small_talk_step", small_talk_node)
         workflow.add_node("cache_step", cache_node)
         workflow.add_node("retrieve_step", retrieve_node)
+        workflow.add_node("web_step", web_node)
         workflow.add_node("abstain_step", abstain_node)
         workflow.add_node("retrieval_only_step", retrieval_only_node)
         workflow.add_node("generate_step", generate_node)
@@ -602,9 +852,22 @@ class RAGOrchestrator:
                 return "small_talk_step"
             if route == "abstain":
                 return "abstain_step"
+            if (
+                self.history_enabled
+                and not state.get("retrieval_only", False)
+                and state.get("as_of_time") is None
+            ):
+                return "history_step"
             return "cache_step"
 
         workflow.add_conditional_edges("route_step", route_decision)
+
+        def history_decision(state: RAGState) -> str:
+            if state.get("from_graph_history", False):
+                return END
+            return "cache_step"
+
+        workflow.add_conditional_edges("history_step", history_decision)
         workflow.add_edge("small_talk_step", END)
 
         def cache_decision(state: RAGState) -> str:
@@ -618,16 +881,24 @@ class RAGOrchestrator:
 
         def evidence_decision(state: RAGState) -> str:
             evidence = state.get("evidence", [])
-            if not evidence:
-                return "abstain_step"
-            query = state.get("rewritten_query") or state["query"]
-            if asks_about_absent_entity(query, (item.text for item in evidence)):
-                return "abstain_step"
+            policy = state.get("answer_policy", "grounded_only")
             if state.get("retrieval_only", False):
                 return "retrieval_only_step"
+            if not evidence:
+                if policy == "grounded_plus_web":
+                    return "web_step"
+                return "abstain_step"
+            query = state.get("rewritten_query") or state["query"]
+            # grounded_plus_web never abstains here; the router has already
+            # handled unsafe requests.
+            if policy == "grounded_only" and asks_about_absent_entity(
+                query, (item.text for item in evidence)
+            ):
+                return "abstain_step"
             return "generate_step"
 
         workflow.add_conditional_edges("retrieve_step", evidence_decision)
+        workflow.add_edge("web_step", "generate_step")
         workflow.add_edge("abstain_step", END)
         workflow.add_edge("retrieval_only_step", END)
         workflow.add_edge("generate_step", END)
@@ -644,12 +915,14 @@ class RAGOrchestrator:
         retrieval_config: RetrievalConfig = "full",
         retrieval_only: bool = False,
         owner_user_id: str | None = None,
+        answer_policy: AnswerPolicy | None = None,
     ) -> RAGState:
         """Execute the compiled LangGraph workflow end-to-end."""
         start_time = time.perf_counter()
         scope = acl_scope or ACLScope.public()
         trace_id = f"tr-{uuid.uuid4().hex[:8]}"
         thread_key = thread_id or f"th-{uuid.uuid4().hex[:8]}"
+        policy: AnswerPolicy = answer_policy or "grounded_only"
 
         initial_state: RAGState = {
             "query": query,
@@ -663,9 +936,18 @@ class RAGOrchestrator:
             "as_of_time": as_of_time,
             "retrieval_config": retrieval_config,
             "retrieval_only": retrieval_only,
+            "answer_policy": policy,
+            "source_kind": "docs",
+            "prompt_version": f"{PROMPT_VERSION}:{policy}",
             "route": "vector",
             "is_cached": False,
+            "from_graph_history": False,
             "evidence": [],
+            "web_pages": [],
+            "web_sources": [],
+            "web_error": None,
+            "query_id": None,
+            "answer_id": None,
             "path": None,
             "answer": "",
             "is_abstention": False,
@@ -684,5 +966,28 @@ class RAGOrchestrator:
         elapsed_ms = (time.perf_counter() - start_time) * 1000.0
         final_state["latency_ms"] = round(elapsed_ms, 2)
         final_state["trace_id"] = trace_id
+
+        if self.history_enabled and not retrieval_only and not final_state.get(
+            "from_graph_history", False
+        ):
+            try:
+                query_id, answer_id = await self.query_history.record(
+                    session=None,
+                    raw_query=query,
+                    rewritten_query=str(final_state.get("rewritten_query") or query),
+                    answer=str(final_state.get("answer") or ""),
+                    evidence=list(final_state.get("evidence", [])),
+                    source_kind=str(final_state.get("source_kind", "docs")),
+                    web_sources=list(final_state.get("web_sources", []) or []),
+                    answer_policy=policy,
+                    acl_scope=scope,
+                    owner_user_id=owner_user_id,
+                    thread_id=thread_id,
+                    is_abstention=bool(final_state.get("is_abstention", False)),
+                )
+                final_state["query_id"] = query_id
+                final_state["answer_id"] = answer_id
+            except Exception as exc:
+                logger.warning("Failed recording query/answer history: %s", exc)
 
         return final_state
