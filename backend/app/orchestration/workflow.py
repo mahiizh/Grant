@@ -24,6 +24,7 @@ from app.observability.stage_timing import (
     timed_stage,
     timing_snapshot,
 )
+from app.orchestration.answer_metadata import build_answer_metadata
 from app.orchestration.condense import condense_query
 from app.orchestration.grounding import asks_about_absent_entity
 from app.orchestration.state import AnswerPolicy, AnswerSourceKind, RAGState, RetrievalConfig
@@ -957,8 +958,10 @@ class RAGOrchestrator:
         is_admin: bool = False,
         answer_policy: AnswerPolicy | None = None,
     ) -> RAGState:
-        """Run the workflow while collecting real per-stage timings."""
+        """Run the workflow, collect stage timings, and persist answer metadata."""
         _timings, token = start_stage_timings()
+        policy: AnswerPolicy = answer_policy or "grounded_only"
+        final_state: RAGState = {}
         try:
             final_state = await self._run_inner(
                 query=query,
@@ -972,6 +975,38 @@ class RAGOrchestrator:
                 is_admin=is_admin,
                 answer_policy=answer_policy,
             )
+            # Snapshot before history persistence so the stored timings describe
+            # the answer path itself; the response snapshot also includes the
+            # persist stage.
+            persisted_timings = timing_snapshot()
+            if self.record_history and not retrieval_only:
+                try:
+                    metadata = build_answer_metadata(
+                        final_state, stage_timings_ms=persisted_timings
+                    )
+                    async with timed_stage("persist"):
+                        query_id, answer_id = await self.query_history.record(
+                            session=None,
+                            raw_query=query,
+                            rewritten_query=str(final_state.get("rewritten_query") or query),
+                            answer=str(final_state.get("answer") or ""),
+                            evidence=list(final_state.get("evidence", [])),
+                            source_kind=str(final_state.get("source_kind", "docs")),
+                            web_sources=list(final_state.get("web_sources", []) or []),
+                            answer_policy=policy,
+                            acl_scope=acl_scope or ACLScope.public(),
+                            owner_user_id=owner_user_id,
+                            thread_id=thread_id,
+                            source=str(metadata["source"]),
+                            answer_path=list(metadata["answer_path"]),
+                            top_score=float(metadata["top_score"]),
+                            stage_timings_ms=dict(metadata["stage_timings_ms"]),
+                            is_abstention=bool(final_state.get("is_abstention", False)),
+                        )
+                    final_state["query_id"] = query_id
+                    final_state["answer_id"] = answer_id
+                except Exception as exc:
+                    logger.warning("Failed recording query/answer history: %s", exc)
         finally:
             snapshot = timing_snapshot()
             end_stage_timings(token)
@@ -1041,27 +1076,5 @@ class RAGOrchestrator:
         elapsed_ms = (time.perf_counter() - start_time) * 1000.0
         final_state["latency_ms"] = round(elapsed_ms, 2)
         final_state["trace_id"] = trace_id
-
-        if self.record_history and not retrieval_only:
-            try:
-                async with timed_stage("persist"):
-                    query_id, answer_id = await self.query_history.record(
-                        session=None,
-                        raw_query=query,
-                        rewritten_query=str(final_state.get("rewritten_query") or query),
-                        answer=str(final_state.get("answer") or ""),
-                        evidence=list(final_state.get("evidence", [])),
-                        source_kind=str(final_state.get("source_kind", "docs")),
-                        web_sources=list(final_state.get("web_sources", []) or []),
-                        answer_policy=policy,
-                        acl_scope=scope,
-                        owner_user_id=owner_user_id,
-                        thread_id=thread_id,
-                        is_abstention=bool(final_state.get("is_abstention", False)),
-                    )
-                final_state["query_id"] = query_id
-                final_state["answer_id"] = answer_id
-            except Exception as exc:
-                logger.warning("Failed recording query/answer history: %s", exc)
 
         return final_state

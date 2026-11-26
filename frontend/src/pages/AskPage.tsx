@@ -803,6 +803,13 @@ export function AskPage() {
                     currentVerIdx === 0
                       ? msg.web_sources
                       : msg.generations[currentVerIdx - 1]?.web_sources || msg.web_sources;
+                  const displayedMetadata =
+                    currentVerIdx === 0 ? msg : msg.generations[currentVerIdx - 1];
+                  const displayedSource =
+                    displayedMetadata?.source ||
+                    (displayedSourceKind === "unverified"
+                      ? "model"
+                      : displayedSourceKind || "docs");
 
                   const stages: PipelineStage[] = (msg.pipeline_stages || []).map((s) => ({
                     id: s.id,
@@ -871,6 +878,22 @@ export function AskPage() {
                                 sourceKind={displayedSourceKind}
                                 webSources={displayedWebSources}
                               />
+
+                              <Badge variant="outline" className="text-[10px] font-mono border-zinc-800 text-zinc-300 bg-zinc-950">
+                                Source: {displayedSource}
+                              </Badge>
+
+                              {(displayedMetadata?.answer_path?.length || 0) > 0 && (
+                                <Badge variant="outline" className="text-[10px] font-mono border-zinc-800 text-zinc-300 bg-zinc-950">
+                                  Path: {displayedMetadata?.answer_path?.join("→")}
+                                </Badge>
+                              )}
+
+                              {typeof displayedMetadata?.top_score === "number" && (
+                                <Badge variant="outline" className="text-[10px] font-mono border-zinc-800 text-zinc-300 bg-zinc-950">
+                                  Top score: {displayedMetadata.top_score.toFixed(3)}
+                                </Badge>
+                              )}
 
                               <Badge variant="outline" className="text-[10px] font-mono border-zinc-800 text-zinc-300 bg-zinc-950 uppercase">
                                 {msg.route || "hybrid"}
@@ -1035,6 +1058,21 @@ export function AskPage() {
                             sourceKind={liveStreamingMessage.source_kind}
                             webSources={liveStreamingMessage.web_sources}
                           />
+                          {liveStreamingMessage.source && (
+                            <Badge variant="outline" className="ml-2 text-[10px] font-mono border-zinc-800 text-zinc-300 bg-zinc-950">
+                              Source: {liveStreamingMessage.source}
+                            </Badge>
+                          )}
+                          {(liveStreamingMessage.answer_path?.length || 0) > 0 && (
+                            <Badge variant="outline" className="ml-2 text-[10px] font-mono border-zinc-800 text-zinc-300 bg-zinc-950">
+                              Path: {liveStreamingMessage.answer_path?.join("→")}
+                            </Badge>
+                          )}
+                          {typeof liveStreamingMessage.top_score === "number" && (
+                            <Badge variant="outline" className="ml-2 text-[10px] font-mono border-zinc-800 text-zinc-300 bg-zinc-950">
+                              Top score: {liveStreamingMessage.top_score.toFixed(3)}
+                            </Badge>
+                          )}
                         </div>
                       </div>
                     </div>

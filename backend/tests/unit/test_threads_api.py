@@ -90,6 +90,11 @@ async def test_threads_crud_and_messages(client: AsyncClient) -> None:
     assert turn1["trace_id"] is not None
     assert len(turn1["citations"]) > 0
     assert any(s["id"] == "condense" for s in turn1["pipeline_stages"])
+    # Step 5: immediate response carries all four answer-metadata fields.
+    assert turn1["source"] in {"docs", "web", "model", "abstain"}
+    assert isinstance(turn1["answer_path"], list) and turn1["answer_path"]
+    assert isinstance(turn1["top_score"], float)
+    assert isinstance(turn1["stage_timings_ms"], dict)
 
     # 5. Post message Turn 2 (with pronouns)
     res = await client.post(
@@ -128,12 +133,23 @@ async def test_threads_crud_and_messages(client: AsyncClient) -> None:
     regen = res.json()
     assert len(regen["generations"]) == 1  # 1 prior archived generation
     assert regen["generations"][0]["content"] == turn2["content"]
+    # Archived generations keep their answer metadata too.
+    assert regen["generations"][0]["source"] in {"docs", "web", "model", "abstain"}
+    assert isinstance(regen["generations"][0]["answer_path"], list)
 
     # 9. Get thread details
     res = await client.get(f"/api/v1/threads/{thread_id}")
     assert res.status_code == 200
     detail = res.json()
     assert len(detail["messages"]) >= 4  # 2 user msgs + 2 assistant msgs
+    # Metadata must round-trip through MessageRecord.answer_metadata.
+    asst_messages = [m for m in detail["messages"] if m["role"] == "assistant"]
+    assert asst_messages
+    for msg in asst_messages:
+        assert msg["source"] in {"docs", "web", "model", "abstain"}
+        assert isinstance(msg["answer_path"], list) and msg["answer_path"]
+        assert isinstance(msg["top_score"], float)
+        assert isinstance(msg["stage_timings_ms"], dict)
 
     # 10. Delete thread
     res = await client.delete(f"/api/v1/threads/{thread_id}")

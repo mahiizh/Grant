@@ -39,6 +39,10 @@ class QueryHistory(Protocol):
         owner_user_id: str | None,
         thread_id: str | None,
         is_abstention: bool = False,
+        source: str = "docs",
+        answer_path: list[str] | None = None,
+        top_score: float = 0.0,
+        stage_timings_ms: dict[str, float] | None = None,
     ) -> tuple[str, str]: ...
 
 
@@ -85,6 +89,10 @@ class QueryHistoryService:
         owner_user_id: str | None,
         thread_id: str | None,
         is_abstention: bool = False,
+        source: str = "docs",
+        answer_path: list[str] | None = None,
+        top_score: float = 0.0,
+        stage_timings_ms: dict[str, float] | None = None,
     ) -> tuple[str, str]:
         """Persist query/answer rows and stage their graph nodes and edges."""
         if session is None:
@@ -102,6 +110,10 @@ class QueryHistoryService:
                     owner_user_id=owner_user_id,
                     thread_id=thread_id,
                     is_abstention=is_abstention,
+                    source=source,
+                    answer_path=answer_path,
+                    top_score=top_score,
+                    stage_timings_ms=stage_timings_ms,
                 )
 
         assert session is not None
@@ -141,6 +153,10 @@ class QueryHistoryService:
                 owner_user_id=owner_user_id,
                 content=answer,
                 source_kind=source_kind,
+                source=source or "docs",
+                path=list(answer_path or []),
+                top_score=float(top_score or 0.0),
+                stage_timings_ms=dict(stage_timings_ms or {}),
                 is_abstention=is_abstention,
                 citations=[_evidence_to_dict(ev) for ev in evidence],
                 web_sources=list(web_sources),

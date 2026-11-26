@@ -36,6 +36,7 @@ from app.db.outbox import OutboxEventType, OutboxService
 from app.db.postgres import get_db_session, get_session
 from app.ingestion.extraction import EntityRelationExtractor
 from app.observability.tracer import export_spans_to_db
+from app.orchestration.answer_metadata import build_answer_metadata
 from app.orchestration.budget import AskBudgetExceededError, run_with_ask_budget
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,7 @@ router = APIRouter(prefix="/threads", tags=["threads"])
 
 
 def _to_message_item(record: MessageRecord) -> MessageItem:
+    metadata = dict(getattr(record, "answer_metadata", None) or {})
     citations = [
         CitationItem(
             chunk_id=c.get("chunk_id", ""),
@@ -77,6 +79,12 @@ def _to_message_item(record: MessageRecord) -> MessageItem:
             tokens=g.get("tokens"),
             trace_id=g.get("trace_id"),
             source_kind=g.get("source_kind", "docs"),
+            source=str(g.get("source") or metadata.get("source") or "docs"),
+            answer_path=list(g.get("answer_path") or metadata.get("answer_path") or []),
+            top_score=float(g.get("top_score") or metadata.get("top_score") or 0.0),
+            stage_timings_ms=dict(
+                g.get("stage_timings_ms") or metadata.get("stage_timings_ms") or {}
+            ),
             web_sources=list(g.get("web_sources", []) or []),
             query_id=g.get("query_id"),
             answer_id=g.get("answer_id"),
@@ -118,6 +126,10 @@ def _to_message_item(record: MessageRecord) -> MessageItem:
         feedback_note=record.feedback_note,
         generations=generations,
         source_kind=getattr(record, "source_kind", "docs") or "docs",
+        source=str(metadata.get("source") or "docs"),
+        answer_path=list(metadata.get("answer_path") or []),
+        top_score=float(metadata.get("top_score") or 0.0),
+        stage_timings_ms=dict(metadata.get("stage_timings_ms") or {}),
         web_sources=list(record.web_sources or []),
         query_id=record.query_id,
         answer_id=record.answer_id,
@@ -503,6 +515,7 @@ async def send_message(
             web_sources = list(state.get("web_sources", []) or [])
             query_id = state.get("query_id")
             answer_id = state.get("answer_id")
+            metadata = build_answer_metadata(state)
 
             citations = [
                 {
@@ -590,6 +603,7 @@ async def send_message(
                     subgraph_nodes=[c["chunk_id"] for c in citations[:4]],
                     generations=[],
                     source_kind=source_kind,
+                    answer_metadata=metadata,
                     web_sources=web_sources,
                     query_id=query_id,
                     answer_id=answer_id,
@@ -625,6 +639,10 @@ async def send_message(
                 "feedback": None,
                 "generations": [],
                 "source_kind": source_kind,
+                "source": metadata["source"],
+                "answer_path": metadata["answer_path"],
+                "top_score": metadata["top_score"],
+                "stage_timings_ms": metadata["stage_timings_ms"],
                 "web_sources": web_sources,
                 "query_id": query_id,
                 "answer_id": answer_id,
@@ -664,6 +682,7 @@ async def send_message(
     web_sources = list(state.get("web_sources", []) or [])
     query_id = state.get("query_id")
     answer_id = state.get("answer_id")
+    metadata = build_answer_metadata(state)
 
     citations = [
         {
@@ -734,6 +753,7 @@ async def send_message(
         subgraph_nodes=[c["chunk_id"] for c in citations[:4]],
         generations=[],
         source_kind=source_kind,
+        answer_metadata=metadata,
         web_sources=web_sources,
         query_id=query_id,
         answer_id=answer_id,
@@ -933,6 +953,16 @@ async def regenerate_message(
         "trace_id": asst_msg.trace_id,
         "citations": asst_msg.citations,
         "source_kind": asst_msg.source_kind,
+        "source": (getattr(asst_msg, "answer_metadata", None) or {}).get("source", "docs"),
+        "answer_path": list(
+            (getattr(asst_msg, "answer_metadata", None) or {}).get("answer_path") or []
+        ),
+        "top_score": float(
+            (getattr(asst_msg, "answer_metadata", None) or {}).get("top_score") or 0.0
+        ),
+        "stage_timings_ms": dict(
+            (getattr(asst_msg, "answer_metadata", None) or {}).get("stage_timings_ms") or {}
+        ),
         "web_sources": list(asst_msg.web_sources or []),
         "query_id": asst_msg.query_id,
         "answer_id": asst_msg.answer_id,
@@ -981,6 +1011,7 @@ async def regenerate_message(
     web_sources = list(state.get("web_sources", []) or [])
     query_id = state.get("query_id")
     answer_id = state.get("answer_id")
+    metadata = build_answer_metadata(state)
 
     citations = [
         {
@@ -1006,6 +1037,7 @@ async def regenerate_message(
     asst_msg.generations = existing_gens
     asst_msg.subgraph_nodes = [str(c["chunk_id"]) for c in citations[:4]]
     asst_msg.source_kind = source_kind
+    asst_msg.answer_metadata = metadata
     asst_msg.web_sources = web_sources
     asst_msg.query_id = query_id
     asst_msg.answer_id = answer_id

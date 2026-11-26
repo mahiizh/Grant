@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from app.api.schemas.query import EvidenceItem, QueryRequest, QueryResponse
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.observability.tracer import export_spans_to_db
+from app.orchestration.answer_metadata import build_answer_metadata
 from app.orchestration.budget import AskBudgetExceededError, run_with_ask_budget
 from app.orchestration.workflow import RAGOrchestrator
 
@@ -69,6 +70,7 @@ async def query_pipeline(
         )
         for ev in state.get("evidence", [])
     ]
+    metadata = build_answer_metadata(state)
 
     # Export OpenTelemetry spans to PostgreSQL spans table asynchronously
     trace_id = state.get("trace_id", "")
@@ -90,6 +92,9 @@ async def query_pipeline(
         cost_usd=round(state.get("cost_usd", 0.0), 6),
         latency_ms=round(state.get("latency_ms", 0.0), 2),
         source_kind=state.get("source_kind", "docs"),
+        source=str(metadata["source"]),
+        answer_path=list(metadata["answer_path"]),
+        top_score=float(metadata["top_score"]),
         web_sources=list(state.get("web_sources", []) or []),
         query_id=state.get("query_id"),
         answer_id=state.get("answer_id"),

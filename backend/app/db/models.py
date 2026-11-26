@@ -214,6 +214,8 @@ class MessageRecord(Base):
     generations: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     source_kind: Mapped[str] = mapped_column(String(16), default="docs", nullable=False)
     web_sources: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    # Answer metadata copied from the recorded Answer for Ask UI rendering.
+    answer_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
     query_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     answer_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -265,6 +267,11 @@ class AnswerRecord(Base):
     owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     source_kind: Mapped[str] = mapped_column(String(16), default="docs", nullable=False, index=True)
+    # source: docs / web / model / abstain; path: answer-source hops, e.g. docs→web.
+    source: Mapped[str] = mapped_column(String(16), default="docs", nullable=False, index=True)
+    path: Mapped[list[str]] = mapped_column(JSON, default=list)
+    top_score: Mapped[float] = mapped_column(Float, default=0.0, nullable=False)
+    stage_timings_ms: Mapped[dict[str, float]] = mapped_column(JSON, default=dict)
     is_abstention: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     citations: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
     web_sources: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)

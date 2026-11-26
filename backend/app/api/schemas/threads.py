@@ -33,6 +33,10 @@ class MessageGeneration(BaseModel):
     trace_id: str | None = None
     citations: list[CitationItem] = []
     source_kind: Literal["docs", "web", "unverified"] = "docs"
+    source: str = "docs"
+    answer_path: list[str] = Field(default_factory=list)
+    top_score: float = 0.0
+    stage_timings_ms: dict[str, float] = Field(default_factory=dict)
     web_sources: list[dict[str, Any]] = Field(default_factory=list)
     query_id: str | None = None
     answer_id: str | None = None
@@ -59,6 +63,10 @@ class MessageItem(BaseModel):
     feedback_note: str | None = None
     generations: list[MessageGeneration] = []
     source_kind: Literal["docs", "web", "unverified"] = "docs"
+    source: str = "docs"
+    answer_path: list[str] = Field(default_factory=list)
+    top_score: float = 0.0
+    stage_timings_ms: dict[str, float] = Field(default_factory=dict)
     web_sources: list[dict[str, Any]] = Field(default_factory=list)
     query_id: str | None = None
     answer_id: str | None = None

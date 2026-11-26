@@ -38,6 +38,10 @@ export interface MessageGeneration {
   trace_id?: string | null;
   citations: CitationItem[];
   source_kind?: AnswerSourceKind;
+  source?: "docs" | "web" | "model" | "abstain";
+  answer_path?: string[];
+  top_score?: number;
+  stage_timings_ms?: Record<string, number>;
   web_sources?: WebSourceItem[];
   query_id?: string | null;
   answer_id?: string | null;
@@ -64,6 +68,10 @@ export interface MessageItem {
   feedback_note?: string | null;
   generations: MessageGeneration[];
   source_kind?: AnswerSourceKind;
+  source?: "docs" | "web" | "model" | "abstain";
+  answer_path?: string[];
+  top_score?: number;
+  stage_timings_ms?: Record<string, number>;
   web_sources?: WebSourceItem[];
   query_id?: string | null;
   answer_id?: string | null;

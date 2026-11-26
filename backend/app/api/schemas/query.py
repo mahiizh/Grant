@@ -38,6 +38,9 @@ class QueryResponse(BaseModel):
     cost_usd: float
     latency_ms: float
     source_kind: Literal["docs", "web", "unverified"] = "docs"
+    source: Literal["docs", "web", "model", "abstain"] = "docs"
+    answer_path: list[str] = Field(default_factory=list)
+    top_score: float = 0.0
     web_sources: list[dict[str, Any]] = Field(default_factory=list)
     query_id: str | None = None
     answer_id: str | None = None
