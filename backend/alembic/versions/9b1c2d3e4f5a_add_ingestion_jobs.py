@@ -1,7 +1,7 @@
 """add background ingestion jobs
 
 Revision ID: 9b1c2d3e4f5a
-Revises: f6a7b8c9d0e1
+Revises: a7b8c9d0e1f2
 Create Date: 2026-11-26 00:00:00.000000
 
 """
