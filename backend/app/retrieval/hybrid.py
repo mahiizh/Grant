@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 from collections.abc import Sequence
 from typing import Any
 
@@ -207,9 +208,9 @@ class HybridRetriever:
                     seen_chunk_ids.add(item.chunk_id)
 
         # 5. Optional Cross-Encoder reranking over the combined candidate pool.
-        # A timeout degrades to fused order scored by dense cosine, never to
-        # rank-only RRF values.
-        if rerank and evidence_list:
+        # When disabled, fused order with dense cosine scores is the decision
+        # path. A timeout degrades the same way, never to rank-only RRF values.
+        if rerank and get_settings().RERANK_ENABLED and evidence_list:
             async def _rerank() -> list[Evidence]:
                 rerank_async = getattr(self.reranker, "rerank_evidence_async", None)
                 if rerank_async is not None:
@@ -223,13 +224,22 @@ class HybridRetriever:
                     top_k=top_k,
                 )
 
+            started = time.perf_counter()
             try:
                 async with timed_stage("rerank"):
                     return await asyncio.wait_for(
                         _rerank(), timeout=self.rerank_timeout_seconds
                     )
             except TimeoutError:
-                logger.warning("Reranking timed out; returning fused retrieval order")
+                elapsed_ms = (time.perf_counter() - started) * 1000.0
+                logger.warning(
+                    "Reranking timed out after %.1f ms (configured %.1f ms, %d candidates, "
+                    "query=%r); returning fused retrieval order",
+                    elapsed_ms,
+                    self.rerank_timeout_seconds * 1000.0,
+                    len(evidence_list),
+                    query[:120],
+                )
                 return evidence_list[:top_k]
 
         return evidence_list[:top_k]

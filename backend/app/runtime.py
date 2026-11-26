@@ -15,11 +15,14 @@ import threading
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+from pathlib import Path
 from typing import Any, NamedTuple, TypeVar
 
+import onnxruntime as ort
 import torch
 from fastembed import SparseEmbedding, SparseTextEmbedding, TextEmbedding
-from sentence_transformers import CrossEncoder
+from huggingface_hub import snapshot_download
+from transformers import AutoTokenizer
 
 from app.core.config import get_settings
 
@@ -32,6 +35,13 @@ MODEL_POOL = ThreadPoolExecutor(
     thread_name_prefix="model",
 )
 
+# Reranking has its own executor. Sharing MODEL_POOL made a warm cross-encoder
+# wait behind embedding work and pushed every Ask into the rerank timeout.
+RERANK_POOL = ThreadPoolExecutor(
+    max_workers=int(os.getenv("RERANK_POOL_WORKERS", "1")),
+    thread_name_prefix="rerank",
+)
+
 T = TypeVar("T")
 
 
@@ -39,11 +49,12 @@ async def off_loop(
     fn: Callable[..., T],
     *args: Any,
     timeout: float | None = None,
+    pool: ThreadPoolExecutor | None = None,
     **kwargs: Any,
 ) -> T:
-    """Run a blocking model call on the bounded pool, never on the event loop."""
+    """Run a blocking model call on a bounded pool, never on the event loop."""
     loop = asyncio.get_running_loop()
-    future = loop.run_in_executor(MODEL_POOL, partial(fn, *args, **kwargs))
+    future = loop.run_in_executor(pool or MODEL_POOL, partial(fn, *args, **kwargs))
     if timeout is None:
         return await future
     return await asyncio.wait_for(future, timeout=timeout)
@@ -54,6 +65,52 @@ class SparseVector(NamedTuple):
     values: list[float]
 
 
+class OnnxCrossEncoder:
+    """Quantized ONNX cross-encoder used for bounded reranking."""
+
+    _INPUT_NAMES = ("input_ids", "attention_mask", "token_type_ids")
+
+    def __init__(self, model_name: str, max_length: int) -> None:
+        root = Path(
+            snapshot_download(
+                model_name,
+                allow_patterns=[
+                    "onnx/model_quantized.onnx",
+                    "tokenizer.json",
+                    "tokenizer_config.json",
+                    "special_tokens_map.json",
+                    "vocab.txt",
+                    "config.json",
+                ],
+            )
+        )
+        self.model_name = model_name
+        self.max_length = max_length
+        self.tokenizer = AutoTokenizer.from_pretrained(str(root))
+        self.session = ort.InferenceSession(
+            str(root / "onnx" / "model_quantized.onnx"),
+            providers=["CPUExecutionProvider"],
+        )
+        available = {item.name for item in self.session.get_inputs()}
+        self.input_names = [name for name in self._INPUT_NAMES if name in available]
+
+    def predict(
+        self, pairs: Sequence[tuple[str, str]], max_length: int | None = None
+    ) -> list[float]:
+        if not pairs:
+            return []
+        encoded = self.tokenizer(
+            list(pairs),
+            max_length=max_length or self.max_length,
+            padding=True,
+            truncation=True,
+            return_tensors="np",
+        )
+        feed = {name: encoded[name] for name in self.input_names}
+        logits = self.session.run(None, feed)[0]
+        return [float(score) for score in logits.reshape(-1)]
+
+
 class Models:
     """All dense/sparse/rerank inference models owned by the process."""
 
@@ -61,12 +118,14 @@ class Models:
         settings = get_settings()
         self.dense_model_name = settings.EMBEDDING_MODEL
         self.sparse_model_name = settings.SPARSE_MODEL
-        self.rerank_model_name = settings.RERANKER_MODEL
+        self.rerank_model_name = settings.RERANK_ONNX_MODEL
         self.dim = settings.EMBEDDING_DIM
 
         self.dense = TextEmbedding(model_name=self.dense_model_name)
         self.sparse = SparseTextEmbedding(model_name=self.sparse_model_name)
-        self.reranker = CrossEncoder(self.rerank_model_name)
+        self.reranker = OnnxCrossEncoder(
+            self.rerank_model_name, settings.RERANK_MAX_LENGTH
+        )
 
         self.warmup()
 
@@ -102,7 +161,10 @@ class Models:
     def rerank(self, query: str, texts: Sequence[str]) -> list[float]:
         if not texts:
             return []
-        scores = self.reranker.predict([(query, text) for text in texts])
+        scores = self.reranker.predict(
+            [(query, text) for text in texts],
+            max_length=get_settings().RERANK_MAX_LENGTH,
+        )
         return [float(score) for score in scores]
 
 

@@ -9,6 +9,7 @@ from fastapi import FastAPI
 import app.runtime as runtime
 from app.api.routes import threads as threads_module
 from app.core.config import get_settings
+from app.domain import Evidence, Provenance
 from app.graph.retrievers import GraphRetriever
 from app.history import service as history_service
 from app.llm import gateway as gateway_module
@@ -16,6 +17,7 @@ from app.llm.gateway import ModelGateway
 from app.orchestration.budget import AskBudgetExceededError, run_with_ask_budget
 from app.retrieval.embeddings import EmbeddingService
 from app.retrieval.filters import RetrievalFilter
+from app.retrieval.reranker import CrossEncoderReranker
 
 
 class FakeModels:
@@ -78,6 +80,52 @@ async def test_startup_builds_shared_bundle_and_warms_it(monkeypatch: Any) -> No
 async def test_off_loop_runs_on_bounded_model_pool() -> None:
     thread_name = await runtime.off_loop(lambda: threading.current_thread().name)
     assert thread_name.startswith("model")
+
+
+class RecordingCrossEncoder:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    def predict(
+        self, pairs: list[tuple[str, str]], max_length: int | None = None
+    ) -> list[float]:
+        self.calls.append(
+            {
+                "pairs": pairs,
+                "max_length": max_length,
+                "thread": threading.current_thread().name,
+            }
+        )
+        return [float(index) for index in range(len(pairs))]
+
+
+@pytest.mark.anyio
+async def test_rerank_uses_dedicated_pool_and_bounded_input(monkeypatch: Any) -> None:
+    monkeypatch.setattr(get_settings(), "RERANK_MAX_CANDIDATES", 10)
+    monkeypatch.setattr(get_settings(), "RERANK_MAX_LENGTH", 256)
+    model = RecordingCrossEncoder()
+    reranker = CrossEncoderReranker(model=model)
+    candidates = [
+        Evidence(
+            chunk_id=f"chunk_{index}",
+            doc_id="doc_1",
+            text=f"passage {index}",
+            score=0.5,
+            retrieval_method="hybrid",
+            provenance=Provenance.from_document("doc_1"),
+        )
+        for index in range(35)
+    ]
+
+    result = await reranker.rerank_evidence_async("question", candidates, top_k=5)
+
+    assert len(model.calls) == 1
+    assert len(model.calls[0]["pairs"]) == 10
+    assert model.calls[0]["max_length"] == 256
+    assert model.calls[0]["thread"].startswith("rerank")
+    assert [item.chunk_id for item in result] == [
+        f"chunk_{index}" for index in range(9, 4, -1)
+    ]
 
 
 @pytest.mark.anyio

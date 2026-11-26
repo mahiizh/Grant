@@ -79,9 +79,17 @@ class Settings(BaseSettings):
     EMBEDDING_DIM: int = 384
     SPARSE_MODEL: str = "Qdrant/bm25"
     RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    # ONNX int8 build of the same MiniLM-L-6 cross-encoder. It is warmed once
+    # at startup and scored in a single batch on a dedicated executor.
+    RERANK_ONNX_MODEL: str = "Xenova/ms-marco-MiniLM-L-6-v2"
     RRF_K: int = 60
     HYBRID_PREFETCH_MULTIPLIER: int = 5
     RERANK_TIMEOUT_SECONDS: float = 5.0
+    RERANK_ENABLED: bool = True
+    RERANK_MAX_CANDIDATES: int = 10
+    RERANK_MAX_LENGTH: int = 256
+    RERANK_TARGET_MS: float = 800.0
+    RERANK_POOL_WORKERS: int = 1
     # Local inference runs on a bounded pool, never on the event loop. Startup
     # builds each local model once and warms it before the API accepts traffic.
     MODEL_POOL_WORKERS: int = 2
