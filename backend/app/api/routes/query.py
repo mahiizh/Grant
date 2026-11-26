@@ -19,9 +19,9 @@ _orchestrator: RAGOrchestrator | None = None
 def get_orchestrator() -> RAGOrchestrator:
     global _orchestrator
     if _orchestrator is None:
-        # The API defaults to grounded_plus_web with history enabled. Tests inject
-        # a hermetic orchestrator via set_orchestrator().
-        _orchestrator = RAGOrchestrator(history_enabled=True)
+        # The API records query/answer history for tracing and graph sync, but
+        # never reuses it to answer. Tests inject a hermetic orchestrator.
+        _orchestrator = RAGOrchestrator(record_history=True)
     return _orchestrator
 
 

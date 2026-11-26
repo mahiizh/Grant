@@ -14,7 +14,7 @@ from app.domain import Chunk, Evidence, Provenance
 from app.evaluation.datasets import GoldenDataset, GoldenQuestion
 from app.evaluation.runner import EvaluationRunner
 from app.graph.retrievers import GraphRetriever as RealGraphRetriever
-from app.history.service import HistoryHit, QueryHistory
+from app.history.service import QueryHistory
 from app.indexing import Neo4jIndexer, OutboxWorker, QdrantIndexer
 from app.orchestration.workflow import NOT_FOUND_MARKER, RAGOrchestrator
 from app.retrieval.filters import RetrievalFilter
@@ -82,33 +82,14 @@ class EmptyGraphRetriever:
 
 
 class FakeHistory:
-    """History service returning one cached graph answer."""
+    """Write-only history recorder; a repeat answer must never come from here."""
 
-    def __init__(self, hit: HistoryHit | None) -> None:
-        self.hit = hit
-        self.lookup_calls: list[dict[str, Any]] = []
+    def __init__(self) -> None:
         self.record_calls: list[dict[str, Any]] = []
-
-    async def lookup(
-        self,
-        query: str,
-        owner_user_id: str | None,
-        answer_policy: str = "grounded_plus_web",
-        thread_id: str | None = None,
-    ) -> HistoryHit | None:
-        self.lookup_calls.append(
-            {
-                "query": query,
-                "owner_user_id": owner_user_id,
-                "answer_policy": answer_policy,
-                "thread_id": thread_id,
-            }
-        )
-        return self.hit
 
     async def record(self, **kwargs: Any) -> tuple[str, str]:
         self.record_calls.append(kwargs)
-        return "qry-history", "ans-history"
+        return f"qry-{len(self.record_calls)}", f"ans-{len(self.record_calls)}"
 
 
 class NotFoundGateway(FakeModelGateway):
@@ -168,6 +149,48 @@ class EvidenceHybridRetriever:
         self, query: str, top_k: int = 5, filter_criteria: Any = None
     ) -> list[Evidence]:
         return list(self.evidence)
+
+
+class IndexedHybridRetriever(EmptyHybridRetriever):
+    """Hybrid retriever whose index is populated by web write-back."""
+
+    def __init__(self) -> None:
+        self.evidence: list[Evidence] = []
+        self.search_calls: list[str] = []
+
+    def index(self, evidence: list[Evidence]) -> None:
+        self.evidence = list(evidence)
+
+    async def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        filter_criteria: Any = None,
+        rerank: bool = True,
+        extra_candidates: Any = None,
+    ) -> list[Evidence]:
+        self.search_calls.append(query)
+        return list(self.evidence)
+
+
+class IndexingWebIngestor(FakeWebIngestor):
+    """Simulate the outbox indexing fetched web chunks after write-back."""
+
+    def __init__(self, retriever: IndexedHybridRetriever) -> None:
+        super().__init__()
+        self.retriever = retriever
+
+    async def ingest(
+        self,
+        pages: list[WebPage],
+        owner_user_id: str | None,
+        acl_scope: ACLScope | None = None,
+    ) -> list[Evidence]:
+        evidence = await super().ingest(
+            pages=pages, owner_user_id=owner_user_id, acl_scope=acl_scope
+        )
+        self.retriever.index(evidence)
+        return evidence
 
 
 class _IrrelevantDenseRetriever:
@@ -235,6 +258,7 @@ def build_orchestrator(
     web_ingestor: Any = None,
     history: Any = None,
     gateway: Any | None = None,
+    record_history: bool = False,
 ) -> RAGOrchestrator:
     return RAGOrchestrator(
         hybrid_retriever=cast(RealHybridRetriever, hybrid or EmptyHybridRetriever()),
@@ -244,7 +268,7 @@ def build_orchestrator(
         web_client=web_client,
         web_ingestor=web_ingestor,
         query_history=cast(QueryHistory, history) if history is not None else None,
-        history_enabled=history is not None,
+        record_history=record_history,
     )
 
 
@@ -547,38 +571,47 @@ async def test_web_evidence_write_back_is_owner_scoped(mock_graspreach: Any) -> 
 
 
 @pytest.mark.anyio
-async def test_repeat_answer_comes_from_graph_without_web_call(mock_graspreach: Any) -> None:
-    url = "https://example.com/cached-web-answer"
-    mock_graspreach.client.error = "graspreach must not be called for a history hit"
-    hit = HistoryHit(
-        query_id="qry-history",
-        answer_id="ans-history",
-        answer=f"Previously verified answer [{url}]",
-        evidence=[],
-        source_kind="web",
-        web_sources=[{"url": url, "title": "Prior web answer"}],
-    )
-    history = FakeHistory(hit)
-    ingestor = FakeWebIngestor()
-
-    state = await build_orchestrator(
+async def test_repeat_question_retrieves_indexed_web_chunks(mock_graspreach: Any) -> None:
+    """A repeat answer comes from the indexed web chunk, never from history."""
+    url = "https://example.com/indexed-web-answer"
+    text = "The current Tokyo population is 14 million residents."
+    mock_graspreach.client.pages = [
+        WebPage(url=url, title="Indexed answer", text=text)
+    ]
+    retriever = IndexedHybridRetriever()
+    ingestor = IndexingWebIngestor(retriever)
+    history = FakeHistory()
+    orchestrator = build_orchestrator(
+        hybrid=retriever,
         web_client=mock_graspreach.client,
         web_ingestor=ingestor,
         history=history,
-    ).run(
-        query="What did the prior web answer say?",
+    )
+    query = "What is the current Tokyo population?"
+
+    first = await orchestrator.run(
+        query=query,
+        answer_policy="grounded_plus_web",
+        owner_user_id="usr_alice_01",
+    )
+    assert first["source_kind"] == "web"
+    assert len(ingestor.calls) == 1
+    assert retriever.evidence and retriever.evidence[0].text == text
+
+    repeated = await orchestrator.run(
+        query=query,
         answer_policy="grounded_plus_web",
         owner_user_id="usr_alice_01",
     )
 
-    assert state["from_graph_history"] is True
-    assert state["answer"] == hit.answer
-    assert state["source_kind"] == "web"
-    assert state["web_sources"] == hit.web_sources
-    assert mock_graspreach.client.gather_calls == []
-    assert ingestor.calls == []
-    assert history.record_calls == []
-    assert history.lookup_calls[0]["owner_user_id"] == "usr_alice_01"
+    assert text in repeated["answer"]
+    assert repeated["evidence"] == retriever.evidence
+    assert retriever.search_calls == [query, query]
+    assert mock_graspreach.client.gather_calls == [query]
+    assert len(ingestor.calls) == 1
+    # History remains write-only: both runs are recorded, neither is reused.
+    assert len(history.record_calls) == 2
+    assert all(call["owner_user_id"] == "usr_alice_01" for call in history.record_calls)
 
 
 @pytest.mark.anyio

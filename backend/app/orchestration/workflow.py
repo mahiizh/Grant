@@ -154,7 +154,7 @@ class RAGOrchestrator:
         web_client: WebClient | None = None,
         web_ingestor: WebIngestor | None = None,
         query_history: QueryHistory | None = None,
-        history_enabled: bool = False,
+        record_history: bool = False,
     ) -> None:
         self.hybrid_retriever = hybrid_retriever or HybridRetriever()
         self.graph_retriever = graph_retriever or GraphRetriever()
@@ -167,7 +167,9 @@ class RAGOrchestrator:
         self._web_client = web_client
         self._web_ingestor = web_ingestor
         self._query_history = query_history
-        self.history_enabled = history_enabled or query_history is not None
+        # History is write-only now: it records traces for graph sync, never
+        # answers. Reuse comes from the exact cache or fresh retrieval.
+        self.record_history = record_history or query_history is not None
         self.graph = self._build_graph()
 
     @property
@@ -228,60 +230,6 @@ class RAGOrchestrator:
             spans = list(state.get("spans", []))
             spans.append(route_span)
             return {"route": route, "spans": spans}
-
-        # 1a. History Node (repeat answers come from Postgres/Neo4j, no web call)
-        async def history_node(state: RAGState) -> dict[str, Any]:
-            spans = list(state.get("spans", []))
-            try:
-                hit = await self.query_history.lookup(
-                    query=state.get("rewritten_query") or state["query"],
-                    owner_user_id=state.get("owner_user_id"),
-                    answer_policy=state.get("answer_policy", "grounded_only"),
-                )
-            except Exception as exc:
-                logger.warning("Query history lookup failed: %s", exc)
-                hit = None
-
-            if hit is None:
-                spans.append(
-                    {
-                        "id": f"sp-{uuid.uuid4().hex[:6]}",
-                        "name": "History: lookup",
-                        "service": "QueryHistory",
-                        "start_ms": 14.0,
-                        "duration_ms": 2.0,
-                        "status": "miss",
-                        "meta": "No prior answer for this owner and policy",
-                    }
-                )
-                return {"from_graph_history": False, "spans": spans}
-
-            spans.append(
-                {
-                    "id": f"sp-{uuid.uuid4().hex[:6]}",
-                    "name": "History: lookup",
-                    "service": "QueryHistory",
-                    "start_ms": 14.0,
-                    "duration_ms": 2.0,
-                    "status": "hit",
-                    "meta": f"Reusing answer {hit.answer_id} from query history",
-                }
-            )
-            return {
-                "answer": hit.answer,
-                "evidence": hit.evidence,
-                "is_abstention": False,
-                "citations_valid": True,
-                "is_cached": False,
-                "cost_usd": 0.0,
-                "source_kind": hit.source_kind,
-                "web_sources": list(hit.web_sources or []),
-                "query_id": hit.query_id,
-                "answer_id": hit.answer_id,
-                "from_graph_history": True,
-                "route": "history",
-                "spans": spans,
-            }
 
         # 2. Small Talk Node (skips retrieval entirely)
         def small_talk_node(state: RAGState) -> dict[str, Any]:
@@ -914,7 +862,6 @@ class RAGOrchestrator:
         # Register nodes in graph
         workflow.add_node("condense_step", condense_node)
         workflow.add_node("route_step", route_node)
-        workflow.add_node("history_step", history_node)
         workflow.add_node("small_talk_step", small_talk_node)
         workflow.add_node("cache_step", cache_node)
         workflow.add_node("retrieve_step", retrieve_node)
@@ -935,18 +882,9 @@ class RAGOrchestrator:
                 return "small_talk_step"
             if route == "abstain":
                 return "abstain_step"
-            if self.history_enabled and not state.get("retrieval_only", False):
-                return "history_step"
             return "cache_step"
 
         workflow.add_conditional_edges("route_step", route_decision)
-
-        def history_decision(state: RAGState) -> str:
-            if state.get("from_graph_history", False):
-                return END
-            return "cache_step"
-
-        workflow.add_conditional_edges("history_step", history_decision)
         workflow.add_edge("small_talk_step", END)
 
         def cache_decision(state: RAGState) -> str:
@@ -1058,7 +996,6 @@ class RAGOrchestrator:
             "prompt_version": f"{PROMPT_VERSION}:{policy}",
             "route": "vector",
             "is_cached": False,
-            "from_graph_history": False,
             "evidence": [],
             "web_pages": [],
             "web_sources": [],
@@ -1085,9 +1022,7 @@ class RAGOrchestrator:
         final_state["latency_ms"] = round(elapsed_ms, 2)
         final_state["trace_id"] = trace_id
 
-        if self.history_enabled and not retrieval_only and not final_state.get(
-            "from_graph_history", False
-        ):
+        if self.record_history and not retrieval_only:
             try:
                 async with timed_stage("persist"):
                     query_id, answer_id = await self.query_history.record(

@@ -1,11 +1,10 @@
-"""Postgres-backed query/answer history used for repeat-answer lookup and graph sync."""
+"""Postgres-backed query/answer history recording for graph sync and tracing."""
 
 from __future__ import annotations
 
 import hashlib
 import logging
 import uuid
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
@@ -22,24 +21,8 @@ from app.ingestion.extraction import EntityRelationExtractor
 logger = logging.getLogger(__name__)
 
 
-@dataclass(frozen=True)
-class HistoryHit:
-    query_id: str
-    answer_id: str
-    answer: str
-    evidence: list[Evidence]
-    source_kind: str
-    web_sources: list[dict[str, Any]]
-
-
 class QueryHistory(Protocol):
-    async def lookup(
-        self,
-        query: str,
-        owner_user_id: str | None,
-        answer_policy: str = "grounded_plus_web",
-        thread_id: str | None = None,
-    ) -> HistoryHit | None: ...
+    """Write-only history recorder; answer reuse is handled by the exact cache."""
 
     async def record(
         self,
@@ -79,58 +62,13 @@ def _evidence_to_dict(ev: Evidence) -> dict[str, Any]:
     }
 
 
-def _dict_to_evidence(row: dict[str, Any]) -> Evidence:
-    return Evidence(
-        chunk_id=str(row.get("chunk_id", "")),
-        doc_id=str(row.get("doc_id", "")),
-        text=str(row.get("text", "")),
-        score=float(row.get("score", 0.0)),
-        retrieval_method=str(row.get("retrieval_method", "hybrid")),  # type: ignore[arg-type]
-        provenance=Provenance.from_document(str(row.get("source_uri", row.get("doc_id", "")))),
-        path=row.get("path"),
-    )
-
-
 def _extract_entities(text: str) -> list[Any]:
     """Ask-path history writes use deterministic extraction, never GLiNER."""
     return list(EntityRelationExtractor.extract_from_text(text).entities)
 
 
 class QueryHistoryService:
-    """Store and retrieve answers, staging Neo4j sync through the transactional outbox."""
-
-    async def lookup(
-        self,
-        query: str,
-        owner_user_id: str | None,
-        answer_policy: str = "grounded_plus_web",
-        thread_id: str | None = None,
-    ) -> HistoryHit | None:
-        async with get_session() as session:
-            stmt = (
-                select(QueryRecord, AnswerRecord)
-                .join(AnswerRecord, AnswerRecord.query_id == QueryRecord.query_id)
-                .where(QueryRecord.query_hash == query_hash(query))
-                .where(QueryRecord.answer_policy == answer_policy)
-                .order_by(AnswerRecord.created_at.desc())
-                .limit(1)
-            )
-            if owner_user_id is not None:
-                stmt = stmt.where(QueryRecord.owner_user_id == owner_user_id)
-            if thread_id is not None:
-                stmt = stmt.where(QueryRecord.thread_id == thread_id)
-            rows = (await session.execute(stmt)).all()
-            if not rows:
-                return None
-            q, a = rows[0]
-            return HistoryHit(
-                query_id=q.query_id,
-                answer_id=a.answer_id,
-                answer=a.content,
-                evidence=[_dict_to_evidence(row) for row in (a.citations or [])],
-                source_kind=a.source_kind,
-                web_sources=list(a.web_sources or []),
-            )
+    """Store answers, staging Neo4j sync through the transactional outbox."""
 
     async def record(
         self,

@@ -41,7 +41,6 @@ class RAGState(TypedDict, total=False):
     retrieval_only: bool
     route: str  # "cache", "vector", "graph", "hybrid", "abstain"
     is_cached: bool
-    from_graph_history: bool
     evidence: list[Evidence]
     web_pages: list[dict[str, Any]]
     web_sources: list[dict[str, Any]]
