@@ -39,3 +39,4 @@ class QueryResponse(BaseModel):
     web_sources: list[dict[str, Any]] = Field(default_factory=list)
     query_id: str | None = None
     answer_id: str | None = None
+    stage_timings_ms: dict[str, float] = Field(default_factory=dict)

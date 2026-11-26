@@ -5,6 +5,7 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.domain import Evidence, Provenance, SourceTier
+from app.observability.stage_timing import timed_stage
 from app.retrieval.dense import DenseRetriever
 from app.retrieval.filters import RetrievalFilter
 from app.retrieval.reranker import get_reranker
@@ -223,9 +224,10 @@ class HybridRetriever:
                 )
 
             try:
-                return await asyncio.wait_for(
-                    _rerank(), timeout=self.rerank_timeout_seconds
-                )
+                async with timed_stage("rerank"):
+                    return await asyncio.wait_for(
+                        _rerank(), timeout=self.rerank_timeout_seconds
+                    )
             except TimeoutError:
                 logger.warning("Reranking timed out; returning fused retrieval order")
                 return evidence_list[:top_k]

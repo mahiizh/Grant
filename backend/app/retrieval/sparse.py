@@ -6,6 +6,7 @@ from qdrant_client import AsyncQdrantClient, models
 
 from app.core.config import get_settings
 from app.core.store_guard import assert_writable_stores
+from app.observability.stage_timing import timed_stage
 from app.retrieval.embeddings import get_embedding_service
 from app.retrieval.filters import RetrievalFilter
 
@@ -44,17 +45,18 @@ class BM25Retriever:
 
         query_filter = filter_criteria.to_qdrant_filter() if filter_criteria is not None else None
         try:
-            results = await self.client.query_points(
-                collection_name=self.collection_name,
-                query=models.SparseVector(
-                    indices=sparse_vec.indices,
-                    values=sparse_vec.values,
-                ),
-                using="sparse",
-                query_filter=query_filter,
-                limit=top_k,
-                with_payload=True,
-            )
+            async with timed_stage("qdrant"):
+                results = await self.client.query_points(
+                    collection_name=self.collection_name,
+                    query=models.SparseVector(
+                        indices=sparse_vec.indices,
+                        values=sparse_vec.values,
+                    ),
+                    using="sparse",
+                    query_filter=query_filter,
+                    limit=top_k,
+                    with_payload=True,
+                )
         except Exception as e:
             logger.error("Sparse BM25 search failed: %s", e)
             return []

@@ -7,6 +7,7 @@ from collections.abc import Sequence
 from functools import lru_cache
 
 from app.core.config import get_settings
+from app.observability.stage_timing import timed_stage
 from app.runtime import SparseVector, get_models, off_loop
 
 
@@ -44,7 +45,8 @@ class EmbeddingService:
         return _dense_query(query)
 
     async def aembed_query_dense(self, query: str) -> list[float]:
-        return await off_loop(_dense_query, query, timeout=self._timeout())
+        async with timed_stage("embed"):
+            return await off_loop(_dense_query, query, timeout=self._timeout())
 
     def embed_chunks_dense(self, texts: Sequence[str]) -> list[list[float]]:
         """Generate normalized dense embeddings for chunks."""
@@ -58,7 +60,8 @@ class EmbeddingService:
         return _sparse_query(query)
 
     async def aembed_query_sparse(self, query: str) -> SparseVector:
-        return await off_loop(_sparse_query, query, timeout=self._timeout())
+        async with timed_stage("embed"):
+            return await off_loop(_sparse_query, query, timeout=self._timeout())
 
     def embed_chunks_sparse(self, texts: Sequence[str]) -> list[SparseVector]:
         """Generate sparse BM25 token weights for multiple texts."""

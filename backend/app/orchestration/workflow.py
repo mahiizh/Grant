@@ -17,6 +17,14 @@ from app.graph.retrievers import GraphRetriever
 from app.history.service import QueryHistory, get_query_history
 from app.llm.citations import verify_claim_citations
 from app.llm.gateway import ModelGateway
+from app.observability.stage_timing import (
+    end_stage_timings,
+    record_stage,
+    start_stage_timings,
+    timed_async_stage,
+    timed_stage,
+    timing_snapshot,
+)
 from app.orchestration.condense import condense_query
 from app.orchestration.grounding import asks_about_absent_entity
 from app.orchestration.state import AnswerPolicy, AnswerSourceKind, RAGState, RetrievalConfig
@@ -616,6 +624,7 @@ class RAGOrchestrator:
             return {"answer": "", "is_abstention": False, "spans": spans}
 
         # 5b. Web fallback Node (only reached when retrieval returned no evidence)
+        @timed_async_stage("web")
         async def web_node(state: RAGState) -> dict[str, Any]:
             query = state.get("rewritten_query") or state["query"]
             spans = list(state.get("spans", []))
@@ -794,6 +803,7 @@ class RAGOrchestrator:
             gen_start = time.perf_counter()
             resp = await self.gateway.complete(prompt=prompt, mock_response=mock_ans)
             gen_dur = round((time.perf_counter() - gen_start) * 1000.0, 2)
+            record_stage("llm", gen_dur)
 
             spans.append(
                 {
@@ -934,6 +944,38 @@ class RAGOrchestrator:
         is_admin: bool = False,
         answer_policy: AnswerPolicy | None = None,
     ) -> RAGState:
+        """Run the workflow while collecting real per-stage timings."""
+        _timings, token = start_stage_timings()
+        try:
+            final_state = await self._run_inner(
+                query=query,
+                acl_scope=acl_scope,
+                thread_id=thread_id,
+                thread_history=thread_history,
+                retrieval_config=retrieval_config,
+                retrieval_only=retrieval_only,
+                owner_user_id=owner_user_id,
+                is_admin=is_admin,
+                answer_policy=answer_policy,
+            )
+        finally:
+            snapshot = timing_snapshot()
+            end_stage_timings(token)
+        final_state["stage_timings_ms"] = snapshot
+        return final_state
+
+    async def _run_inner(
+        self,
+        query: str,
+        acl_scope: ACLScope | None = None,
+        thread_id: str | None = None,
+        thread_history: list[dict[str, Any]] | None = None,
+        retrieval_config: RetrievalConfig = "full",
+        retrieval_only: bool = False,
+        owner_user_id: str | None = None,
+        is_admin: bool = False,
+        answer_policy: AnswerPolicy | None = None,
+    ) -> RAGState:
         """Execute the compiled LangGraph workflow end-to-end."""
         start_time = time.perf_counter()
         scope = acl_scope or ACLScope.public()
@@ -988,20 +1030,21 @@ class RAGOrchestrator:
             "from_graph_history", False
         ):
             try:
-                query_id, answer_id = await self.query_history.record(
-                    session=None,
-                    raw_query=query,
-                    rewritten_query=str(final_state.get("rewritten_query") or query),
-                    answer=str(final_state.get("answer") or ""),
-                    evidence=list(final_state.get("evidence", [])),
-                    source_kind=str(final_state.get("source_kind", "docs")),
-                    web_sources=list(final_state.get("web_sources", []) or []),
-                    answer_policy=policy,
-                    acl_scope=scope,
-                    owner_user_id=owner_user_id,
-                    thread_id=thread_id,
-                    is_abstention=bool(final_state.get("is_abstention", False)),
-                )
+                async with timed_stage("persist"):
+                    query_id, answer_id = await self.query_history.record(
+                        session=None,
+                        raw_query=query,
+                        rewritten_query=str(final_state.get("rewritten_query") or query),
+                        answer=str(final_state.get("answer") or ""),
+                        evidence=list(final_state.get("evidence", [])),
+                        source_kind=str(final_state.get("source_kind", "docs")),
+                        web_sources=list(final_state.get("web_sources", []) or []),
+                        answer_policy=policy,
+                        acl_scope=scope,
+                        owner_user_id=owner_user_id,
+                        thread_id=thread_id,
+                        is_abstention=bool(final_state.get("is_abstention", False)),
+                    )
                 final_state["query_id"] = query_id
                 final_state["answer_id"] = answer_id
             except Exception as exc:

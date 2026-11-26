@@ -6,6 +6,7 @@ from neo4j import AsyncDriver, AsyncGraphDatabase
 from app.core.config import get_settings
 from app.core.store_guard import assert_writable_stores
 from app.domain import Evidence, Provenance, SourceTier
+from app.observability.stage_timing import timed_async_stage
 from app.retrieval.filters import RetrievalFilter
 
 logger = logging.getLogger(__name__)
@@ -32,6 +33,7 @@ class GraphRetriever:
         """Default to a public-only filter when no caller identity is supplied."""
         return filter_criteria or RetrievalFilter()
 
+    @timed_async_stage("neo4j")
     async def find_path(
         self,
         start_entity_name: str,
@@ -88,6 +90,7 @@ class GraphRetriever:
 
             return path_tokens
 
+    @timed_async_stage("neo4j")
     async def retrieve_path_evidence(
         self,
         path_tokens: list[str],
@@ -151,6 +154,7 @@ class GraphRetriever:
 
         return evidence_list
 
+    @timed_async_stage("neo4j")
     async def search_entities(
         self,
         query: str,
@@ -171,6 +175,7 @@ class GraphRetriever:
             res = await session.run(cypher, q=query.strip(), limit=top_k, **params)
             return await res.data()
 
+    @timed_async_stage("entity_seeds")
     async def search_entity_seeds(
         self,
         query: str,

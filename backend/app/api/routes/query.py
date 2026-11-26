@@ -92,4 +92,5 @@ async def query_pipeline(
         web_sources=list(state.get("web_sources", []) or []),
         query_id=state.get("query_id"),
         answer_id=state.get("answer_id"),
+        stage_timings_ms=dict(state.get("stage_timings_ms", {}) or {}),
     )

@@ -56,6 +56,7 @@ class RAGState(TypedDict, total=False):
     cost_usd: float
     latency_ms: float
     retrieval_latency_ms: float
+    stage_timings_ms: dict[str, float]
     start_time: float
     metadata: dict[str, Any]
     spans: list[dict[str, Any]]
