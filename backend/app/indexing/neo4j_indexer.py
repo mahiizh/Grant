@@ -6,6 +6,7 @@ from typing import Any
 from neo4j import AsyncDriver, AsyncGraphDatabase
 
 from app.core.config import get_settings
+from app.core.store_guard import assert_writable_stores
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,7 @@ class Neo4jIndexer:
 
     def __init__(self, driver: AsyncDriver | None = None) -> None:
         settings = get_settings()
+        assert_writable_stores(settings)
         self.uri = settings.NEO4J_URI
         self.auth = (settings.NEO4J_USER, settings.NEO4J_PASSWORD)
         self.database = settings.NEO4J_DATABASE

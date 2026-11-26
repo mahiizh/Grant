@@ -18,6 +18,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.acl import ACLScope
 from app.core.config import get_settings
+from app.core.store_guard import assert_writable_stores
 from app.db.models import Base, ChunkRecord, DocumentRecord
 from app.db.outbox import OutboxEventType, OutboxService
 from app.domain import (
@@ -40,14 +41,18 @@ def get_engine(db_url: str | None = None) -> AsyncEngine:
     with suppress(RuntimeError):
         current_loop = asyncio.get_running_loop()
 
+    settings = get_settings()
+    if db_url is None:
+        assert_writable_stores(settings)
+
     if (
         _engine is None
         or db_url is not None
         or (_engine_loop is not None and current_loop is not None and current_loop != _engine_loop)
     ):
-        url = db_url or get_settings().database_url
+        url = db_url or settings.database_url
         # Adjust pool parameters based on SQLite vs Postgres vs test environment
-        if "sqlite" in url or get_settings().APP_ENV == "test":
+        if "sqlite" in url or settings.APP_ENV == "test":
             from sqlalchemy.pool import NullPool
 
             engine = create_async_engine(url, echo=False, poolclass=NullPool)

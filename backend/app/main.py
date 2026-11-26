@@ -6,9 +6,11 @@ if sys.platform == "win32":
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api.routes import (
     cache,
@@ -27,6 +29,12 @@ from app.api.routes import (
 )
 from app.core.config import get_settings
 from app.core.lifecycle import verify_infrastructure_live
+from app.core.store_guard import (
+    DEV_WRITE_TOKEN_HEADER,
+    WRITE_METHODS,
+    WRITE_REFUSAL,
+    http_write_violations,
+)
 
 
 @asynccontextmanager
@@ -54,6 +62,20 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.middleware("http")
+    async def guard_store_writes(request: Request, call_next: Any) -> Any:
+        """Block HTTP writes to developer stores unless explicitly authorized."""
+        if request.method in WRITE_METHODS:
+            violations = http_write_violations(
+                get_settings(), request.headers.get(DEV_WRITE_TOKEN_HEADER)
+            )
+            if violations:
+                return JSONResponse(
+                    status_code=423,
+                    content={"detail": f"{WRITE_REFUSAL}: " + "; ".join(violations)},
+                )
+        return await call_next(request)
 
     # Register Routers under single API prefix (/api/v1)
     api_routers = [

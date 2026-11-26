@@ -9,6 +9,7 @@ from sqlalchemy import text
 
 from app.api.schemas.settings import SettingsResponse, StoreStatus, UpdateSettingsRequest
 from app.core.config import get_settings
+from app.core.store_guard import assert_writable_stores
 from app.db.postgres import get_engine
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -20,6 +21,7 @@ _settings_state: dict[str, Any] = {"canvas_theme": "dark"}
 async def get_system_settings() -> SettingsResponse:
     """Retrieve system settings, ACL scopes, store health, and defaults."""
     settings = get_settings()
+    assert_writable_stores(settings)
 
     # Shared scopes are the only requestable non-owner boundaries.
     all_scopes: set[str] = set()

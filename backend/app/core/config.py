@@ -51,17 +51,22 @@ class Settings(BaseSettings):
     NEO4J_PASSWORD: str = "graphrag_password"
     NEO4J_DATABASE: str = "neo4j"
 
-    # Redis
+    # Redis. DB 0 is the developer cache; tests must use a separate DB so a
+    # helper process cannot poison live cache entries.
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
+    REDIS_DB: int = 0
     REDIS_PASSWORD: str | None = None
 
     @computed_field  # type: ignore[prop-decorator]
     @property
     def redis_url(self) -> str:
         if self.REDIS_PASSWORD:
-            return f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:{self.REDIS_PORT}/0"
-        return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/0"
+            return (
+                f"redis://:{self.REDIS_PASSWORD}@{self.REDIS_HOST}:"
+                f"{self.REDIS_PORT}/{self.REDIS_DB}"
+            )
+        return f"redis://{self.REDIS_HOST}:{self.REDIS_PORT}/{self.REDIS_DB}"
 
     # Model Layer (LiteLLM + FastEmbed + CrossEncoder)
     LITELLM_API_BASE: str | None = None
@@ -170,6 +175,7 @@ class Settings(BaseSettings):
     EVAL_POSTGRES_DB: str = "graphrag_lab_eval"
     EVAL_QDRANT_COLLECTION: str = "grant_chunks_eval"
     EVAL_QDRANT_ENTITY_COLLECTION: str = "grant_entities_eval"
+    EVAL_REDIS_DB: int = 2
     EVAL_CONCURRENCY: int = 2
     # LLM judge (DeepEval GEval). Off by default so hermetic runs never call a
     # provider; `make eval JUDGE=1` turns it on.

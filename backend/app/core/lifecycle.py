@@ -7,6 +7,7 @@ from qdrant_client import AsyncQdrantClient, models
 from sqlalchemy import text
 
 from app.core.config import get_settings
+from app.core.store_guard import assert_writable_stores
 from app.db.postgres import announce_database_identity, get_engine, verify_schema
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,7 @@ async def verify_infrastructure_live() -> None:
         logger.info("Test environment detected; skipping live infrastructure verification.")
         return
 
+    assert_writable_stores(settings)
     logger.info("Validating live infrastructure and API keys...")
 
     # 1. Gemini API Key

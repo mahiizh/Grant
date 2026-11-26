@@ -4,6 +4,7 @@ from typing import Any
 from neo4j import AsyncDriver, AsyncGraphDatabase
 
 from app.core.config import get_settings
+from app.core.store_guard import assert_writable_stores
 from app.domain import Evidence, Provenance, SourceTier
 from app.retrieval.filters import RetrievalFilter
 
@@ -15,6 +16,7 @@ class GraphRetriever:
 
     def __init__(self, driver: AsyncDriver | None = None) -> None:
         settings = get_settings()
+        assert_writable_stores(settings)
         self.driver = driver or AsyncGraphDatabase.driver(
             settings.NEO4J_URI,
             auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),

@@ -4,6 +4,7 @@ from typing import Any
 from qdrant_client import AsyncQdrantClient
 
 from app.core.config import get_settings
+from app.core.store_guard import assert_writable_stores
 from app.retrieval.embeddings import get_embedding_service
 from app.retrieval.filters import RetrievalFilter
 
@@ -27,6 +28,7 @@ class DenseRetriever:
 
     def __init__(self, client: AsyncQdrantClient | None = None) -> None:
         settings = get_settings()
+        assert_writable_stores(settings)
         self.collection_name = settings.QDRANT_COLLECTION
         self.client = client or AsyncQdrantClient(
             url=f"http://{settings.QDRANT_HOST}:{settings.QDRANT_PORT}",

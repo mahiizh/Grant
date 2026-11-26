@@ -13,6 +13,7 @@ from app.api.schemas.graph import (
 )
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.core.config import get_settings
+from app.core.store_guard import assert_writable_stores
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ router = APIRouter(prefix="/graph", tags=["graph"])
 
 def _get_driver():
     settings = get_settings()
+    assert_writable_stores(settings)
     return AsyncGraphDatabase.driver(
         settings.NEO4J_URI,
         auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),

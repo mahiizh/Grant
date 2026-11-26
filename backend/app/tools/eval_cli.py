@@ -25,6 +25,7 @@ _BOOTSTRAP = Settings()
 os.environ["POSTGRES_DB"] = _BOOTSTRAP.EVAL_POSTGRES_DB
 os.environ["QDRANT_COLLECTION"] = _BOOTSTRAP.EVAL_QDRANT_COLLECTION
 os.environ["QDRANT_ENTITY_COLLECTION"] = _BOOTSTRAP.EVAL_QDRANT_ENTITY_COLLECTION
+os.environ["REDIS_DB"] = str(_BOOTSTRAP.EVAL_REDIS_DB)
 
 # Imported after the overrides above on purpose. ruff: noqa: E402
 import asyncpg  # type: ignore[import-untyped]  # noqa: E402
@@ -32,6 +33,7 @@ from qdrant_client import AsyncQdrantClient, models  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
 from app.core.config import get_settings  # noqa: E402
+from app.core.store_guard import assert_writable_stores  # noqa: E402
 from app.db.postgres import (  # noqa: E402
     announce_database_identity,
     get_engine,
@@ -129,6 +131,7 @@ def _run_alembic_upgrade() -> None:
 
 async def _reset_qdrant_collection() -> None:
     settings = get_settings()
+    assert_writable_stores(settings)
     client = AsyncQdrantClient(
         url=f"http://{settings.QDRANT_HOST}:{settings.QDRANT_PORT}",
         check_compatibility=False,

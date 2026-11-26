@@ -4,7 +4,6 @@ from collections.abc import Generator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from urllib.parse import urlparse
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,37 +25,15 @@ os.environ.setdefault("QDRANT_COLLECTION", "grant_chunks_test")
 os.environ.setdefault("QDRANT_ENTITY_COLLECTION", "grant_entities_test")
 os.environ.setdefault("NEO4J_DATABASE", os.environ.get("NEO4J_TEST_DATABASE", "neo4j"))
 os.environ.setdefault("NEO4J_URI", os.environ.get("NEO4J_TEST_URI", "bolt://localhost:7688"))
+os.environ.setdefault("REDIS_DB", "1")
 
+from app.core.config import get_settings  # noqa: E402
+from app.core.store_guard import StoreGuardError, assert_test_stores  # noqa: E402
 
-def _assert_test_stores() -> None:
-    """Abort the whole session before any fixture can touch a dev store."""
-    violations: list[str] = []
-
-    postgres_db = os.environ.get("POSTGRES_DB", "")
-    if not postgres_db.endswith("_test"):
-        violations.append(f"POSTGRES_DB={postgres_db!r} must end with '_test'")
-
-    for name in ("QDRANT_COLLECTION", "QDRANT_ENTITY_COLLECTION"):
-        collection = os.environ.get(name, "")
-        if not collection.endswith("_test"):
-            violations.append(f"{name}={collection!r} must end with '_test'")
-
-    neo4j_uri = os.environ.get("NEO4J_URI", "")
-    try:
-        port = urlparse(neo4j_uri).port
-    except ValueError:
-        port = None
-    if port != 7688:
-        violations.append(f"NEO4J_URI={neo4j_uri!r} must use port 7688")
-
-    if violations:
-        pytest.exit(
-            "Refusing to run tests against non-test stores: " + "; ".join(violations),
-            returncode=3,
-        )
-
-
-_assert_test_stores()
+try:
+    assert_test_stores(get_settings())
+except StoreGuardError as exc:
+    pytest.exit(str(exc), returncode=3)
 
 from app.main import create_app  # noqa: E402
 from tests.fakes.fake_web import FakeWebClient, FakeWebIngestor  # noqa: E402
