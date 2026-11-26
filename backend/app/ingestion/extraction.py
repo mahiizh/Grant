@@ -51,6 +51,7 @@ KNOWN_ENTITIES: dict[str, str] = {
     "INC-2026-04": "INCIDENT",
     "DLQ Monitoring": "REMEDIATION",
     "Outbox": "MECHANISM",
+    "Docling": "TOOL",
 }
 
 

@@ -259,7 +259,7 @@ class ModelGateway:
 
         resp = None
         last_exc: Exception | None = None
-        max_attempts = 7
+        max_attempts = max(1, settings.LITELLM_MAX_ATTEMPTS)
         for attempt in range(max_attempts):
             try:
                 resp = await litellm.acompletion(
@@ -269,21 +269,21 @@ class ModelGateway:
                     temperature=temperature,
                     api_key=api_key,
                     api_base=settings.LITELLM_API_BASE,
-                    timeout=20.0,
-                    num_retries=0,
+                    timeout=settings.LITELLM_TIMEOUT_SECONDS,
+                    num_retries=1,
                 )
                 break
             except Exception as e:
                 last_exc = e
                 if _is_retryable(e) and attempt < max_attempts - 1:
-                    # Exponential backoff with full jitter, but never retry
-                    # sooner than the provider asked (free tiers often return
-                    # a ~15-60s quota reset in Retry-After / retryDelay).
-                    delay = min(8.0, 0.5 * (2**attempt))
+                    # One manual retry with a short bounded backoff. LiteLLM
+                    # also gets num_retries=1, so the 45s Ask budget is not
+                    # consumed by a long provider retry ladder.
+                    delay = min(2.0, 0.25 * (2**attempt))
                     provider_delay = _retry_after_seconds(e)
                     if provider_delay is not None:
-                        delay = max(delay, min(provider_delay + 1.0, 60.0))
-                    delay += random.uniform(0.0, min(delay * 0.25, 2.0))
+                        delay = max(delay, min(provider_delay + 0.5, 5.0))
+                    delay += random.uniform(0.0, min(delay * 0.25, 0.5))
                     await asyncio.sleep(delay)
                     continue
                 raise RuntimeError(f"LiteLLM completion failed for {selected_model}: {e}") from e

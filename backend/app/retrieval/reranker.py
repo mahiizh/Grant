@@ -5,6 +5,7 @@ from sentence_transformers import CrossEncoder
 
 from app.core.config import get_settings
 from app.domain import Evidence
+from app.runtime import off_loop
 
 
 class CrossEncoderReranker:
@@ -14,6 +15,22 @@ class CrossEncoderReranker:
         name = model_name or get_settings().RERANKER_MODEL
         self.model_name = name
         self._model = CrossEncoder(name)
+
+    async def rerank_evidence_async(
+        self,
+        query: str,
+        candidates: Sequence[Evidence],
+        top_k: int | None = None,
+    ) -> list[Evidence]:
+        """Run CrossEncoder inference on the bounded pool, off the event loop."""
+        timeout = get_settings().MODEL_INFERENCE_TIMEOUT_SECONDS
+        return await off_loop(
+            self.rerank_evidence,
+            query,
+            list(candidates),
+            top_k,
+            timeout=timeout,
+        )
 
     def predict_pairs(self, pairs: Sequence[tuple[str, str]]) -> list[float]:
         """Compute reranking scores for query-passage pairs."""

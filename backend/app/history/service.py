@@ -18,7 +18,6 @@ from app.db.outbox import OutboxEventType, OutboxService
 from app.db.postgres import get_session
 from app.domain import Evidence, Provenance
 from app.ingestion.extraction import EntityRelationExtractor
-from app.ingestion.gliner_extraction import get_gliner_extractor
 
 logger = logging.getLogger(__name__)
 
@@ -93,11 +92,8 @@ def _dict_to_evidence(row: dict[str, Any]) -> Evidence:
 
 
 def _extract_entities(text: str) -> list[Any]:
-    try:
-        return list(get_gliner_extractor().extract_from_text(text).entities)
-    except Exception:
-        logger.debug("History entity extraction fell back to heuristics", exc_info=True)
-        return list(EntityRelationExtractor.extract_from_text(text).entities)
+    """Ask-path history writes use deterministic extraction, never GLiNER."""
+    return list(EntityRelationExtractor.extract_from_text(text).entities)
 
 
 class QueryHistoryService:

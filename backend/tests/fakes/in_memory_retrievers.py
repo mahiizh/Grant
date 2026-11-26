@@ -250,15 +250,18 @@ class FakeHybridRetriever:
                 if filter_criteria.permits_chunk(self._chunks[chunk_id])
             ]
         ranked = ranked[:top_k]
+        # RRF only decides order. Mirror production by carrying the chunk's
+        # dense cosine as the evidence score so the relevance gate is realistic.
+        dense_scores = dict(dense_results)
         evidence_list = AwaitableList()
-        for chunk_id, score in ranked:
+        for chunk_id, _rrf_score in ranked:
             chunk = self._chunks[chunk_id]
             evidence_list.append(
                 Evidence(
                     chunk_id=chunk.chunk_id,
                     doc_id=chunk.doc_id,
                     text=chunk.text,
-                    score=score,
+                    score=dense_scores.get(chunk_id, 0.0),
                     retrieval_method="hybrid",
                     provenance=chunk.provenance,
                 )

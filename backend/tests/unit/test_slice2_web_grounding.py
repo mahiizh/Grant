@@ -5,8 +5,6 @@ from typing import Any, cast
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.web_grounding.web import WebPage
-from app.web_grounding.web_ingest import _web_doc_id, sanitize_web_markdown
 from app.api.routes.graph import _with_source_kind
 from app.core.acl import ACLScope
 from app.core.config import get_settings
@@ -21,6 +19,8 @@ from app.indexing import Neo4jIndexer, OutboxWorker, QdrantIndexer
 from app.orchestration.workflow import RAGOrchestrator
 from app.retrieval.filters import RetrievalFilter
 from app.retrieval.hybrid import HybridRetriever as RealHybridRetriever
+from app.web_grounding.web import WebPage
+from app.web_grounding.web_ingest import _web_doc_id, sanitize_web_markdown
 from tests.fakes.fake_gateway import FakeModelGateway
 from tests.fakes.fake_web import FakeWebIngestor
 from tests.fakes.in_memory_indexers import FakeNeo4jIndexer, FakeQdrantIndexer
@@ -315,8 +315,10 @@ async def test_doc_question_with_grounded_plus_web_uses_docs_without_web_call(
 @pytest.mark.anyio
 async def test_rerank_timeout_with_only_irrelevant_chunks_triggers_web_search(
     mock_graspreach: Any,
+    monkeypatch: Any,
 ) -> None:
     """High RRF ranks with low dense cosine must still trigger web fallback."""
+    monkeypatch.setattr(get_settings(), "EVIDENCE_MIN_DENSE_COSINE", 0.35)
     query = "What happened in the unusual incident timeline?"
     url = "https://example.com/timeout-postmortem"
     mock_graspreach.client.pages = [

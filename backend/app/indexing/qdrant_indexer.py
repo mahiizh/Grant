@@ -46,9 +46,9 @@ class QdrantIndexer:
         # Compute embeddings if vector not explicitly provided
         if vector is not None:
             dense_vec = vector
-            sparse_vec = self.embedding_service.embed_query_sparse(text)
+            sparse_vec = await self.embedding_service.aembed_query_sparse(text)
         else:
-            dense_vec, sparse_vec = self.embedding_service.embed_query(text)
+            dense_vec, sparse_vec = await self.embedding_service.aembed_query(text)
 
         pt_id = chunk_id_to_point_id(chunk_id)
 
@@ -170,7 +170,7 @@ class EntityVectorIndex:
         owner_user_id: str | None,
     ) -> None:
         text = f"{name} [{entity_type}]"
-        dense = self.embedding_service.embed_query_dense(text)
+        dense = await self.embedding_service.aembed_query_dense(text)
         payload = {
             "entity_id": entity_id,
             "type_group": type_group,
@@ -197,7 +197,9 @@ class EntityVectorIndex:
         limit: int = 5,
         threshold: float = 0.0,
     ) -> list[dict[str, Any]]:
-        query_vec = self.embedding_service.embed_query_dense(f"{name} [{entity_type}]")
+        query_vec = await self.embedding_service.aembed_query_dense(
+            f"{name} [{entity_type}]"
+        )
         must: list[models.Condition] = [
             models.FieldCondition(key="type_group", match=models.MatchValue(value=type_group))
         ]

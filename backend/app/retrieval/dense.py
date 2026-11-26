@@ -43,7 +43,7 @@ class DenseRetriever:
         filter_criteria: RetrievalFilter | None = None,
     ) -> list[tuple[str, float, dict[str, Any]]]:
         """Query Qdrant dense vector index with ACL/temporal payload filtering."""
-        dense_vec = self.embedding_service.embed_query_dense(query)
+        dense_vec = await self.embedding_service.aembed_query_dense(query)
         query_filter = filter_criteria.to_qdrant_filter() if filter_criteria is not None else None
 
         try:

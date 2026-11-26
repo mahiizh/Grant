@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     LITELLM_API_BASE: str | None = None
     GEMINI_API_KEY: str | None = None
     LLM_MODEL: str = "gemini/gemini-3.5-flash-lite"
+    LITELLM_TIMEOUT_SECONDS: float = 30.0
+    LITELLM_MAX_ATTEMPTS: int = 2
+    ASK_TOTAL_BUDGET_SECONDS: float = 45.0
     EMBEDDING_MODEL: str = "BAAI/bge-small-en-v1.5"
     EMBEDDING_DIM: int = 384
     SPARSE_MODEL: str = "Qdrant/bm25"
@@ -79,6 +82,11 @@ class Settings(BaseSettings):
     RRF_K: int = 60
     HYBRID_PREFETCH_MULTIPLIER: int = 5
     RERANK_TIMEOUT_SECONDS: float = 5.0
+    # Local inference runs on a bounded pool, never on the event loop. Startup
+    # builds each local model once and warms it before the API accepts traffic.
+    MODEL_POOL_WORKERS: int = 2
+    MODEL_INFERENCE_TIMEOUT_SECONDS: float = 15.0
+    MODEL_STARTUP_TIMEOUT_SECONDS: float = 120.0
     # Evidence scores are not comparable across scoring schemes. Cross-encoder
     # logits use one floor. RRF is rank-only and must never be used as a
     # relevance score, so hybrid evidence carries the chunk's Qdrant dense
@@ -151,11 +159,13 @@ class Settings(BaseSettings):
     )
     GLINER_WINDOW_TOKENS: int = 384
     GLINER_WINDOW_OVERLAP_TOKENS: int = 48
+    GLINER_INFERENCE_TIMEOUT_SECONDS: float = 30.0
 
     # Entity resolution / co-occurrence
     QDRANT_ENTITY_COLLECTION: str = "grant_entities"
     ENTITY_RESOLUTION_THRESHOLD: float = 0.85
     ENTITY_RESOLUTION_TOP_K: int = 5
+    ENTITY_SEED_MIN_COSINE: float = 0.35
     COOCCURRENCE_MIN_COUNT: int = 2
     COOCCURRENCE_TOP_K_PMI: int = 5
 

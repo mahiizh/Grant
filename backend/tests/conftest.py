@@ -26,6 +26,10 @@ os.environ.setdefault("QDRANT_ENTITY_COLLECTION", "grant_entities_test")
 os.environ.setdefault("NEO4J_DATABASE", os.environ.get("NEO4J_TEST_DATABASE", "neo4j"))
 os.environ.setdefault("NEO4J_URI", os.environ.get("NEO4J_TEST_URI", "bolt://localhost:7688"))
 os.environ.setdefault("REDIS_DB", "1")
+# The in-memory fake dense retriever uses hashed embeddings whose absolute
+# cosine values are not comparable to the production BGE model. Keep the
+# general suite ungated; the dense-cosine gate tests set explicit thresholds.
+os.environ.setdefault("EVIDENCE_MIN_DENSE_COSINE", "0.0")
 
 from app.core.config import get_settings  # noqa: E402
 from app.core.store_guard import StoreGuardError, assert_test_stores  # noqa: E402
@@ -42,9 +46,9 @@ from tests.fakes.fake_web import FakeWebClient, FakeWebIngestor  # noqa: E402
 @pytest.fixture(autouse=True)
 def mock_graspreach(monkeypatch: pytest.MonkeyPatch) -> Generator[Any, None, None]:
     """No test may reach the real web; inject configurable in-memory fakes."""
+    from app.orchestration import workflow as workflow_module
     from app.web_grounding import web as web_module
     from app.web_grounding import web_ingest as web_ingest_module
-    from app.orchestration import workflow as workflow_module
 
     client = FakeWebClient()
     ingestor = FakeWebIngestor()

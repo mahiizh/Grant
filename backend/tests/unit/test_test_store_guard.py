@@ -8,9 +8,9 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from app.core.store_guard import (
+    ALLOW_DEV_WRITES_ENV,
     DEV_WRITE_TOKEN_ENV,
     DEV_WRITE_TOKEN_HEADER,
-    ALLOW_DEV_WRITES_ENV,
     dev_writes_allowed,
     http_write_violations,
 )

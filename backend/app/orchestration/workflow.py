@@ -11,8 +11,6 @@ from langgraph.graph import END, StateGraph
 from app.cache.exact import ExactCache
 from app.cache.keys import prompt_version_lookup_chain
 from app.core.acl import ACLScope
-from app.web_grounding.web import WebClient, WebPage, get_web_client
-from app.web_grounding.web_ingest import WebIngestor, get_web_ingestor
 from app.core.config import get_settings
 from app.domain import Answer, Evidence, Provenance
 from app.graph.retrievers import GraphRetriever
@@ -25,6 +23,8 @@ from app.orchestration.state import AnswerPolicy, AnswerSourceKind, RAGState, Re
 from app.retrieval.filters import RetrievalFilter
 from app.retrieval.hybrid import HybridRetriever
 from app.security.injection import wrap_context_for_prompt
+from app.web_grounding.web import WebClient, WebPage, get_web_client
+from app.web_grounding.web_ingest import WebIngestor, get_web_ingestor
 
 logger = logging.getLogger(__name__)
 
@@ -457,6 +457,30 @@ class RAGOrchestrator:
                         query, top_k=5, filter_criteria=filter_criteria
                     )
                 )
+                # Vector-seeded entities supplement Neo4j's literal name match.
+                # Deterministic query extraction keeps GLiNER off the Ask path.
+                seed_search = getattr(self.graph_retriever, "search_entity_seeds", None)
+                if callable(seed_search):
+                    seeds = await _maybe_await(
+                        seed_search(query, top_k=5, filter_criteria=filter_criteria)
+                    )
+                    known_names = {
+                        str(entity.get("name", "")).lower()
+                        for entity in matched_entities
+                        if isinstance(entity, dict)
+                    }
+                    for seed in seeds or []:
+                        name = str(seed.get("name") or "")
+                        if not name or name.lower() in known_names:
+                            continue
+                        matched_entities.append(
+                            {
+                                "id": seed.get("entity_id"),
+                                "name": name,
+                                "type": seed.get("entity_type"),
+                            }
+                        )
+                        known_names.add(name.lower())
                 if len(matched_entities) >= 2:
                     ent_a = matched_entities[0]["name"]
                     ent_b = matched_entities[1]["name"]

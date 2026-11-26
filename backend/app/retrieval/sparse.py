@@ -38,7 +38,7 @@ class BM25Retriever:
         filter_criteria: RetrievalFilter | None = None,
     ) -> list[tuple[str, float, dict[str, Any]]]:
         """Query Qdrant sparse BM25 vector index with ACL/temporal payload filtering."""
-        sparse_vec = self.embedding_service.embed_query_sparse(query)
+        sparse_vec = await self.embedding_service.aembed_query_sparse(query)
         if not sparse_vec.indices:
             return []
 

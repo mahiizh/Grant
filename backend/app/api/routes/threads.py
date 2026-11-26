@@ -35,8 +35,8 @@ from app.db.models import MessageRecord, ThreadRecord
 from app.db.outbox import OutboxEventType, OutboxService
 from app.db.postgres import get_db_session, get_session
 from app.ingestion.extraction import EntityRelationExtractor
-from app.ingestion.gliner_extraction import get_gliner_extractor
 from app.observability.tracer import export_spans_to_db
+from app.orchestration.budget import AskBudgetExceededError, run_with_ask_budget
 
 logger = logging.getLogger(__name__)
 
@@ -166,11 +166,9 @@ async def _stage_chat_graph(
     owner_user_id: str,
     role: str,
 ) -> None:
-    try:
-        extraction = get_gliner_extractor().extract_from_text(text)
-    except Exception:
-        logger.exception("GLiNER chat extraction failed for %s; falling back to heuristic", role)
-        extraction = EntityRelationExtractor.extract_from_text(text)
+    # Ask/chat paths never load GLiNER; deterministic extraction keeps the
+    # request off the heavyweight entity model.
+    extraction = EntityRelationExtractor.extract_from_text(text)
     if not extraction.entities:
         return
     chat_acl = {
@@ -475,15 +473,21 @@ async def send_message(
             yield f"event: stage\ndata: {json.dumps({'id': 'condense', 'label': 'Condensing query', 'status': 'in_progress'})}\n\n"
             await asyncio.sleep(0.02)
 
-            state = await orchestrator.run(
-                query=req.content,
-                acl_scope=scope,
-                thread_id=thread_id,
-                thread_history=history,
-                owner_user_id=current_user.user_id,
-                is_admin=current_user.is_admin,
-                answer_policy=req.answer_policy,
-            )
+            try:
+                state = await run_with_ask_budget(
+                    orchestrator.run(
+                        query=req.content,
+                        acl_scope=scope,
+                        thread_id=thread_id,
+                        thread_history=history,
+                        owner_user_id=current_user.user_id,
+                        is_admin=current_user.is_admin,
+                        answer_policy=req.answer_policy,
+                    )
+                )
+            except AskBudgetExceededError as exc:
+                yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+                return
 
             rewritten = state.get("rewritten_query", req.content)
             route = state.get("route", "vector")
@@ -631,15 +635,20 @@ async def send_message(
         return StreamingResponse(event_generator(), media_type="text/event-stream")
 
     # Non-streaming POST execution
-    state = await orchestrator.run(
-        query=req.content,
-        acl_scope=scope,
-        thread_id=thread_id,
-        thread_history=history,
-        owner_user_id=current_user.user_id,
-        is_admin=current_user.is_admin,
-        answer_policy=req.answer_policy,
-    )
+    try:
+        state = await run_with_ask_budget(
+            orchestrator.run(
+                query=req.content,
+                acl_scope=scope,
+                thread_id=thread_id,
+                thread_history=history,
+                owner_user_id=current_user.user_id,
+                is_admin=current_user.is_admin,
+                answer_policy=req.answer_policy,
+            )
+        )
+    except AskBudgetExceededError as exc:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)) from exc
 
     rewritten = state.get("rewritten_query", req.content)
     route = state.get("route", "vector")
@@ -942,15 +951,20 @@ async def regenerate_message(
     orchestrator = get_orchestrator()
     scope = _thread_acl_scope(thread)
 
-    state = await orchestrator.run(
-        query=user_query,
-        acl_scope=scope,
-        thread_id=thread_id,
-        thread_history=history,
-        owner_user_id=current_user.user_id,
-        is_admin=current_user.is_admin,
-        answer_policy="grounded_plus_web",
-    )
+    try:
+        state = await run_with_ask_budget(
+            orchestrator.run(
+                query=user_query,
+                acl_scope=scope,
+                thread_id=thread_id,
+                thread_history=history,
+                owner_user_id=current_user.user_id,
+                is_admin=current_user.is_admin,
+                answer_policy="grounded_plus_web",
+            )
+        )
+    except AskBudgetExceededError as exc:
+        raise HTTPException(status_code=status.HTTP_504_GATEWAY_TIMEOUT, detail=str(exc)) from exc
 
     rewritten = state.get("rewritten_query", user_query)
     route = state.get("route", "vector")

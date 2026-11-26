@@ -211,8 +211,8 @@ class EntityResolver:
             self._cache[pair_key] = rule_result
             return rule_result
 
-        vec_a = self.embedding_service.embed_query_dense(f"{name_a} [{type_a}]")
-        vec_b = self.embedding_service.embed_query_dense(f"{name_b} [{type_b}]")
+        vec_a = await self.embedding_service.aembed_query_dense(f"{name_a} [{type_a}]")
+        vec_b = await self.embedding_service.aembed_query_dense(f"{name_b} [{type_b}]")
         sim = cosine_sim(vec_a, vec_b)
         result = sim >= self.sim_high
         self._cache[pair_key] = result

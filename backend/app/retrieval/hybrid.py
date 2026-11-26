@@ -9,6 +9,7 @@ from app.retrieval.dense import DenseRetriever
 from app.retrieval.filters import RetrievalFilter
 from app.retrieval.reranker import get_reranker
 from app.retrieval.sparse import BM25Retriever
+from app.runtime import off_loop
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +215,7 @@ class HybridRetriever:
                     return await rerank_async(
                         query=query, candidates=evidence_list, top_k=top_k
                     )
-                return await asyncio.to_thread(
+                return await off_loop(
                     self.reranker.rerank_evidence,
                     query=query,
                     candidates=evidence_list,

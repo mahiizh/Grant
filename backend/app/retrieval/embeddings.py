@@ -1,19 +1,33 @@
+"""Embedding facade backed by the process-wide bounded model runtime."""
+
+from __future__ import annotations
+
+import asyncio
 from collections.abc import Sequence
 from functools import lru_cache
-from typing import NamedTuple
-
-from fastembed import SparseEmbedding, SparseTextEmbedding, TextEmbedding
 
 from app.core.config import get_settings
+from app.runtime import SparseVector, get_models, off_loop
 
 
-class SparseVector(NamedTuple):
-    indices: list[int]
-    values: list[float]
+def _dense_query(text: str) -> list[float]:
+    return get_models().embed_query_dense(text)
+
+
+def _dense_chunks(texts: Sequence[str]) -> list[list[float]]:
+    return get_models().embed_chunks_dense(texts)
+
+
+def _sparse_query(text: str) -> SparseVector:
+    return get_models().embed_query_sparse(text)
+
+
+def _sparse_chunks(texts: Sequence[str]) -> list[SparseVector]:
+    return get_models().embed_chunks_sparse(texts)
 
 
 class EmbeddingService:
-    """Manages dense and sparse embeddings via FastEmbed."""
+    """Manages dense and sparse embeddings via the shared FastEmbed bundle."""
 
     def __init__(self) -> None:
         settings = get_settings()
@@ -21,49 +35,51 @@ class EmbeddingService:
         self.sparse_model_name = settings.SPARSE_MODEL
         self.dim = settings.EMBEDDING_DIM
 
-        self._dense_model = TextEmbedding(model_name=self.dense_model_name)
-        self._sparse_model = SparseTextEmbedding(model_name=self.sparse_model_name)
+    @staticmethod
+    def _timeout() -> float:
+        return get_settings().MODEL_INFERENCE_TIMEOUT_SECONDS
 
     def embed_query_dense(self, query: str) -> list[float]:
         """Generate normalized dense embedding for a single query."""
-        vectors = list(self._dense_model.embed([query]))
-        return [float(x) for x in vectors[0]]
+        return _dense_query(query)
+
+    async def aembed_query_dense(self, query: str) -> list[float]:
+        return await off_loop(_dense_query, query, timeout=self._timeout())
 
     def embed_chunks_dense(self, texts: Sequence[str]) -> list[list[float]]:
         """Generate normalized dense embeddings for chunks."""
-        if not texts:
-            return []
-        vectors = list(self._dense_model.embed(texts))
-        return [[float(x) for x in v] for v in vectors]
+        return _dense_chunks(texts)
+
+    async def aembed_chunks_dense(self, texts: Sequence[str]) -> list[list[float]]:
+        return await off_loop(_dense_chunks, texts, timeout=self._timeout())
 
     def embed_query_sparse(self, query: str) -> SparseVector:
         """Generate sparse BM25 token weights for a single query."""
-        results: list[SparseEmbedding] = list(self._sparse_model.embed([query]))
-        res = results[0]
-        return SparseVector(
-            indices=[int(idx) for idx in res.indices],
-            values=[float(val) for val in res.values],
-        )
+        return _sparse_query(query)
+
+    async def aembed_query_sparse(self, query: str) -> SparseVector:
+        return await off_loop(_sparse_query, query, timeout=self._timeout())
 
     def embed_chunks_sparse(self, texts: Sequence[str]) -> list[SparseVector]:
         """Generate sparse BM25 token weights for multiple texts."""
-        if not texts:
-            return []
-        results: list[SparseEmbedding] = list(self._sparse_model.embed(texts))
-        return [
-            SparseVector(
-                indices=[int(idx) for idx in res.indices],
-                values=[float(val) for val in res.values],
-            )
-            for res in results
-        ]
+        return _sparse_chunks(texts)
+
+    async def aembed_chunks_sparse(self, texts: Sequence[str]) -> list[SparseVector]:
+        return await off_loop(_sparse_chunks, texts, timeout=self._timeout())
 
     def embed_query(self, query: str) -> tuple[list[float], SparseVector]:
         """Embed a query into both dense and sparse representations."""
         return self.embed_query_dense(query), self.embed_query_sparse(query)
 
+    async def aembed_query(self, query: str) -> tuple[list[float], SparseVector]:
+        dense, sparse = await asyncio.gather(
+            self.aembed_query_dense(query),
+            self.aembed_query_sparse(query),
+        )
+        return dense, sparse
+
 
 @lru_cache(maxsize=1)
 def get_embedding_service() -> EmbeddingService:
-    """Singleton getter for the FastEmbed embedding service."""
+    """Singleton getter for the embedding facade (model loading stays lazy)."""
     return EmbeddingService()

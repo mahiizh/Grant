@@ -14,13 +14,18 @@ logger = logging.getLogger(__name__)
 class GraphRetriever:
     """Production Graph retriever executing Cypher multi-hop traversals over Neo4j."""
 
-    def __init__(self, driver: AsyncDriver | None = None) -> None:
+    def __init__(
+        self,
+        driver: AsyncDriver | None = None,
+        entity_index: Any | None = None,
+    ) -> None:
         settings = get_settings()
         assert_writable_stores(settings)
         self.driver = driver or AsyncGraphDatabase.driver(
             settings.NEO4J_URI,
             auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),
         )
+        self._entity_index = entity_index
 
     @staticmethod
     def _criteria(filter_criteria: RetrievalFilter | None) -> RetrievalFilter:
@@ -165,6 +170,58 @@ class GraphRetriever:
         async with self.driver.session(database=get_settings().NEO4J_DATABASE) as session:
             res = await session.run(cypher, q=query.strip(), limit=top_k, **params)
             return await res.data()
+
+    async def search_entity_seeds(
+        self,
+        query: str,
+        top_k: int = 5,
+        filter_criteria: RetrievalFilter | None = None,
+    ) -> list[dict[str, Any]]:
+        """Find canonical entity seeds from the query via the entity vector index.
+
+        Uses deterministic extraction on the Ask path (never GLiNER) and keeps
+        the search inside the caller's owner scope unless the caller is admin.
+        """
+        from app.indexing.qdrant_indexer import EntityVectorIndex
+        from app.ingestion.entity_resolution import type_group
+        from app.ingestion.extraction import EntityRelationExtractor
+
+        criteria = self._criteria(filter_criteria)
+        mentions = EntityRelationExtractor.extract_from_text(query).entities
+        if not mentions:
+            return []
+
+        owns_index = self._entity_index is None
+        index = self._entity_index or EntityVectorIndex()
+        owner_user_id = None if criteria.is_admin else criteria.owner_user_id
+        threshold = get_settings().ENTITY_SEED_MIN_COSINE
+        seeds: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        try:
+            for mention in mentions[:top_k]:
+                candidates = await index.search_similar(
+                    name=mention.name,
+                    entity_type=mention.entity_type,
+                    type_group=type_group(mention.entity_type),
+                    owner_user_id=owner_user_id,
+                    limit=top_k,
+                    threshold=threshold,
+                )
+                for candidate in candidates:
+                    entity_id = str(candidate.get("entity_id") or "")
+                    if not entity_id or entity_id in seen:
+                        continue
+                    seen.add(entity_id)
+                    seed = dict(candidate)
+                    seed.setdefault("name", mention.name)
+                    seed["_seed"] = mention.name
+                    seeds.append(seed)
+                    if len(seeds) >= top_k:
+                        return seeds
+        finally:
+            if owns_index:
+                await index.close()
+        return seeds
 
     async def close(self) -> None:
         await self.driver.close()

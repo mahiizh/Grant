@@ -35,14 +35,18 @@ from app.core.store_guard import (
     WRITE_REFUSAL,
     http_write_violations,
 )
+from app.runtime import shutdown_models, startup_models
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Lifespan startup: verify real infrastructure & keys in live mode, init DB schema
     await verify_infrastructure_live()
+    # Build and warm local models once; all inference now reuses this bundle.
+    await startup_models()
     yield
     # Lifespan shutdown
+    shutdown_models()
 
 
 def create_app() -> FastAPI:

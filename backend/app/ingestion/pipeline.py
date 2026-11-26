@@ -16,6 +16,7 @@ from app.ingestion.chunking import chunk_parsed_document
 from app.ingestion.extraction import EntityRelationExtractor
 from app.ingestion.gliner_extraction import get_gliner_extractor
 from app.ingestion.parse import parse_markdown
+from app.runtime import off_loop
 
 logger = logging.getLogger(__name__)
 
@@ -151,8 +152,11 @@ class IngestionPipeline:
         gliner_extractor = None
         gliner_used = False
         fallback_used = False
+        inference_timeout = get_settings().GLINER_INFERENCE_TIMEOUT_SECONDS
         try:
-            gliner_extractor = get_gliner_extractor()
+            gliner_extractor = await off_loop(
+                get_gliner_extractor, timeout=inference_timeout
+            )
         except Exception:
             logger.exception("Failed to initialize GLiNER extractor; heuristic fallback will be used")
 
@@ -166,7 +170,11 @@ class IngestionPipeline:
                 try:
                     if gliner_extractor is None:
                         raise RuntimeError("GLiNER extractor unavailable")
-                    ext_result = gliner_extractor.extract_from_chunk(chunk)
+                    ext_result = await off_loop(
+                        gliner_extractor.extract_from_chunk,
+                        chunk,
+                        timeout=inference_timeout,
+                    )
                     gliner_used = True
                 except Exception:
                     logger.exception("GLiNER extraction failed for chunk %s; using heuristic fallback", chunk.chunk_id)
