@@ -9,6 +9,7 @@ from app.web_grounding.web import WebPage
 from app.web_grounding.web_ingest import _web_doc_id, sanitize_web_markdown
 from app.api.routes.graph import _with_source_kind
 from app.core.acl import ACLScope
+from app.core.config import get_settings
 from app.db.models import Base
 from app.db.outbox import OutboxEventType, OutboxService
 from app.domain import Chunk, Evidence, Provenance
@@ -156,7 +157,7 @@ class EvidenceHybridRetriever:
 
 
 class _IrrelevantDenseRetriever:
-    """Dense branch returning one irrelevant chunk with a single-list RRF score."""
+    """Dense branch ranking irrelevant chunks first with low cosine scores."""
 
     async def search(
         self,
@@ -166,10 +167,10 @@ class _IrrelevantDenseRetriever:
     ) -> list[tuple[str, float, dict[str, Any]]]:
         return [
             (
-                "chunk_irrelevant",
-                1.0,
+                chunk_id,
+                0.01,
                 {
-                    "chunk_id": "chunk_irrelevant",
+                    "chunk_id": chunk_id,
                     "doc_id": "doc_irrelevant",
                     "text": "Unrelated ISO 27001 control text.",
                     "source_tier": 1,
@@ -177,11 +178,12 @@ class _IrrelevantDenseRetriever:
                     "owner_user_id": None,
                 },
             )
+            for chunk_id in ("chunk_irrelevant_a", "chunk_irrelevant_b")
         ]
 
 
-class _EmptySparseRetriever:
-    """Sparse branch with no hits, leaving a single-list fused score of 1/61."""
+class _IrrelevantSparseRetriever:
+    """Sparse branch ranking the same irrelevant chunks first with high BM25."""
 
     async def search(
         self,
@@ -189,7 +191,10 @@ class _EmptySparseRetriever:
         top_k: int = 10,
         filter_criteria: Any = None,
     ) -> list[tuple[str, float, dict[str, Any]]]:
-        return []
+        return [
+            (chunk_id, 12.0, {})
+            for chunk_id in ("chunk_irrelevant_a", "chunk_irrelevant_b")
+        ]
 
 
 class _TimeoutReranker:
@@ -311,7 +316,7 @@ async def test_doc_question_with_grounded_plus_web_uses_docs_without_web_call(
 async def test_rerank_timeout_with_only_irrelevant_chunks_triggers_web_search(
     mock_graspreach: Any,
 ) -> None:
-    """A timed-out rerank must fall back to fused scores and then to web."""
+    """High RRF ranks with low dense cosine must still trigger web fallback."""
     query = "What happened in the unusual incident timeline?"
     url = "https://example.com/timeout-postmortem"
     mock_graspreach.client.pages = [
@@ -326,7 +331,7 @@ async def test_rerank_timeout_with_only_irrelevant_chunks_triggers_web_search(
     reranker = _TimeoutReranker()
     hybrid = RealHybridRetriever(
         dense_retriever=_IrrelevantDenseRetriever(),
-        bm25_retriever=_EmptySparseRetriever(),
+        bm25_retriever=_IrrelevantSparseRetriever(),
         reranker=reranker,
         rerank_timeout_seconds=0.01,
     )
@@ -346,6 +351,39 @@ async def test_rerank_timeout_with_only_irrelevant_chunks_triggers_web_search(
     assert state["source_kind"] == "web"
     assert state["web_sources"][0]["url"] == url
     assert all(item.retrieval_method == "web" for item in state["evidence"])
+
+
+@pytest.mark.anyio
+async def test_dense_cosine_gate_is_configurable_on_rerank_timeout(
+    mock_graspreach: Any,
+    monkeypatch: Any,
+) -> None:
+    """Lowering the dense cosine floor keeps weak but above-floor chunks local."""
+    mock_graspreach.client.error = "graspreach must not be called above the dense cosine floor"
+    monkeypatch.setattr(get_settings(), "EVIDENCE_MIN_DENSE_COSINE", 0.005)
+    query = "What happened in the unusual incident timeline?"
+
+    reranker = _TimeoutReranker()
+    hybrid = RealHybridRetriever(
+        dense_retriever=_IrrelevantDenseRetriever(),
+        bm25_retriever=_IrrelevantSparseRetriever(),
+        reranker=reranker,
+        rerank_timeout_seconds=0.01,
+    )
+    state = await build_orchestrator(
+        hybrid=hybrid,
+        web_client=mock_graspreach.client,
+        web_ingestor=mock_graspreach.ingestor,
+    ).run(
+        query=query,
+        answer_policy="grounded_plus_web",
+        owner_user_id="usr_alice_01",
+    )
+
+    assert reranker.calls == 1
+    assert mock_graspreach.client.gather_calls == []
+    assert state["source_kind"] == "docs"
+    assert [item.score for item in state["evidence"]] == [0.01, 0.01]
 
 
 @pytest.mark.anyio

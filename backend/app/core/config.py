@@ -80,10 +80,11 @@ class Settings(BaseSettings):
     HYBRID_PREFETCH_MULTIPLIER: int = 5
     RERANK_TIMEOUT_SECONDS: float = 5.0
     # Evidence scores are not comparable across scoring schemes. Cross-encoder
-    # logits (``retrieval_method == "rerank"``) use one floor while fused RRF
-    # scores (returned when reranking times out) use a separate floor.
+    # logits use one floor. RRF is rank-only and must never be used as a
+    # relevance score, so hybrid evidence carries the chunk's Qdrant dense
+    # cosine score for the gate (including when reranking times out).
     EVIDENCE_MIN_RERANK_SCORE: float = 0.0
-    EVIDENCE_MIN_FUSED_SCORE: float = 0.02
+    EVIDENCE_MIN_DENSE_COSINE: float = 0.35
     ACQUISITION_ENABLED: bool = False
     MAX_ACQUISITION_CALLS: int = 3
     MIN_TRUST_TO_CITE: float = 0.7

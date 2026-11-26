@@ -151,6 +151,10 @@ class HybridRetriever:
             filter_criteria=filter_criteria,
         )
         dense_ranked_ids = [cid for cid, _, _ in dense_candidates]
+        # Qdrant returns cosine similarity for the dense vector. RRF scores are
+        # rank-derived and cannot express relevance, so carry the dense cosine
+        # alongside the fused ordering and use it as the evidence score.
+        dense_scores: dict[str, float] = {cid: float(score) for cid, score, _ in dense_candidates}
         payloads: dict[str, dict[str, Any]] = {cid: p for cid, _, p in dense_candidates}
 
         # 2. Fetch sparse candidates
@@ -171,15 +175,22 @@ class HybridRetriever:
             weights=weights,
         )
 
-        # 4. Construct Evidence items
+        # 4. Construct Evidence items in fused rank order, but score them by
+        # dense cosine similarity instead of the rank-only RRF value.
         evidence_list: list[Evidence] = []
-        for chunk_id, rrf_score in fused[:prefetch_limit]:
+        for chunk_id, _rrf_score in fused[:prefetch_limit]:
             payload = payloads.get(chunk_id)
             if not payload:
                 continue
             # Defense-in-depth: never build Evidence from a payload the filter denies,
             # even if a retriever upstream forgot to apply the ACL predicate.
-            item = self._to_evidence(chunk_id, rrf_score, payload, "hybrid", filter_criteria)
+            item = self._to_evidence(
+                chunk_id,
+                dense_scores.get(chunk_id, 0.0),
+                payload,
+                "hybrid",
+                filter_criteria,
+            )
             if item is not None:
                 evidence_list.append(item)
 
@@ -194,7 +205,8 @@ class HybridRetriever:
                     seen_chunk_ids.add(item.chunk_id)
 
         # 5. Optional Cross-Encoder reranking over the combined candidate pool.
-        # A timeout must degrade to fused order, never fail the request.
+        # A timeout degrades to fused order scored by dense cosine, never to
+        # rank-only RRF values.
         if rerank and evidence_list:
             async def _rerank() -> list[Evidence]:
                 rerank_async = getattr(self.reranker, "rerank_evidence_async", None)
