@@ -238,6 +238,16 @@ class OutboxWorker:
                     web_sources=payload.get("web_sources", []),
                 )
 
+            elif event_type == OutboxEventType.WEB_WRITE_BACK.value:
+                from app.web_grounding.web_ingest import persist_web_page
+
+                result = await persist_web_page(session=session, payload=payload)
+                logger.info(
+                    "Processed WEB_WRITE_BACK for %s (ingested=%s)",
+                    (payload.get("page") or {}).get("url"),
+                    result.ingested,
+                )
+
             elif event_type == OutboxEventType.CACHE_INVALIDATED.value:
                 summary = self.cache_invalidator.handle_outbox_event(
                     event_type=event_type,

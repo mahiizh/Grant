@@ -1,15 +1,17 @@
 import asyncio
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Any, cast
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.api.routes.graph import _with_source_kind
 from app.core.acl import ACLScope
 from app.core.config import get_settings
-from app.db.models import Base
-from app.db.outbox import OutboxEventType, OutboxService
+from app.db.models import Base, DocumentRecord
+from app.db.outbox import OutboxEventType, OutboxService, OutboxStatus
 from app.domain import Chunk, Evidence, Provenance
 from app.evaluation.datasets import GoldenDataset, GoldenQuestion
 from app.evaluation.runner import EvaluationRunner
@@ -20,7 +22,10 @@ from app.orchestration.workflow import NOT_FOUND_MARKER, RAGOrchestrator
 from app.retrieval.filters import RetrievalFilter
 from app.retrieval.hybrid import HybridRetriever as RealHybridRetriever
 from app.web_grounding.web import WebPage
+from app.web_grounding import web_ingest as web_ingest_module
 from app.web_grounding.web_ingest import (
+    WebIngestResult,
+    WebPageIngestor,
     _web_doc_id,
     chunk_web_text,
     sanitize_web_markdown,
@@ -41,6 +46,15 @@ async def outbox_session() -> AsyncGenerator[AsyncSession, None]:
     async with factory() as session:
         yield session
     await engine.dispose()
+
+
+class _NoopInvalidator:
+    """Avoid a real Redis connection in worker tests."""
+
+    def handle_outbox_event(
+        self, event_type: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        return {"event_type": event_type, "invalidated": True}
 
 
 class EmptyHybridRetriever:
@@ -884,3 +898,91 @@ async def test_unverified_answer_skips_answer_entities(
     assert neo4j.get_node("ent_unverified_query") is not None
     assert neo4j.get_node("ent_unverified_answer") is None
     assert neo4j._answers["ans-unverified"]["entities"] == []
+
+
+@pytest.mark.anyio
+async def test_web_ingestor_stages_write_back_and_returns_ephemeral_chunks(
+    outbox_session: AsyncSession,
+    monkeypatch: Any,
+) -> None:
+    """The API stages work and answers from deterministic in-memory chunks."""
+
+    @asynccontextmanager
+    async def fake_get_session() -> AsyncGenerator[AsyncSession, None]:
+        yield outbox_session
+
+    monkeypatch.setattr(web_ingest_module, "get_session", fake_get_session)
+
+    page = WebPage(
+        url="https://example.com/staged-web-page",
+        title="Staged page",
+        text=" ".join(f"webtoken{index:03d}" for index in range(400)),
+        fetched_at="2026-11-26T00:00:00Z",
+    )
+
+    evidence = await WebPageIngestor().ingest(
+        pages=[page],
+        owner_user_id="usr_alice_01",
+        acl_scope=ACLScope.owner("usr_alice_01"),
+    )
+
+    events = await OutboxService.fetch_pending_events(session=outbox_session, limit=10)
+    assert len(events) == 1
+    assert events[0].event_type == OutboxEventType.WEB_WRITE_BACK.value
+    assert events[0].payload["owner_user_id"] == "usr_alice_01"
+    assert events[0].payload["page"]["url"] == page.url
+    assert len(evidence) > 1
+    assert all(item.retrieval_method == "web" for item in evidence)
+    assert all(item.doc_id == _web_doc_id(page, "usr_alice_01") for item in evidence)
+
+    # The staged event has not persisted a document on the request path.
+    assert (
+        await outbox_session.scalar(
+            select(DocumentRecord).where(DocumentRecord.doc_id == _web_doc_id(page, "usr_alice_01"))
+        )
+        is None
+    )
+
+
+@pytest.mark.anyio
+async def test_outbox_worker_delegates_web_write_back_to_persist_helper(
+    outbox_session: AsyncSession,
+    monkeypatch: Any,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    async def fake_persist_web_page(
+        session: AsyncSession, payload: dict[str, Any]
+    ) -> Any:
+        calls.append(payload)
+        return WebIngestResult(doc_id="doc_web", evidence=[], ingested=True)
+
+    monkeypatch.setattr(web_ingest_module, "persist_web_page", fake_persist_web_page)
+
+    event = OutboxService.stage_event(
+        session=outbox_session,
+        event_type=OutboxEventType.WEB_WRITE_BACK,
+        aggregate_type="web_page",
+        aggregate_id="doc_web",
+        payload={
+            "owner_user_id": "usr_alice_01",
+            "acl_scope": {"owner_user_id": "usr_alice_01"},
+            "page": {
+                "url": "https://example.com/worker-write-back",
+                "title": "Worker write-back",
+                "text": "Persist this page in the worker process.",
+                "fetched_at": "2026-11-26T00:00:00Z",
+                "provider": "test",
+            },
+        },
+    )
+    await outbox_session.flush()
+
+    worker = OutboxWorker(
+        qdrant_indexer=cast(QdrantIndexer, FakeQdrantIndexer()),
+        neo4j_indexer=cast(Neo4jIndexer, FakeNeo4jIndexer()),
+        cache_invalidator=cast(Any, _NoopInvalidator()),
+    )
+    assert await worker.process_event(session=outbox_session, event=event)
+    assert calls == [event.payload]
+    assert event.status == OutboxStatus.PROCESSED.value

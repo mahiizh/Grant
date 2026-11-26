@@ -1,6 +1,6 @@
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
-from typing import cast
+from typing import Any, cast
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -12,6 +12,7 @@ from app.db.outbox import OutboxEventType, OutboxService, OutboxStatus
 from app.db.postgres import DocumentRepository
 from app.domain import Chunk, Document, Provenance
 from app.indexing import Neo4jIndexer, OutboxWorker, QdrantIndexer
+from tests.fakes.fake_redis import FakeRedis
 from tests.fakes.in_memory_indexers import FakeNeo4jIndexer, FakeQdrantIndexer
 
 
@@ -66,20 +67,22 @@ async def test_outbox_worker_processes_chunks(test_session: AsyncSession) -> Non
 
     # Verify pending events exist
     pending = await OutboxService.fetch_pending_events(session=test_session, limit=10)
-    assert len(pending) == 2  # 1 doc + 1 chunk
+    assert len(pending) == 3  # 1 doc + 1 chunk + 1 cache bump
 
-    # 2. Run Outbox Worker
+    # 2. Run Outbox Worker with a fake redis invalidator (no live stores in unit tests)
     qdrant = FakeQdrantIndexer()
     neo4j = FakeNeo4jIndexer()
+    redis = FakeRedis()
     worker = OutboxWorker(
         qdrant_indexer=cast(QdrantIndexer, qdrant),
         neo4j_indexer=cast(Neo4jIndexer, neo4j),
+        cache_invalidator=CacheInvalidator(redis_client=cast(Any, redis)),
     )
 
     processed_count = await worker.process_batch(session=test_session, batch_size=10)
     await test_session.flush()
 
-    assert processed_count == 2
+    assert processed_count == 3
     # Verify chunk was pushed to Qdrant
     assert qdrant.count() == 1
     stored_chunk = qdrant.get_chunk("chk_001")

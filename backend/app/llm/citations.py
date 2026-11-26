@@ -15,12 +15,24 @@ class CitationCheckResult:
     reason: str = "Citations verified successfully"
 
 
+_BRACKETED_CITATION = re.compile(r"\[([^\]]+)\]")
+_CITATION_TOKEN = re.compile(
+    r"(?:chk_[a-zA-Z0-9_\-]+|chunk_[a-zA-Z0-9_\-]+|web_[a-zA-Z0-9_\-]+|https?://[^\s,]+)"
+)
+
+
 def extract_citations(text: str) -> list[str]:
-    """Extract bracketed chunk IDs and bracketed URLs used as answer citations."""
-    matches = re.findall(
-        r"\[(chk_[a-zA-Z0-9_\-]+|chunk_[a-zA-Z0-9_\-]+|web_[a-zA-Z0-9_\-]+|https?://[^\]\s]+)\]",
-        text,
-    )
+    """Extract chunk IDs and URLs used as answer citations inside brackets.
+
+    A single bracket may contain several comma-separated citations; each token
+    is validated independently so a valid answer with grouped citations still
+    populates the exact cache.
+    """
+    matches: list[str] = []
+    for bracket in _BRACKETED_CITATION.findall(text):
+        for token in re.split(r"[,\s]+", bracket.strip()):
+            if _CITATION_TOKEN.fullmatch(token.strip("\"'")):
+                matches.append(token.strip("\"'"))
     return list(dict.fromkeys(matches))  # Preserve order, remove duplicates
 
 

@@ -151,9 +151,9 @@ async def test_document_repository_save_and_retrieve(test_session: AsyncSession)
     await DocumentRepository.save_document(session=test_session, document=doc)
     await test_session.flush()
 
-    # Verify outbox events staged (1 document + 2 chunks = 3 events)
+    # Verify outbox events staged (1 document + 2 chunks + 1 cache bump = 4 events)
     pending_events = await OutboxService.fetch_pending_events(session=test_session, limit=10)
-    assert len(pending_events) == 3
+    assert len(pending_events) == 4
     event_types = {e.event_type for e in pending_events}
     assert OutboxEventType.DOCUMENT_INGESTED.value in event_types
     assert OutboxEventType.CHUNK_UPSERTED.value in event_types
@@ -267,7 +267,7 @@ async def test_resaving_unchanged_document_stages_no_events(
     await test_session.flush()
 
     first_events = await OutboxService.fetch_pending_events(session=test_session, limit=10)
-    assert len(first_events) == 2  # 1 document + 1 chunk
+    assert len(first_events) == 3  # 1 document + 1 chunk + 1 cache bump
     for event in first_events:
         await OutboxService.mark_processed(session=test_session, event_id=event.event_id)
     await test_session.flush()

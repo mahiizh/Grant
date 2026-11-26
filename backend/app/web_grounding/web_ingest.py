@@ -1,8 +1,9 @@
-"""Write fetched web pages back through the normal ingestion pipeline.
+"""Stage fetched web pages for asynchronous write-back.
 
-Web pages are stored in PostgreSQL as owner-private documents. The outbox then
-syncs the resulting chunks and entities to Qdrant and Neo4j exactly as it does
-for uploaded documents.
+The API process only sanitizes and chunks fetched pages for the current answer
+and stages one ``WEB_WRITE_BACK`` outbox event per page. The worker performs the
+PostgreSQL/Qdrant/Neo4j write-back through the normal ingestion pipeline, so the
+API never runs GLiNER or drains downstream indexers on an Ask request.
 """
 
 from __future__ import annotations
@@ -19,17 +20,18 @@ from typing import Any, Protocol
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.web_grounding.web import WebPage
 from app.core.acl import ACLScope
 from app.core.config import get_settings
 from app.db.models import ChunkRecord, DocumentRecord
+from app.db.outbox import OutboxEventType, OutboxService
 from app.db.postgres import get_session
 from app.domain import Evidence, Provenance
-from app.domain.ids import generate_doc_id
+from app.domain.ids import generate_chunk_id, generate_doc_id
 from app.ingestion.pipeline import IngestionPipeline
 from app.retrieval.dense import cosine_similarity
 from app.retrieval.embeddings import get_embedding_service
 from app.security.injection import INJECTION_PATTERNS
+from app.web_grounding.web import WebPage
 
 logger = logging.getLogger(__name__)
 
@@ -183,12 +185,71 @@ def _build_web_document(
     )
 
 
-class WebPageIngestor:
-    """Persist fetched pages through :class:`IngestionPipeline` and drain the outbox."""
+def _bounded_web_text(page: WebPage) -> str:
+    return sanitize_web_markdown(page.text)[: get_settings().WEB_MAX_PAGE_CHARS]
 
-    def __init__(self, outbox_worker: Any | None = None, sync_outbox: bool = True) -> None:
-        self._outbox_worker = outbox_worker
-        self.sync_outbox = sync_outbox
+
+def _ephemeral_web_evidence(
+    page: WebPage,
+    owner_user_id: str | None,
+    chunks: Sequence[str],
+) -> list[Evidence]:
+    """Deterministic evidence for this answer; it is not read back from stores."""
+    doc_id = _web_doc_id(page, owner_user_id)
+    return [
+        Evidence(
+            chunk_id=generate_chunk_id(doc_id, index, chunk),
+            doc_id=doc_id,
+            text=chunk,
+            score=1.0,
+            retrieval_method="web",
+            provenance=Provenance.from_agent(page.url, confidence=0.8),
+        )
+        for index, chunk in enumerate(chunks)
+    ]
+
+
+def _web_write_back_payload(
+    page: WebPage,
+    text: str,
+    owner_user_id: str | None,
+    acl_scope: ACLScope | None,
+) -> dict[str, Any]:
+    scope = acl_scope or (ACLScope.owner(owner_user_id) if owner_user_id else ACLScope.public())
+    return {
+        "page": {
+            "url": page.url,
+            "title": page.title,
+            "text": text,
+            "fetched_at": page.fetched_at.strip() or datetime.now(UTC).isoformat(),
+            "provider": page.provider,
+        },
+        "owner_user_id": owner_user_id,
+        "acl_scope": scope.model_dump(mode="json"),
+    }
+
+
+def _page_from_payload(payload: dict[str, Any]) -> WebPage:
+    page_data = payload.get("page") or {}
+    return WebPage(
+        url=str(page_data.get("url") or ""),
+        text=str(page_data.get("text") or ""),
+        title=str(page_data.get("title") or ""),
+        fetched_at=str(page_data.get("fetched_at") or ""),
+        provider=str(page_data.get("provider") or ""),
+    )
+
+
+def _scope_from_payload(payload: dict[str, Any]) -> ACLScope:
+    owner_user_id = payload.get("owner_user_id")
+    scope_data = payload.get("acl_scope")
+    if scope_data:
+        return ACLScope.model_validate(scope_data)
+    return ACLScope.owner(owner_user_id) if owner_user_id else ACLScope.public()
+
+
+class WebPageIngestor:
+    """Stage web write-back work; only the worker persists fetched pages."""
 
     async def ingest(
         self,
@@ -198,13 +259,22 @@ class WebPageIngestor:
     ) -> list[Evidence]:
         if not pages:
             return []
+
         evidence: list[Evidence] = []
         async with get_session() as session:
             for page in pages:
-                item = await self._ingest_page(session, page, owner_user_id)
-                evidence.extend(item.evidence)
-            if self.sync_outbox:
-                await self._drain_outbox(session)
+                text = _bounded_web_text(page)
+                chunks = chunk_web_text(text)
+                if not chunks:
+                    continue
+                OutboxService.stage_event(
+                    session=session,
+                    event_type=OutboxEventType.WEB_WRITE_BACK,
+                    aggregate_type="web_page",
+                    aggregate_id=_web_doc_id(page, owner_user_id),
+                    payload=_web_write_back_payload(page, text, owner_user_id, acl_scope),
+                )
+                evidence.extend(_ephemeral_web_evidence(page, owner_user_id, chunks))
         return evidence
 
     async def _ingest_page(
@@ -212,8 +282,9 @@ class WebPageIngestor:
         session: AsyncSession,
         page: WebPage,
         owner_user_id: str | None,
+        acl_scope: ACLScope | None = None,
     ) -> WebIngestResult:
-        text = sanitize_web_markdown(page.text)[: get_settings().WEB_MAX_PAGE_CHARS]
+        text = _bounded_web_text(page)
         chunks = chunk_web_text(text)
         if not chunks:
             return WebIngestResult(doc_id="", evidence=[], ingested=False)
@@ -221,6 +292,7 @@ class WebPageIngestor:
         content_hash = _page_content_hash(page, text)
         doc_id = _web_doc_id(page, owner_user_id)
         fetched_at = page.fetched_at.strip() or datetime.now(UTC).isoformat()
+        scope = acl_scope or (ACLScope.owner(owner_user_id) if owner_user_id else ACLScope.public())
 
         existing = (
             await session.execute(
@@ -240,7 +312,7 @@ class WebPageIngestor:
                 session=session,
                 content=content,
                 source_uri=page.url,
-                acl_scope=ACLScope.owner(owner_user_id) if owner_user_id else ACLScope.public(),
+                acl_scope=scope,
                 owner_user_id=owner_user_id,
                 # The API process never loads GLiNER; only the worker does.
                 use_gliner=False,
@@ -255,7 +327,7 @@ class WebPageIngestor:
         )
         if owner_user_id is not None:
             chunk_stmt = chunk_stmt.where(ChunkRecord.owner_user_id == owner_user_id)
-        chunks = (await session.execute(chunk_stmt)).scalars().all()
+        db_chunks = (await session.execute(chunk_stmt)).scalars().all()
         evidence = [
             Evidence(
                 chunk_id=chunk.chunk_id,
@@ -265,32 +337,32 @@ class WebPageIngestor:
                 retrieval_method="web",
                 provenance=Provenance.from_agent(page.url, confidence=0.8),
             )
-            for chunk in chunks
+            for chunk in db_chunks
         ]
         if not evidence:
-            evidence = [
-                Evidence(
-                    chunk_id=f"web_{content_hash[:12]}",
-                    doc_id=doc_id,
-                    text=text[:4000],
-                    score=1.0,
-                    retrieval_method="web",
-                    provenance=Provenance.from_agent(page.url, confidence=0.8),
-                )
-            ]
+            evidence = _ephemeral_web_evidence(page, owner_user_id, chunks)
         return WebIngestResult(
             doc_id=doc_id,
             evidence=evidence,
             ingested=not unchanged,
         )
 
-    async def _drain_outbox(self, session: AsyncSession) -> None:
-        worker = self._outbox_worker
-        if worker is None:
-            from app.indexing.outbox_worker import OutboxWorker
 
-            worker = OutboxWorker()
-        await worker.process_batch(session=session, batch_size=50)
+async def persist_web_page(
+    session: AsyncSession,
+    payload: dict[str, Any],
+) -> WebIngestResult:
+    """Worker-side handler for a staged ``WEB_WRITE_BACK`` event."""
+    page = _page_from_payload(payload)
+    if not page.url or not page.text.strip():
+        return WebIngestResult(doc_id="", evidence=[], ingested=False)
+    ingestor = WebPageIngestor()
+    return await ingestor._ingest_page(
+        session=session,
+        page=page,
+        owner_user_id=payload.get("owner_user_id"),
+        acl_scope=_scope_from_payload(payload),
+    )
 
 
 _web_ingestor: WebIngestor | None = None

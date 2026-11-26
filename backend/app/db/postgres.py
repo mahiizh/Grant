@@ -429,22 +429,6 @@ class DocumentRepository:
             chunk_rec = cls._chunk_to_record(chunk)
             session.add(chunk_rec)
 
-        # A changed document invalidates answers whose evidence cites it. Stage
-        # this before the upsert events so a worker can purge stale entries.
-        if existing_doc is not None:
-            OutboxService.stage_event(
-                session=session,
-                event_type=OutboxEventType.CACHE_INVALIDATED,
-                aggregate_type="cache",
-                aggregate_id=document.doc_id,
-                payload={
-                    "doc_id": document.doc_id,
-                    "reason": "document_content_changed",
-                    "owner_user_id": document.owner_user_id or document.acl_scope.owner_user_id,
-                    "shared_scope": document.acl_scope.shared_scope,
-                },
-            )
-
         # Stage DOCUMENT_INGESTED outbox event
         doc_payload: dict[str, Any] = {
             "doc_id": document.doc_id,
@@ -496,6 +480,23 @@ class DocumentRepository:
                 payload=chunk_payload,
             )
 
+        # Stage the version bump last: the worker sees indexed chunks before it
+        # invalidates answers produced by the previous index version.
+        OutboxService.stage_event(
+            session=session,
+            event_type=OutboxEventType.CACHE_INVALIDATED,
+            aggregate_type="cache",
+            aggregate_id=document.doc_id,
+            payload={
+                "doc_id": document.doc_id,
+                "reason": (
+                    "document_content_changed" if existing_doc is not None else "document_indexed"
+                ),
+                "owner_user_id": document.owner_user_id or document.acl_scope.owner_user_id,
+                "shared_scope": document.acl_scope.shared_scope,
+            },
+        )
+
         return doc_record
 
     @classmethod
@@ -530,21 +531,27 @@ class DocumentRepository:
             return False
 
         # Stage DOCUMENT_DELETED outbox event
+        owner_user_id = record.owner_user_id
         OutboxService.stage_event(
             session=session,
             event_type=OutboxEventType.DOCUMENT_DELETED,
             aggregate_type="document",
             aggregate_id=doc_id,
-            payload={"doc_id": doc_id},
+            payload={"doc_id": doc_id, "owner_user_id": owner_user_id},
         )
 
-        # Stage CACHE_INVALIDATED outbox event
+        # Stage CACHE_INVALIDATED outbox event after the downstream delete.
         OutboxService.stage_event(
             session=session,
             event_type=OutboxEventType.CACHE_INVALIDATED,
             aggregate_type="cache",
             aggregate_id=doc_id,
-            payload={"doc_id": doc_id, "reason": "document_deletion"},
+            payload={
+                "doc_id": doc_id,
+                "reason": "document_deletion",
+                "owner_user_id": owner_user_id,
+                "shared_scope": record.shared_scope,
+            },
         )
 
         await session.delete(record)

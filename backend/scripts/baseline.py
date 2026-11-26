@@ -222,6 +222,15 @@ async def main() -> None:
             cache_samples.append(ms)
             cache_meta.append({"status": status, **meta})
 
+        # A second upload must bump the owner's Redis index version and turn the
+        # previously cached answer into a miss.
+        invalidation_upload = await upload_and_wait(
+            client, CONTENT, f"baseline_invalidation_{int(time.time())}.md"
+        )
+        invalidation_ms, invalidation_status, invalidation_meta = await ask(
+            client, cache_query, "grounded_only"
+        )
+
         docs_samples: list[float] = []
         docs_meta: list[dict[str, Any]] = []
         for query in DOC_QUERIES:
@@ -256,6 +265,12 @@ async def main() -> None:
             "idle_health_ms": summarize(idle),
             "upload": upload_result,
             "ask_cache_hit": {**summarize(cache_samples), "samples": cache_meta},
+            "upload_invalidation": invalidation_upload,
+            "ask_cache_after_upload": {
+                "latency_ms": round(invalidation_ms, 3),
+                "status": invalidation_status,
+                **invalidation_meta,
+            },
             "ask_docs": {**summarize(docs_samples), "samples": docs_meta},
             "ask_web": {**summarize(web_samples), "samples": web_meta},
             "ask_web_forced": {"samples": forced_web_meta},

@@ -69,6 +69,7 @@ async def _seed_indexes(
     worker = OutboxWorker(
         qdrant_indexer=cast(QdrantIndexer, qdrant),
         neo4j_indexer=cast(Neo4jIndexer, neo4j),
+        cache_invalidator=CacheInvalidator(redis_client=cast(Any, FakeRedis())),
     )
     await _drain(session, worker)
 

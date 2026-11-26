@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from typing import Any
 
-from app.cache.keys import generate_exact_cache_key
+from app.cache.keys import DEFAULT_INDEX_VERSION, generate_exact_cache_key
 from app.core.acl import ACLScope
 from app.domain import Answer
 
@@ -13,14 +13,19 @@ class FakeExactCache:
         self._store: dict[str, dict[str, Any]] = {}
         self._hits = 0
         self._misses = 0
+        self.index_versions: dict[str, int] = {}
+
+    def current_index_version(self, owner_user_id: str | None = None) -> int:
+        return self.index_versions.get(owner_user_id or "anon", DEFAULT_INDEX_VERSION)
 
     def get(
         self,
         query: str,
-        acl_scope: ACLScope,
-        index_version: int = 1,
+        acl_scope: ACLScope | None = None,
+        index_version: int = DEFAULT_INDEX_VERSION,
         prompt_version: str = "v1",
         owner_user_id: str | None = None,
+        answer_policy: str | None = None,
     ) -> Answer | None:
         key = generate_exact_cache_key(
             query=query,
@@ -28,6 +33,7 @@ class FakeExactCache:
             index_version=index_version,
             prompt_version=prompt_version,
             owner_user_id=owner_user_id,
+            answer_policy=answer_policy,
         )
         entry = self._store.get(key)
         if entry is None:
@@ -53,10 +59,12 @@ class FakeExactCache:
         self,
         query: str,
         answer: Answer,
-        acl_scope: ACLScope,
-        index_version: int = 1,
+        acl_scope: ACLScope | None = None,
+        index_version: int = DEFAULT_INDEX_VERSION,
         prompt_version: str = "v1",
+        ttl_seconds: int | None = None,
         owner_user_id: str | None = None,
+        answer_policy: str | None = None,
     ) -> str:
         key = generate_exact_cache_key(
             query=query,
@@ -64,13 +72,14 @@ class FakeExactCache:
             index_version=index_version,
             prompt_version=prompt_version,
             owner_user_id=owner_user_id,
+            answer_policy=answer_policy,
         )
         self._store[key] = {
             "answer": answer,
             "cached_at": datetime.now(UTC),
             "hit_count": 0,
             "owner_user_id": owner_user_id,
-            "shared_scope": acl_scope.shared_scope,
+            "shared_scope": acl_scope.shared_scope if acl_scope else None,
         }
         return key
 

@@ -9,7 +9,6 @@ from typing import Any
 from langgraph.graph import END, StateGraph
 
 from app.cache.exact import ExactCache
-from app.cache.keys import prompt_version_lookup_chain
 from app.core.acl import ACLScope
 from app.core.config import get_settings
 from app.domain import Answer, Evidence, Provenance
@@ -277,19 +276,19 @@ class RAGOrchestrator:
             query = state.get("rewritten_query") or state["query"]
             scope = state.get("acl_scope", ACLScope.public())
             prompt_version = state.get("prompt_version", PROMPT_VERSION)
+            answer_policy = state.get("answer_policy", "grounded_only")
+            index_version = self.exact_cache.current_index_version(
+                state.get("owner_user_id")
+            )
 
-            # Check exact cache first. Legacy v1 entries remain readable only
-            # for grounded_only; new writes always use the policy-scoped key.
-            hit = None
-            for probe_version in prompt_version_lookup_chain(prompt_version):
-                hit = self.exact_cache.get(
-                    query,
-                    scope,
-                    prompt_version=probe_version,
-                    owner_user_id=state.get("owner_user_id"),
-                )
-                if hit is not None:
-                    break
+            hit = self.exact_cache.get(
+                query,
+                scope,
+                index_version=index_version,
+                prompt_version=prompt_version,
+                owner_user_id=state.get("owner_user_id"),
+                answer_policy=answer_policy,
+            )
             if hit is not None:
                 spans.append(
                     {
@@ -855,8 +854,12 @@ class RAGOrchestrator:
                     query_to_cache,
                     ans_obj,
                     scope,
+                    index_version=self.exact_cache.current_index_version(
+                        state.get("owner_user_id")
+                    ),
                     prompt_version=prompt_version,
                     owner_user_id=state.get("owner_user_id"),
+                    answer_policy=state.get("answer_policy", "grounded_only"),
                 )
 
             return {
@@ -1010,7 +1013,7 @@ class RAGOrchestrator:
             "force_web": force_web,
             "answer_policy": policy,
             "source_kind": "docs",
-            "prompt_version": f"{PROMPT_VERSION}:{policy}",
+            "prompt_version": PROMPT_VERSION,
             "route": "vector",
             "is_cached": False,
             "evidence": [],

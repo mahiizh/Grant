@@ -4,12 +4,20 @@ import logging
 
 import redis
 
-from app.cache.keys import generate_exact_cache_key
+from app.cache.keys import DEFAULT_INDEX_VERSION, generate_exact_cache_key
 from app.core.acl import ACLScope
 from app.core.config import get_settings
 from app.domain import Answer, Evidence, Provenance, SourceTier
 
 logger = logging.getLogger(__name__)
+
+# One day for grounded document answers; web facts go stale faster.
+DOCS_CACHE_TTL_SECONDS = 24 * 60 * 60
+WEB_CACHE_TTL_SECONDS = 6 * 60 * 60
+
+
+def _owner_version_key(owner_user_id: str | None) -> str:
+    return f"index_version:{owner_user_id or 'anon'}"
 
 
 class ExactCache:
@@ -29,13 +37,25 @@ class ExactCache:
             logger.warning("Failed connecting to Redis for ExactCache: %s", e)
             self.client = None
 
+    def current_index_version(self, owner_user_id: str | None = None) -> int:
+        """Read the worker-owned Redis index version for one owner."""
+        if not self.enabled or self.client is None:
+            return DEFAULT_INDEX_VERSION
+        try:
+            raw = self.client.get(_owner_version_key(owner_user_id))
+            return int(raw) if raw is not None else DEFAULT_INDEX_VERSION
+        except Exception as e:
+            logger.warning("Failed reading index version for %s: %s", owner_user_id, e)
+            return DEFAULT_INDEX_VERSION
+
     def get(
         self,
         query: str,
-        acl_scope: ACLScope,
-        index_version: int = 1,
+        acl_scope: ACLScope | None = None,
+        index_version: int = DEFAULT_INDEX_VERSION,
         prompt_version: str = "v1",
         owner_user_id: str | None = None,
+        answer_policy: str | None = None,
     ) -> Answer | None:
         """Retrieve cached Answer if exact key matches in Redis."""
         if not self.enabled:
@@ -47,6 +67,7 @@ class ExactCache:
             index_version=index_version,
             prompt_version=prompt_version,
             owner_user_id=owner_user_id,
+            answer_policy=answer_policy,
         )
         if not self.client:
             self._misses += 1
@@ -105,22 +126,31 @@ class ExactCache:
         self,
         query: str,
         answer: Answer,
-        acl_scope: ACLScope,
-        index_version: int = 1,
+        acl_scope: ACLScope | None = None,
+        index_version: int = DEFAULT_INDEX_VERSION,
         prompt_version: str = "v1",
-        ttl_seconds: int = 3600,
+        ttl_seconds: int | None = None,
         owner_user_id: str | None = None,
+        answer_policy: str | None = None,
     ) -> str:
-        """Store synthesized answer under isolated permission and index-version key in Redis."""
+        """Store a synthesized answer under the exact owner/version/policy key."""
         key = generate_exact_cache_key(
             query=query,
             acl_scope=acl_scope,
             index_version=index_version,
             prompt_version=prompt_version,
             owner_user_id=owner_user_id,
+            answer_policy=answer_policy,
         )
         if not self.enabled or not self.client:
             return key
+
+        if ttl_seconds is None:
+            ttl_seconds = (
+                WEB_CACHE_TTL_SECONDS
+                if answer.source_kind == "web"
+                else DOCS_CACHE_TTL_SECONDS
+            )
 
         try:
             evidence_dicts = [
@@ -147,9 +177,10 @@ class ExactCache:
                 "is_abstention": answer.is_abstention,
                 "source_kind": answer.source_kind,
                 "web_sources": list(answer.web_sources or []),
-                "acl_scope": acl_scope.model_dump(mode="json"),
-                "shared_scope": acl_scope.shared_scope,
+                "acl_scope": acl_scope.model_dump(mode="json") if acl_scope else None,
+                "shared_scope": acl_scope.shared_scope if acl_scope else None,
                 "owner_user_id": owner_user_id,
+                "answer_policy": answer_policy,
             }
 
             self.client.set(f"exact:{key}", json.dumps(payload), ex=ttl_seconds)

@@ -145,6 +145,15 @@ def test_claim_level_citation_verification() -> None:
     assert result_valid.is_valid
     assert result_valid.cited_chunk_ids == ["chunk_storage_01"]
 
+    # 1b. Several citations grouped in one bracket remain valid
+    ev2 = ev1.model_copy(update={"chunk_id": "chunk_storage_02"})
+    grouped_answer = (
+        "PostgreSQL 16 is the source of truth [chunk_storage_01, chunk_storage_02]."
+    )
+    result_grouped = verify_claim_citations(grouped_answer, [ev1, ev2])
+    assert result_grouped.is_valid
+    assert result_grouped.cited_chunk_ids == ["chunk_storage_01", "chunk_storage_02"]
+
     # 2. Missing citation
     uncited_answer = "PostgreSQL 16 is the single source of truth."
     result_uncited = verify_claim_citations(uncited_answer, [ev1])

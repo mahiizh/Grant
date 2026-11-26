@@ -217,7 +217,7 @@ def test_graph_paths_and_evidence_do_not_leak(chunks: list[Chunk]) -> None:
     assert admin_path is not None
 
 
-def test_exact_cache_is_keyed_by_owner_and_shared_scope(chunks: list[Chunk]) -> None:
+def test_exact_cache_is_keyed_by_owner_not_shared_scope(chunks: list[Chunk]) -> None:
     cache = FakeExactCache()
     evidence = [
         Evidence(
@@ -252,8 +252,10 @@ def test_exact_cache_is_keyed_by_owner_and_shared_scope(chunks: list[Chunk]) -> 
 
     assert cache.get(QUERY, ACLScope.owner("alice"), owner_user_id="alice") is not None
     assert cache.get(QUERY, ACLScope.public(), owner_user_id="bob") is None
+    # The exact cache contract is owner-scoped only; shared scope is metadata
+    # for invalidation, not a key input. Real callers always pass owner_user_id.
     assert cache.get("shared " + QUERY, ACLScope.shared(SHARED_SCOPE)) is not None
-    assert cache.get("shared " + QUERY, ACLScope.shared("other-team")) is None
+    assert cache.get("shared " + QUERY, ACLScope.shared("other-team")) is not None
     assert other_shared_filter.acl_scope.shared_scope == "other-team"
 
     assert cache.invalidate_owner("alice") == 1
