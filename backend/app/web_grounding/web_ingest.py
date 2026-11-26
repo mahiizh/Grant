@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.web_grounding.web import WebPage
 from app.core.acl import ACLScope
+from app.core.config import get_settings
 from app.db.models import ChunkRecord, DocumentRecord
 from app.db.postgres import get_session
 from app.domain import Evidence, Provenance
@@ -120,7 +121,7 @@ class WebPageIngestor:
         page: WebPage,
         owner_user_id: str | None,
     ) -> WebIngestResult:
-        text = sanitize_web_markdown(page.text)
+        text = sanitize_web_markdown(page.text)[: get_settings().WEB_MAX_PAGE_CHARS]
         if not text:
             return WebIngestResult(doc_id="", evidence=[], ingested=False)
 
@@ -148,6 +149,8 @@ class WebPageIngestor:
                 source_uri=page.url,
                 acl_scope=ACLScope.owner(owner_user_id) if owner_user_id else ACLScope.public(),
                 owner_user_id=owner_user_id,
+                # The API process never loads GLiNER; only the worker does.
+                use_gliner=False,
             )
         else:
             logger.debug("Skipping unchanged web page for %s", page.url)

@@ -1,9 +1,9 @@
-"""Hermetic-facing wrapper around the external ``graspreach`` web router.
+"""Bounded wrapper around the external ``graspreach`` web router.
 
-The production client imports ``graspreach`` directly from the sibling project's
-``src`` directory. If that import or any call fails, it falls back to a bounded
-``python -m graspreach`` subprocess. Tests replace this client entirely, so no
-network access is needed in the suite.
+Search still uses the in-process router with a subprocess fallback. Reads are
+in-process only: an oversized page is truncated locally, captcha/anti-bot pages
+are discarded, and the remaining URLs are fetched in parallel. Tests replace
+this client entirely, so the suite never needs network access.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -33,6 +34,9 @@ class WebSearchItem:
     url: str
     title: str = ""
     snippet: str = ""
+    # Text returned by the search provider itself (Exa highlights/summary).
+    text: str = ""
+    provider: str = ""
 
 
 @dataclass(frozen=True)
@@ -54,8 +58,24 @@ class WebClient(Protocol):
     async def gather(self, query: str) -> list[WebPage]: ...
 
 
+_ANTIBOT_MARKERS = (
+    "just a moment...",
+    "## performing security verification",
+    "attention required! | cloudflare",
+    "requiring captcha",
+)
+
+
+def is_antibot_text(text: str) -> bool:
+    """Return True for captcha/anti-bot walls that must be dropped, not retried."""
+    sample = text[:4096].casefold()
+    if "warning:" in sample and "requiring captcha" in sample:
+        return True
+    return any(marker in sample for marker in _ANTIBOT_MARKERS)
+
+
 class GraspreachWebClient:
-    """Cached graspreach client with an in-process router and subprocess fallback."""
+    """Cached graspreach client with bounded, in-process page reads."""
 
     def __init__(self) -> None:
         self._search_cache: dict[str, tuple[float, list[WebSearchItem]]] = {}
@@ -96,6 +116,7 @@ class GraspreachWebClient:
         return self._router
 
     def _subprocess_json(self, args: list[str], timeout: float) -> dict[str, Any]:
+        """Search-only fallback. Page reads never use a subprocess."""
         env = os.environ.copy()
         src = str(self._src_path())
         env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
@@ -167,8 +188,15 @@ class GraspreachWebClient:
                 ),
                 timeout=settings.WEB_SEARCH_TIMEOUT_SECONDS + 1.0,
             )
+            provider = str(getattr(result, "provider", "") or "")
             items = [
-                WebSearchItem(url=str(item.url), title=str(item.title), snippet=str(item.snippet))
+                WebSearchItem(
+                    url=str(getattr(item, "url", "")),
+                    title=str(getattr(item, "title", "")),
+                    snippet=str(getattr(item, "snippet", "")),
+                    text=str(getattr(item, "snippet", "") or ""),
+                    provider=provider,
+                )
                 for item in getattr(result, "items", [])
                 if getattr(item, "url", "")
             ]
@@ -182,11 +210,14 @@ class GraspreachWebClient:
                     ["search", query, "--num-results", str(settings.WEB_SEARCH_RESULTS)],
                     settings.WEB_SEARCH_TIMEOUT_SECONDS,
                 )
+                provider = str(payload.get("provider", "") or "")
                 items = [
                     WebSearchItem(
                         url=str(item.get("url", "")),
                         title=str(item.get("title", "")),
-                        snippet=str(item.get("snippet", "")),
+                        snippet=str(item.get("snippet", "") or item.get("text", "") or ""),
+                        text=str(item.get("text") or item.get("snippet") or ""),
+                        provider=provider,
                     )
                     for item in payload.get("items", [])
                     if str(item.get("url", ""))
@@ -198,6 +229,7 @@ class GraspreachWebClient:
         return items
 
     async def read(self, url: str) -> WebPage:
+        """Fetch one URL in-process, truncating large pages instead of failing."""
         settings = get_settings()
         key = self._cache_key(url)
         cached = self._fresh(key, self._page_cache)
@@ -214,13 +246,18 @@ class GraspreachWebClient:
                     router.read,
                     FetchRequest(
                         url=url,
-                        max_bytes=settings.WEB_MAX_PAGE_BYTES,
+                        # Read well past the normal cap, then truncate locally so
+                        # large-but-useful pages no longer fail the whole answer.
+                        max_bytes=settings.WEB_FETCH_MAX_BYTES,
                         timeout=settings.WEB_FETCH_TIMEOUT_SECONDS,
                     ),
                 ),
-                timeout=settings.WEB_FETCH_TIMEOUT_SECONDS + 1.0,
+                timeout=settings.WEB_FETCH_TIMEOUT_SECONDS,
             )
             text = str(getattr(result, "markdown", "") or "")
+            if is_antibot_text(text):
+                logger.info("Dropping captcha/anti-bot page: %s", url)
+                raise WebSearchError(f"anti-bot / captcha page dropped for {url}")
             if text.strip():
                 page = WebPage(
                     url=str(getattr(result, "url", url)),
@@ -229,48 +266,67 @@ class GraspreachWebClient:
                     fetched_at=str(getattr(result, "extracted_at", "") or ""),
                     provider=str(getattr(result, "provider", "") or ""),
                 )
+        except WebSearchError:
+            raise
         except Exception as exc:
-            logger.warning("graspreach in-process read failed for %s; using subprocess: %s", url, exc)
+            logger.warning("graspreach in-process read failed for %s: %s", url, exc)
 
         if page is None:
-            try:
-                payload = await asyncio.to_thread(
-                    self._subprocess_json,
-                    [
-                        "fetch",
-                        url,
-                        "--max-bytes",
-                        str(settings.WEB_MAX_PAGE_BYTES),
-                    ],
-                    settings.WEB_FETCH_TIMEOUT_SECONDS,
-                )
-                text = str(payload.get("markdown", "") or "")
-                if text.strip():
-                    page = WebPage(
-                        url=str(payload.get("url", url)),
-                        text=text[: settings.WEB_MAX_PAGE_CHARS],
-                        title=str(payload.get("title", "") or ""),
-                    )
-            except Exception as exc:
-                logger.warning("graspreach subprocess read failed for %s: %s", url, exc)
-
-        if page is None:
-            raise WebSearchError(f"no content fetched for {url}")
+            raise WebSearchError(f"no usable content fetched for {url}")
         self._store(key, page, self._page_cache)
         return page
 
     async def gather(self, query: str) -> list[WebPage]:
+        """Search, reuse provider text, then fetch the remainder in parallel."""
         settings = get_settings()
         try:
             async with asyncio.timeout(settings.WEB_TOTAL_BUDGET_SECONDS):
                 items = await self.search(query)
                 if not items:
                     return []
-                results = await asyncio.gather(
-                    *(self.read(item.url) for item in items[: settings.WEB_SEARCH_RESULTS]),
-                    return_exceptions=True,
-                )
-                pages = [page for page in results if isinstance(page, WebPage)]
+
+                pages: list[WebPage] = []
+                to_fetch: list[WebSearchItem] = []
+                seen_urls: set[str] = set()
+                for item in items[: settings.WEB_SEARCH_RESULTS]:
+                    url = str(item.url or "").strip()
+                    if not url or url.casefold() in seen_urls:
+                        continue
+                    seen_urls.add(url.casefold())
+                    provider_text = str(item.text or item.snippet or "").strip()
+                    if provider_text and not is_antibot_text(provider_text):
+                        # Exa already returned page text: use it instead of paying
+                        # for another network round trip.
+                        pages.append(
+                            WebPage(
+                                url=url,
+                                title=item.title,
+                                text=provider_text[: settings.WEB_MAX_PAGE_CHARS],
+                                fetched_at=datetime.now(UTC).isoformat(),
+                                provider=item.provider or "search",
+                            )
+                        )
+                    else:
+                        to_fetch.append(item)
+
+                if to_fetch:
+                    async def read_bounded(item: WebSearchItem) -> WebPage | None:
+                        try:
+                            return await asyncio.wait_for(
+                                self.read(item.url),
+                                timeout=settings.WEB_FETCH_TIMEOUT_SECONDS,
+                            )
+                        except Exception as exc:
+                            logger.warning("Web fetch dropped for %s: %s", item.url, exc)
+                            return None
+
+                    fetched = await asyncio.gather(
+                        *(read_bounded(item) for item in to_fetch),
+                        return_exceptions=True,
+                    )
+                    pages.extend(page for page in fetched if isinstance(page, WebPage))
+
+                pages = pages[: settings.WEB_SEARCH_RESULTS]
                 if not pages:
                     raise WebSearchError("all web fetches failed")
                 return pages

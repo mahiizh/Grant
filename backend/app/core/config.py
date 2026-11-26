@@ -105,10 +105,12 @@ class Settings(BaseSettings):
     GRASPREACH_PYTHON: str | None = None
     WEB_SEARCH_RESULTS: int = 3
     WEB_MAX_PAGE_CHARS: int = 12000
-    WEB_MAX_PAGE_BYTES: int = 64 * 1024
+    # Fetch well above the response cap so the wrapper can truncate locally
+    # instead of failing a whole Ask on one oversized page.
+    WEB_FETCH_MAX_BYTES: int = 2 * 1024 * 1024
     WEB_SEARCH_TIMEOUT_SECONDS: float = 8.0
-    WEB_FETCH_TIMEOUT_SECONDS: float = 8.0
-    WEB_TOTAL_BUDGET_SECONDS: float = 20.0
+    WEB_FETCH_TIMEOUT_SECONDS: float = 5.0
+    WEB_TOTAL_BUDGET_SECONDS: float = 12.0
     WEB_CACHE_TTL_SECONDS: int = 600
 
     # Extraction (GLiNER, local, no LLM in ingestion)
