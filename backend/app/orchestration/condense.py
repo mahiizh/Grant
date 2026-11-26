@@ -3,6 +3,7 @@ import time
 from typing import Any
 
 from app.llm.gateway import ModelGateway
+from app.observability import tracer as telemetry
 
 PRONOUN_PATTERNS = {
     "they": ["they", "them", "their", "theirs"],
@@ -76,7 +77,9 @@ async def condense_query(
             + f"\n\nFollow-up Question: {raw_query}\n\nStandalone Query:"
         )
         try:
-            resp = await gateway.complete(prompt=prompt)
+            with telemetry.get_tracer().start_as_current_span("llm.completion") as llm_span:
+                resp = await gateway.complete(prompt=prompt)
+                telemetry.record_llm_usage(llm_span, resp)
             candidate = resp.content.strip().strip('"').strip("'")
             if candidate and len(candidate) > 5:
                 return candidate, round((time.perf_counter() - start_time) * 1000.0, 2)

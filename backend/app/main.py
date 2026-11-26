@@ -35,6 +35,7 @@ from app.core.store_guard import (
     WRITE_REFUSAL,
     http_write_violations,
 )
+from app.observability.tracer import setup_telemetry
 from app.runtime import shutdown_models, startup_models
 
 
@@ -42,6 +43,8 @@ from app.runtime import shutdown_models, startup_models
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Lifespan startup: verify real infrastructure & keys in live mode, init DB schema
     await verify_infrastructure_live()
+    # Register the Langfuse OTLP tracer once; a no-op when keys are unset.
+    setup_telemetry()
     # Build and warm local models once; all inference now reuses this bundle.
     await startup_models()
     yield

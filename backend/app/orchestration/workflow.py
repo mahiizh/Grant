@@ -16,6 +16,7 @@ from app.graph.retrievers import GraphRetriever
 from app.history.service import QueryHistory, get_query_history
 from app.llm.citations import verify_claim_citations
 from app.llm.gateway import ModelGateway
+from app.observability import tracer as telemetry
 from app.observability.stage_timing import (
     end_stage_timings,
     record_stage,
@@ -768,7 +769,9 @@ class RAGOrchestrator:
                     mock_ans = "I do not have sufficient information to answer this question."
 
             gen_start = time.perf_counter()
-            resp = await self.gateway.complete(prompt=prompt, mock_response=mock_ans)
+            with telemetry.get_tracer().start_as_current_span("llm.completion") as llm_span:
+                resp = await self.gateway.complete(prompt=prompt, mock_response=mock_ans)
+                telemetry.record_llm_usage(llm_span, resp)
             gen_dur = round((time.perf_counter() - gen_start) * 1000.0, 2)
             record_stage("llm", gen_dur)
 
@@ -874,16 +877,21 @@ class RAGOrchestrator:
                 "spans": spans,
             }
 
-        # Register nodes in graph
-        workflow.add_node("condense_step", condense_node)
-        workflow.add_node("route_step", route_node)
-        workflow.add_node("small_talk_step", small_talk_node)
-        workflow.add_node("cache_step", cache_node)
-        workflow.add_node("retrieve_step", retrieve_node)
-        workflow.add_node("web_step", web_node)
-        workflow.add_node("abstain_step", abstain_node)
-        workflow.add_node("retrieval_only_step", retrieval_only_node)
-        workflow.add_node("generate_step", generate_node)
+        # Register nodes in graph. Each node is wrapped in one OTel span.
+        workflow.add_node("condense_step", telemetry.traced_node("condense_step", condense_node))
+        workflow.add_node("route_step", telemetry.traced_node("route_step", route_node))
+        workflow.add_node(
+            "small_talk_step", telemetry.traced_node("small_talk_step", small_talk_node)
+        )
+        workflow.add_node("cache_step", telemetry.traced_node("cache_step", cache_node))
+        workflow.add_node("retrieve_step", telemetry.traced_node("retrieve_step", retrieve_node))
+        workflow.add_node("web_step", telemetry.traced_node("web_step", web_node))
+        workflow.add_node("abstain_step", telemetry.traced_node("abstain_step", abstain_node))
+        workflow.add_node(
+            "retrieval_only_step",
+            telemetry.traced_node("retrieval_only_step", retrieval_only_node),
+        )
+        workflow.add_node("generate_step", telemetry.traced_node("generate_step", generate_node))
 
         # Wire edges: start at condense_step
         workflow.set_entry_point("condense_step")
