@@ -7,9 +7,11 @@ for uploaded documents.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -25,6 +27,8 @@ from app.db.postgres import get_session
 from app.domain import Evidence, Provenance
 from app.domain.ids import generate_doc_id
 from app.ingestion.pipeline import IngestionPipeline
+from app.retrieval.dense import cosine_similarity
+from app.retrieval.embeddings import get_embedding_service
 from app.security.injection import INJECTION_PATTERNS
 
 logger = logging.getLogger(__name__)
@@ -56,6 +60,91 @@ def sanitize_web_markdown(text: str) -> str:
     return sanitized.strip()
 
 
+def chunk_web_text(
+    text: str,
+    chunk_chars: int | None = None,
+    overlap_chars: int | None = None,
+) -> list[str]:
+    """Split page text into bounded chunks on word boundaries with overlap."""
+    settings = get_settings()
+    limit = chunk_chars if chunk_chars is not None else settings.WEB_CHUNK_CHARS
+    overlap = overlap_chars if overlap_chars is not None else settings.WEB_CHUNK_OVERLAP_CHARS
+    limit = max(1, limit)
+    overlap = max(0, min(overlap, limit // 3))
+
+    words = text.split()
+    if not words:
+        return []
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for word in words:
+        extra = len(word) + (1 if current else 0)
+        if current and current_len + extra > limit:
+            chunks.append(" ".join(current))
+            tail: list[str] = []
+            tail_len = 0
+            for previous in reversed(current):
+                needed = len(previous) + (1 if tail else 0)
+                if tail_len + needed > overlap:
+                    break
+                tail.insert(0, previous)
+                tail_len += needed
+            current = tail
+            current_len = tail_len
+            extra = len(word) + (1 if current else 0)
+        current.append(word)
+        current_len += extra
+    if current:
+        chunks.append(" ".join(current))
+    return chunks
+
+
+async def _dense_similarity_scores(query: str, texts: Sequence[str]) -> list[float]:
+    """Score chunks with the warmed dense model; no new model is loaded per ask."""
+    if not texts:
+        return []
+    service = get_embedding_service()
+    query_vector, chunk_vectors = await asyncio.gather(
+        service.aembed_query_dense(query),
+        service.aembed_chunks_dense(texts),
+    )
+    return [cosine_similarity(query_vector, vector) for vector in chunk_vectors]
+
+
+WebScoreFn = Callable[[str, Sequence[str]], Awaitable[Sequence[float]]]
+
+
+async def select_top_web_chunks(
+    query: str,
+    evidence: Sequence[Evidence],
+    limit: int | None = None,
+    scorer: WebScoreFn | None = None,
+) -> list[Evidence]:
+    """Keep the ``limit`` most question-relevant web chunks, preserving order."""
+    cap = limit if limit is not None else get_settings().WEB_TOP_CHUNKS
+    if cap <= 0 or len(evidence) <= cap:
+        return list(evidence)
+
+    texts = [item.text for item in evidence]
+    score_fn = scorer or _dense_similarity_scores
+    scores = await score_fn(query, texts)
+    if len(scores) != len(evidence):
+        raise ValueError("web chunk scorer must return one score per chunk")
+
+    ranked = sorted(
+        range(len(evidence)),
+        key=lambda idx: (-float(scores[idx]), idx),
+    )
+    selected: list[Evidence] = []
+    for idx in ranked[:cap]:
+        selected.append(
+            evidence[idx].model_copy(update={"score": round(float(scores[idx]), 4)})
+        )
+    return selected
+
+
 def _page_content_hash(page: WebPage, text: str) -> str:
     payload = f"{page.url}\n{page.title}\n{text}".encode()
     return hashlib.sha256(payload).hexdigest()
@@ -72,12 +161,15 @@ def _frontmatter_value(value: str) -> str:
 
 def _build_web_document(
     page: WebPage,
-    text: str,
+    chunks: Sequence[str],
     doc_id: str,
     content_hash: str,
     fetched_at: str,
 ) -> str:
     title = page.title.strip() or page.url
+    body = "\n\n".join(
+        f"## Web chunk {index}\n{chunk}" for index, chunk in enumerate(chunks, start=1)
+    )
     return (
         "---\n"
         f"title: {_frontmatter_value(title)}\n"
@@ -87,7 +179,7 @@ def _build_web_document(
         f"fetched_at: {_frontmatter_value(fetched_at)}\n"
         f"web_content_hash: {_frontmatter_value(content_hash)}\n"
         "---\n\n"
-        f"# {title}\n\n{text}\n"
+        f"# {title}\n\n{body}\n"
     )
 
 
@@ -122,7 +214,8 @@ class WebPageIngestor:
         owner_user_id: str | None,
     ) -> WebIngestResult:
         text = sanitize_web_markdown(page.text)[: get_settings().WEB_MAX_PAGE_CHARS]
-        if not text:
+        chunks = chunk_web_text(text)
+        if not chunks:
             return WebIngestResult(doc_id="", evidence=[], ingested=False)
 
         content_hash = _page_content_hash(page, text)
@@ -142,7 +235,7 @@ class WebPageIngestor:
         )
 
         if not unchanged:
-            content = _build_web_document(page, text, doc_id, content_hash, fetched_at)
+            content = _build_web_document(page, chunks, doc_id, content_hash, fetched_at)
             await IngestionPipeline.ingest_text(
                 session=session,
                 content=content,

@@ -39,6 +39,9 @@ class RAGState(TypedDict, total=False):
     source_kind: AnswerSourceKind
     # Retrieval-only evals skip answer generation; multi-turn rewrites still run.
     retrieval_only: bool
+    # Diagnostic baseline flag: run retrieval, but force the web branch even if
+    # a previous run indexed a page for the same topic.
+    force_web: bool
     route: str  # "cache", "vector", "graph", "hybrid", "abstain"
     is_cached: bool
     evidence: list[Evidence]

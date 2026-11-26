@@ -10,6 +10,8 @@ class QueryRequest(BaseModel):
     scope: str | None = None
     thread_id: str | None = None
     answer_policy: Literal["grounded_only", "grounded_plus_web"] = "grounded_plus_web"
+    # Diagnostic flag for live web-stage baselines; never set by the UI.
+    force_web: bool = False
 
 
 class EvidenceItem(BaseModel):

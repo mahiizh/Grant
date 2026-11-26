@@ -113,6 +113,11 @@ class Settings(BaseSettings):
     GRASPREACH_PYTHON: str | None = None
     WEB_SEARCH_RESULTS: int = 3
     WEB_MAX_PAGE_CHARS: int = 12000
+    # Split each fetched page into bounded chunks before write-back, then keep
+    # only the chunks most similar to the question for prompt context.
+    WEB_CHUNK_CHARS: int = 1200
+    WEB_CHUNK_OVERLAP_CHARS: int = 120
+    WEB_TOP_CHUNKS: int = 5
     # Fetch well above the response cap so the wrapper can truncate locally
     # instead of failing a whole Ask on one oversized page.
     WEB_FETCH_MAX_BYTES: int = 2 * 1024 * 1024

@@ -32,7 +32,11 @@ from app.retrieval.filters import RetrievalFilter
 from app.retrieval.hybrid import HybridRetriever
 from app.security.injection import wrap_context_for_prompt
 from app.web_grounding.web import WebClient, WebPage, get_web_client
-from app.web_grounding.web_ingest import WebIngestor, get_web_ingestor
+from app.web_grounding.web_ingest import (
+    WebIngestor,
+    get_web_ingestor,
+    select_top_web_chunks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -266,7 +270,8 @@ class RAGOrchestrator:
 
             # A comparison run can disable exact and semantic caching entirely:
             # a hit would return an answer produced by a different config.
-            if not self.cache_enabled:
+            # Forced-web probes must also bypass cached doc answers.
+            if not self.cache_enabled or state.get("force_web", False):
                 return {"is_cached": False, "spans": spans}
 
             query = state.get("rewritten_query") or state["query"]
@@ -672,6 +677,9 @@ class RAGOrchestrator:
                 ]
                 web_sources[-1]["write_back_error"] = str(exc)[:200] if web_sources else None
 
+            staged_count = len(evidence)
+            async with timed_stage("web_select"):
+                evidence = await select_top_web_chunks(query, evidence)
             spans.append(
                 {
                     "id": f"sp-{uuid.uuid4().hex[:6]}",
@@ -680,7 +688,10 @@ class RAGOrchestrator:
                     "start_ms": 62.0,
                     "duration_ms": round((time.perf_counter() - started) * 1000.0, 2),
                     "status": "ok",
-                    "meta": f"Fetched {len(pages)} pages, staged {len(evidence)} web chunks",
+                    "meta": (
+                        f"Fetched {len(pages)} pages, staged {staged_count} web chunks, "
+                        f"selected {len(evidence)}"
+                    ),
                 }
             )
             return {
@@ -901,6 +912,8 @@ class RAGOrchestrator:
             policy = state.get("answer_policy", "grounded_only")
             if state.get("retrieval_only", False):
                 return "retrieval_only_step"
+            if state.get("force_web", False) and policy == "grounded_plus_web":
+                return "web_step"
             if not evidence:
                 if policy == "grounded_plus_web":
                     return "web_step"
@@ -936,6 +949,7 @@ class RAGOrchestrator:
         thread_history: list[dict[str, Any]] | None = None,
         retrieval_config: RetrievalConfig = "full",
         retrieval_only: bool = False,
+        force_web: bool = False,
         owner_user_id: str | None = None,
         is_admin: bool = False,
         answer_policy: AnswerPolicy | None = None,
@@ -950,6 +964,7 @@ class RAGOrchestrator:
                 thread_history=thread_history,
                 retrieval_config=retrieval_config,
                 retrieval_only=retrieval_only,
+                force_web=force_web,
                 owner_user_id=owner_user_id,
                 is_admin=is_admin,
                 answer_policy=answer_policy,
@@ -968,6 +983,7 @@ class RAGOrchestrator:
         thread_history: list[dict[str, Any]] | None = None,
         retrieval_config: RetrievalConfig = "full",
         retrieval_only: bool = False,
+        force_web: bool = False,
         owner_user_id: str | None = None,
         is_admin: bool = False,
         answer_policy: AnswerPolicy | None = None,
@@ -991,6 +1007,7 @@ class RAGOrchestrator:
             "is_admin": is_admin,
             "retrieval_config": retrieval_config,
             "retrieval_only": retrieval_only,
+            "force_web": force_web,
             "answer_policy": policy,
             "source_kind": "docs",
             "prompt_version": f"{PROMPT_VERSION}:{policy}",

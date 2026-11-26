@@ -31,6 +31,14 @@ WEB_QUERIES = [
     "What is the capital of Mongolia?",
     "What is the tallest mountain in Africa?",
 ]
+# Distinct from WEB_QUERIES so an exact-cache hit cannot hide web write-back or
+# chunk selection. A per-run suffix prevents a previous probe's cache entry from
+# short-circuiting the forced-web stage breakdown.
+FORCED_WEB_QUERY_BASES = [
+    "Who won the 2026 FIFA World Cup final and what was the score?",
+    "What is the current population of Ulaanbaatar in 2026?",
+    "What is the atomic number of tungsten?",
+]
 
 CONTENT = "\n\n".join(
     [
@@ -155,13 +163,14 @@ async def ask(
     query: str,
     policy: str,
     timeout: float = 120.0,
+    force_web: bool = False,
 ) -> tuple[float, int, dict[str, Any]]:
     started = time.perf_counter()
     try:
         response = await client.post(
             f"{BASE}/query",
             headers={**HEADERS, "Content-Type": "application/json"},
-            json={"query": query, "answer_policy": policy},
+            json={"query": query, "answer_policy": policy, "force_web": force_web},
             timeout=timeout,
         )
         elapsed = (time.perf_counter() - started) * 1000.0
@@ -227,12 +236,29 @@ async def main() -> None:
             web_samples.append(ms)
             web_meta.append({"status": status, **meta})
 
+        forced_web_meta: list[dict[str, Any]] = []
+        run_suffix = f"live web check {int(time.time())}"
+        for base_query in FORCED_WEB_QUERY_BASES:
+            query = f"{base_query} ({run_suffix})"
+            ms, status, meta = await ask(
+                client, query, "grounded_plus_web", force_web=True
+            )
+            forced_web_meta.append(
+                {
+                    "latency_ms": round(ms, 3),
+                    "status": status,
+                    "stage_timings_ms": meta.get("stage_timings_ms", {}),
+                    **meta,
+                }
+            )
+
         result = {
             "idle_health_ms": summarize(idle),
             "upload": upload_result,
             "ask_cache_hit": {**summarize(cache_samples), "samples": cache_meta},
             "ask_docs": {**summarize(docs_samples), "samples": docs_meta},
             "ask_web": {**summarize(web_samples), "samples": web_meta},
+            "ask_web_forced": {"samples": forced_web_meta},
         }
         OUT.mkdir(parents=True, exist_ok=True)
         target = OUT / "baseline_after_worker.json"

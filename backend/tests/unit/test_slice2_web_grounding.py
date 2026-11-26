@@ -20,7 +20,12 @@ from app.orchestration.workflow import NOT_FOUND_MARKER, RAGOrchestrator
 from app.retrieval.filters import RetrievalFilter
 from app.retrieval.hybrid import HybridRetriever as RealHybridRetriever
 from app.web_grounding.web import WebPage
-from app.web_grounding.web_ingest import _web_doc_id, sanitize_web_markdown
+from app.web_grounding.web_ingest import (
+    _web_doc_id,
+    chunk_web_text,
+    sanitize_web_markdown,
+    select_top_web_chunks,
+)
 from tests.fakes.fake_gateway import FakeModelGateway
 from tests.fakes.fake_web import FakeWebIngestor
 from tests.fakes.in_memory_indexers import FakeNeo4jIndexer, FakeQdrantIndexer
@@ -349,6 +354,126 @@ async def test_doc_question_with_grounded_plus_web_uses_docs_without_web_call(
     assert not state["is_abstention"]
     assert mock_graspreach.client.gather_calls == []
     assert [item.score for item in state["evidence"]] == [0.9]
+
+
+def test_chunk_web_text_splits_a_long_page_on_word_boundaries() -> None:
+    text = " ".join(f"token{index:03d}" for index in range(160))
+
+    chunks = chunk_web_text(text, chunk_chars=120, overlap_chars=27)
+
+    assert len(chunks) > 5
+    assert all(len(chunk) <= 120 for chunk in chunks)
+    assert "token000" in chunks[0]
+    assert chunks[0].split()[-3:] == chunks[1].split()[:3]
+
+
+@pytest.mark.anyio
+async def test_select_top_web_chunks_keeps_five_most_relevant() -> None:
+    evidence = [
+        Evidence(
+            chunk_id=f"chunk-{index}",
+            doc_id="doc_web",
+            text=f"web chunk {index}",
+            score=0.0,
+            retrieval_method="web",
+            provenance=Provenance.from_agent("https://example.com/page"),
+        )
+        for index in range(9)
+    ]
+
+    async def scorer(_query: str, texts: Any) -> list[float]:
+        return [float(text.rsplit(" ", 1)[-1]) for text in texts]
+
+    selected = await select_top_web_chunks("question", evidence, limit=5, scorer=scorer)
+
+    assert [item.chunk_id for item in selected] == [
+        "chunk-8",
+        "chunk-7",
+        "chunk-6",
+        "chunk-5",
+        "chunk-4",
+    ]
+    assert [item.score for item in selected] == [8.0, 7.0, 6.0, 5.0, 4.0]
+    # The input is immutable; selection only returns updated copies.
+    assert all(item.score == 0.0 for item in evidence)
+
+
+@pytest.mark.anyio
+async def test_web_node_reduces_many_staged_chunks_to_top_five(
+    mock_graspreach: Any,
+    monkeypatch: Any,
+) -> None:
+    from app.orchestration import workflow as workflow_module
+
+    url = "https://example.com/long-web-page"
+    mock_graspreach.client.pages = [
+        WebPage(url=url, title="Long page", text="One fetched page with many chunks.")
+    ]
+    chunks = [
+        Evidence(
+            chunk_id=f"chunk-{index}",
+            doc_id=f"web:{url}",
+            text=f"web chunk {index}",
+            score=0.0,
+            retrieval_method="web",
+            provenance=Provenance.from_agent(url),
+        )
+        for index in range(8)
+    ]
+    mock_graspreach.ingestor = FakeWebIngestor(evidence=chunks)
+
+    async def deterministic_scores(_query: str, texts: Any) -> list[float]:
+        return [float(text.rsplit(" ", 1)[-1]) for text in texts]
+
+    async def configured_selector(query: str, evidence: Any, limit: Any = None) -> Any:
+        return await select_top_web_chunks(
+            query, evidence, limit=limit, scorer=deterministic_scores
+        )
+
+    monkeypatch.setattr(workflow_module, "select_top_web_chunks", configured_selector)
+
+    state = await build_orchestrator(
+        web_client=mock_graspreach.client,
+        web_ingestor=mock_graspreach.ingestor,
+    ).run(
+        query="Which web chunks answer the question?",
+        answer_policy="grounded_plus_web",
+        owner_user_id="usr_alice_01",
+    )
+
+    assert [item.chunk_id for item in state["evidence"]] == [
+        "chunk-7",
+        "chunk-6",
+        "chunk-5",
+        "chunk-4",
+        "chunk-3",
+    ]
+    assert "web_select" in state["stage_timings_ms"]
+
+
+@pytest.mark.anyio
+async def test_force_web_bypasses_retrieved_docs_and_cache(mock_graspreach: Any) -> None:
+    """The baseline flag forces a fresh web branch even with doc evidence."""
+    url = "https://example.com/forced-web"
+    mock_graspreach.client.pages = [
+        WebPage(url=url, title="Forced web", text="Fresh live web result.")
+    ]
+
+    state = await build_orchestrator(
+        hybrid=EvidenceHybridRetriever(),
+        web_client=mock_graspreach.client,
+        web_ingestor=mock_graspreach.ingestor,
+    ).run(
+        query="Which database is the authoritative document store?",
+        answer_policy="grounded_plus_web",
+        owner_user_id="usr_alice_01",
+        force_web=True,
+    )
+
+    assert state["is_cached"] is False
+    assert state["source_kind"] == "web"
+    assert len(mock_graspreach.client.gather_calls) == 1
+    assert state["web_sources"][0]["url"] == url
 
 
 @pytest.mark.anyio

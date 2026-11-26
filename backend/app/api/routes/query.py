@@ -52,6 +52,7 @@ async def query_pipeline(
                 thread_id=request.thread_id,
                 owner_user_id=current_user.user_id,
                 answer_policy=request.answer_policy,
+                force_web=request.force_web,
             )
         )
     except AskBudgetExceededError as exc:
