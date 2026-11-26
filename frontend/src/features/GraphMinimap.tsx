@@ -1,10 +1,9 @@
 import { useMemo } from "react";
-import { EnrichedNode } from "../hooks/useGraphAnalytics";
-import { GraphLink } from "../types/graph";
+import { GraphLink, GraphNode } from "../types/graph";
 
 export interface GraphMinimapProps {
-  nodes: EnrichedNode[];
-  links: GraphLink[];
+  nodes: GraphNode[];
+  links?: GraphLink[];
   selectedNodeId: string | null;
   onMinimapClick?: (x: number, y: number) => void;
 }

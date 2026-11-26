@@ -2,21 +2,22 @@ import { useState, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { EnrichedNode } from "../hooks/useGraphAnalytics";
-import { Search, ArrowUpDown, Focus, Filter } from "lucide-react";
+import type { GraphNode } from "../types/graph";
+import { Search, ArrowUpDown } from "lucide-react";
 
 export interface EntityTableProps {
-  nodes: EnrichedNode[];
+  nodes: GraphNode[];
   onSelectNode: (nodeId: string) => void;
   selectedNodeId?: string | null;
 }
 
+type SortField = "name" | "type" | "degree";
+
 export function EntityTable({ nodes, onSelectNode, selectedNodeId }: EntityTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedType, setSelectedType] = useState<string>("all");
-  const [selectedCluster, setSelectedCluster] = useState<string>("all");
   const [minDegree, setMinDegree] = useState<number>(0);
-  const [sortField, setSortField] = useState<"name" | "type" | "degree" | "pageRank">("pageRank");
+  const [sortField, setSortField] = useState<SortField>("degree");
   const [sortAsc, setSortAsc] = useState(false);
 
   const parentRef = useRef<HTMLDivElement>(null);
@@ -29,27 +30,19 @@ export function EntityTable({ nodes, onSelectNode, selectedNodeId }: EntityTable
     service: "success",
   };
 
-  const uniqueClusters = useMemo(() => {
-    const map = new Map<number, string>();
-    nodes.forEach((n) => map.set(n.cluster, n.clusterName));
-    return Array.from(map.entries()).map(([id, name]) => ({ id, name }));
-  }, [nodes]);
-
   const processedNodes = useMemo(() => {
     return nodes
       .filter((n) => {
         const matchesSearch =
           n.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          n.type.toLowerCase().includes(searchTerm.toLowerCase()) ||
-          n.clusterName.toLowerCase().includes(searchTerm.toLowerCase());
+          n.type.toLowerCase().includes(searchTerm.toLowerCase());
         const matchesType = selectedType === "all" || n.type === selectedType;
-        const matchesCluster = selectedCluster === "all" || n.cluster.toString() === selectedCluster;
-        const matchesDegree = n.degree >= minDegree;
-        return matchesSearch && matchesType && matchesCluster && matchesDegree;
+        const matchesDegree = (n.degree ?? 0) >= minDegree;
+        return matchesSearch && matchesType && matchesDegree;
       })
       .sort((a, b) => {
-        let valA = a[sortField];
-        let valB = b[sortField];
+        let valA: string | number = sortField === "degree" ? (a.degree ?? 0) : a[sortField];
+        let valB: string | number = sortField === "degree" ? (b.degree ?? 0) : b[sortField];
         if (typeof valA === "string") valA = valA.toLowerCase();
         if (typeof valB === "string") valB = valB.toLowerCase();
 
@@ -57,7 +50,7 @@ export function EntityTable({ nodes, onSelectNode, selectedNodeId }: EntityTable
         if (valA > valB) return sortAsc ? 1 : -1;
         return 0;
       });
-  }, [nodes, searchTerm, selectedType, selectedCluster, minDegree, sortField, sortAsc]);
+  }, [nodes, searchTerm, selectedType, minDegree, sortField, sortAsc]);
 
   // Virtualizer for smooth rendering of large node lists
   const rowVirtualizer = useVirtualizer({
@@ -67,7 +60,7 @@ export function EntityTable({ nodes, onSelectNode, selectedNodeId }: EntityTable
     overscan: 6,
   });
 
-  const handleSort = (field: "name" | "type" | "degree" | "pageRank") => {
+  const handleSort = (field: SortField) => {
     if (sortField === field) {
       setSortAsc(!sortAsc);
     } else {
@@ -110,23 +103,6 @@ export function EntityTable({ nodes, onSelectNode, selectedNodeId }: EntityTable
             ))}
           </div>
 
-          {/* Cluster Dropdown */}
-          <div className="flex items-center gap-1">
-            <Filter className="h-3 w-3 text-zinc-500" />
-            <select
-              value={selectedCluster}
-              onChange={(e) => setSelectedCluster(e.target.value)}
-              className="h-6 rounded bg-zinc-900 border border-zinc-800 text-[10px] font-mono text-zinc-300 px-2 focus:outline-none"
-            >
-              <option value="all">All Clusters</option>
-              {uniqueClusters.map((c) => (
-                <option key={c.id} value={c.id.toString()}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
           {/* Degree Filter */}
           <div className="hidden xl:flex items-center gap-1.5 text-[10px] font-mono text-zinc-400">
             <span>Min Degree: {minDegree}</span>
@@ -151,35 +127,27 @@ export function EntityTable({ nodes, onSelectNode, selectedNodeId }: EntityTable
         {/* Sticky Table Header */}
         <div className="grid grid-cols-12 bg-zinc-900/80 border-b border-zinc-800/80 px-3 py-2 text-[11px] font-mono text-zinc-400 shrink-0">
           <div
-            className="col-span-3 flex items-center gap-1 cursor-pointer hover:text-zinc-200 transition-colors"
+            className="col-span-5 flex items-center gap-1 cursor-pointer hover:text-zinc-200 transition-colors"
             onClick={() => handleSort("name")}
           >
             <span>Entity</span>
             <ArrowUpDown className="h-3 w-3 text-zinc-600" />
           </div>
           <div
-            className="col-span-2 flex items-center gap-1 cursor-pointer hover:text-zinc-200 transition-colors"
+            className="col-span-3 flex items-center gap-1 cursor-pointer hover:text-zinc-200 transition-colors"
             onClick={() => handleSort("type")}
           >
             <span>Type</span>
             <ArrowUpDown className="h-3 w-3 text-zinc-600" />
           </div>
-          <div className="col-span-3">Cluster</div>
           <div
-            className="col-span-1 text-right flex items-center justify-end gap-1 cursor-pointer hover:text-zinc-200"
+            className="col-span-2 text-right flex items-center justify-end gap-1 cursor-pointer hover:text-zinc-200"
             onClick={() => handleSort("degree")}
           >
             <span>Deg</span>
             <ArrowUpDown className="h-3 w-3 text-zinc-600" />
           </div>
-          <div
-            className="col-span-2 text-right flex items-center justify-end gap-1 cursor-pointer hover:text-zinc-200"
-            onClick={() => handleSort("pageRank")}
-          >
-            <span>PageRank</span>
-            <ArrowUpDown className="h-3 w-3 text-zinc-600" />
-          </div>
-          <div className="col-span-1 text-center">Focus</div>
+          <div className="col-span-2 text-center">Focus</div>
         </div>
 
         {/* Virtualized Body */}
@@ -218,14 +186,14 @@ export function EntityTable({ nodes, onSelectNode, selectedNodeId }: EntityTable
                         : "hover:bg-zinc-900/60"
                     }`}
                   >
-                    <div className="col-span-3 font-medium text-zinc-200 flex items-center gap-1.5 truncate">
+                    <div className="col-span-5 font-medium text-zinc-200 flex items-center gap-1.5 truncate">
                       {isSelected && (
                         <span className="h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0 animate-pulse" />
                       )}
                       <span className="truncate">{node.name}</span>
                     </div>
 
-                    <div className="col-span-2">
+                    <div className="col-span-3">
                       <Badge
                         variant={typeVariants[node.type] || "secondary"}
                         className="text-[9px] font-mono uppercase"
@@ -234,19 +202,11 @@ export function EntityTable({ nodes, onSelectNode, selectedNodeId }: EntityTable
                       </Badge>
                     </div>
 
-                    <div className="col-span-3 text-zinc-400 font-mono text-[11px] truncate">
-                      {node.clusterName}
+                    <div className="col-span-2 text-right font-mono text-zinc-300 tabular-nums">
+                      {node.degree ?? 0}
                     </div>
 
-                    <div className="col-span-1 text-right font-mono text-zinc-300 tabular-nums">
-                      {node.degree}
-                    </div>
-
-                    <div className="col-span-2 text-right font-mono text-amber-400 tabular-nums">
-                      {node.pageRank?.toFixed(4) || "0.0000"}
-                    </div>
-
-                    <div className="col-span-1 text-center">
+                    <div className="col-span-2 text-center">
                       <Button
                         variant="ghost"
                         size="sm"
@@ -257,7 +217,7 @@ export function EntityTable({ nodes, onSelectNode, selectedNodeId }: EntityTable
                         className="h-6 w-6 p-0 text-zinc-400 hover:text-amber-400 hover:bg-zinc-800"
                         title="Focus on Graph"
                       >
-                        <Focus className="h-3 w-3" />
+                        <FocusIcon />
                       </Button>
                     </div>
                   </div>
@@ -268,6 +228,24 @@ export function EntityTable({ nodes, onSelectNode, selectedNodeId }: EntityTable
         </div>
       </div>
     </div>
+  );
+}
+
+function FocusIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className="h-3 w-3"
+    >
+      <circle cx="12" cy="12" r="3" />
+      <path d="M3 12h4m10 0h4M12 3v4m0 10v4" />
+    </svg>
   );
 }
 

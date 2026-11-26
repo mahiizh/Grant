@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { EnrichedNode } from "../hooks/useGraphAnalytics";
+import { GraphNode } from "../types/graph";
 import {
   Maximize2,
   Route,
@@ -12,13 +12,13 @@ import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 
 export interface NodeContextMenuProps {
-  node: EnrichedNode;
+  node: GraphNode;
   position: { x: number; y: number };
   onClose: () => void;
-  onExpandNeighbors: (node: EnrichedNode) => void;
-  onFindPathFromHere: (node: EnrichedNode) => void;
-  onHideNode: (node: EnrichedNode) => void;
-  onPinNode: (node: EnrichedNode) => void;
+  onExpandNeighbors: (node: GraphNode) => void;
+  onFindPathFromHere: (node: GraphNode) => void;
+  onHideNode: (node: GraphNode) => void;
+  onPinNode: (node: GraphNode) => void;
 }
 
 export function NodeContextMenu({

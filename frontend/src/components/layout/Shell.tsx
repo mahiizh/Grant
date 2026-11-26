@@ -1,4 +1,3 @@
-import { useMemo } from "react";
 import { Outlet, useNavigate } from "react-router-dom";
 import { Sidebar } from "./Sidebar";
 import { Header } from "./Header";
@@ -6,7 +5,7 @@ import { CommandMenu } from "../../features/CommandMenu";
 import { KeyboardShortcutsModal } from "../../features/KeyboardShortcutsModal";
 import { useApp } from "../../context/AppContext";
 import { useGraph } from "../../lib/api/hooks/useGraph";
-import { useGraphAnalytics } from "../../hooks/useGraphAnalytics";
+import type { GraphNode } from "../../types/graph";
 import { Toaster } from "sonner";
 
 export function Shell() {
@@ -14,35 +13,17 @@ export function Shell() {
   const navigate = useNavigate();
   const { data: graphResponse } = useGraph();
 
-  const graphData = useMemo(() => {
-    if (!graphResponse) return { nodes: [], links: [] };
-    return {
-      nodes: graphResponse.nodes.map((n) => ({
-        id: n.id,
-        name: n.name,
-        type: n.type as any,
-        description: (n as any).description || `${n.type} node`,
-        valid_from: n.valid_from ?? "",
-        valid_to: n.valid_to ?? "9999-12-31",
-        tx_time: n.tx_time ?? "",
-        tier: (n as any).tier || 1,
-        chunkHash: (n as any).chunk_hash || "",
-        // Backend analytics are optional; the worker recomputes them.
-        cluster: n.community ?? undefined,
-        pageRank: n.pagerank ?? undefined,
-        degree: n.degree,
-      })),
-      links: graphResponse.links.map((l) => ({
-        source: l.source,
-        target: l.target,
-        relation: l.label,
-        tier: (l.tier as any) || 1,
-        valid_from: l.valid_from ?? undefined,
-      })),
-    };
-  }, [graphResponse]);
-
-  const { nodes } = useGraphAnalytics(graphData);
+  const nodes: GraphNode[] = (graphResponse?.nodes ?? []).map((n) => ({
+    id: n.id,
+    name: n.name,
+    type: n.type as GraphNode["type"],
+    description: n.name,
+    source_kind: n.source_kind ?? null,
+    source_kinds: n.source_kinds ?? [],
+    degree: n.degree ?? 0,
+    tier: 1,
+    ingested_at: n.ingested_at ?? null,
+  }));
 
   const handleSelectNode = (nodeId: string) => {
     navigate(`/graph?node=${nodeId}`);

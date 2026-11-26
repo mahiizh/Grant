@@ -6,9 +6,9 @@ import { Button } from "../components/ui/button";
 import { StageStepper, PipelineStage } from "../features/StageStepper";
 import { EvidenceInspector, EvidenceChunk, SpanRecord } from "../features/EvidenceInspector";
 import { AnswerSourceBadge } from "../features/AnswerSourceBadge";
-import { PromptComposer, RetrievalMode, GOLDEN_SUGGESTIONS } from "../features/PromptComposer";
+import { PromptComposer, RetrievalMode } from "../features/PromptComposer";
 import { useGraph } from "../lib/api/hooks/useGraph";
-import { useGraphAnalytics } from "../hooks/useGraphAnalytics";
+import type { GraphLink, GraphNode } from "../types/graph";
 import {
   useThreads,
   useThread,
@@ -22,7 +22,6 @@ import {
   MessageItem,
   ThreadSummary,
 } from "../lib/api/hooks/useThreads";
-import { useApp } from "../context/AppContext";
 import {
   Bot,
   User,
@@ -32,7 +31,6 @@ import {
   ThumbsDown,
   BookmarkPlus,
   RefreshCw,
-  ExternalLink,
   Pencil,
   Search,
   Plus,
@@ -41,8 +39,6 @@ import {
   ChevronRight,
   PanelLeftClose,
   PanelLeftOpen,
-  Calendar,
-  Shield,
   MessageSquare,
   Check,
   X,
@@ -72,39 +68,7 @@ function groupThreadsByDate(threads: ThreadSummary[]) {
   return { today, yesterday, older };
 }
 
-function getSuggestedFollowUps(lastAssistantMsg: MessageItem | null): string[] {
-  if (!lastAssistantMsg) return [];
-  const content = (lastAssistantMsg.content + " " + (lastAssistantMsg.rewritten_query || "")).toLowerCase();
-  const suggestions: string[] = [];
-
-  if (content.includes("outbox") || content.includes("postgres")) {
-    suggestions.push("What was the latency impact on Redis after the outbox replication fix?");
-    suggestions.push("Why was PgBouncer configured in transaction-pooling mode?");
-  }
-  if (content.includes("qdrant") || content.includes("bi-temporal")) {
-    suggestions.push("Does Qdrant vector database enforce point-in-time bi-temporal filtering?");
-  }
-  if (content.includes("neo4j") || content.includes("graph")) {
-    suggestions.push("What Slack channel should I contact for the Neo4j bi-temporal graph?");
-  }
-  if (content.includes("inc-2026-04") || content.includes("incident") || content.includes("failure")) {
-    suggestions.push("Who was commanding incident INC-2026-04?");
-  }
-  if (content.includes("dlq") || content.includes("dead-letter") || content.includes("reconciler")) {
-    suggestions.push("At what time UTC does the nightly reconciler run?");
-  }
-
-  if (suggestions.length === 0) {
-    suggestions.push("What databases and services depend on this component?");
-    suggestions.push("Which SLA contracts were active before this deployment?");
-  }
-
-  return suggestions.slice(0, 3);
-}
-
 export function AskPage() {
-  const { aclScope, asOfDate } = useApp();
-
   // Thread API Hooks
   const { data: threadsList = [], refetch: refetchThreads } = useThreads();
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
@@ -156,35 +120,28 @@ export function AskPage() {
   // Live Graph API hook for Right Inspector
   const { data: graphResponse } = useGraph();
 
-  const graphData = useMemo(() => {
+  const { nodes, links } = useMemo<{ nodes: GraphNode[]; links: GraphLink[] }>(() => {
     if (!graphResponse) return { nodes: [], links: [] };
     return {
       nodes: graphResponse.nodes.map((n) => ({
         id: n.id,
         name: n.name,
-        type: n.type as any,
-        description: (n as any).description || `${n.type} node`,
-        valid_from: n.valid_from ?? "",
-        valid_to: n.valid_to ?? "9999-12-31",
-        tx_time: n.tx_time ?? "",
-        tier: (n as any).tier || 1,
-        chunkHash: (n as any).chunk_hash || "",
-        // Backend analytics are optional; the worker recomputes them.
-        cluster: n.community ?? undefined,
-        pageRank: n.pagerank ?? undefined,
-        degree: n.degree,
+        type: n.type as GraphNode["type"],
+        description: n.name,
+        source_kind: n.source_kind ?? null,
+        source_kinds: n.source_kinds ?? [],
+        degree: n.degree ?? 0,
+        tier: 1,
+        ingested_at: n.ingested_at ?? null,
       })),
       links: graphResponse.links.map((l) => ({
         source: l.source,
         target: l.target,
         relation: l.label,
-        tier: (l.tier as any) || 1,
-        valid_from: l.valid_from ?? undefined,
+        tier: (l.tier as GraphLink["tier"]) ?? 1,
       })),
     };
   }, [graphResponse]);
-
-  const { nodes, links } = useGraphAnalytics(graphData);
 
   // Active assistant message for Evidence Inspector
   const activeAsstMsg = useMemo(() => {
@@ -249,11 +206,6 @@ export function AskPage() {
   // Filter evidence subgraph nodes to only those mentioned in active citations
   const subgraphData = useMemo(() => {
     const citedNodeIds = new Set(chunks.flatMap((c) => c.nodeIds));
-    if (citedNodeIds.size === 0) {
-      citedNodeIds.add("outbox");
-      citedNodeIds.add("postgres");
-      citedNodeIds.add("data_platform");
-    }
     const subNodes = nodes.filter((n) => citedNodeIds.has(n.id));
     const subLinks = links.filter((l) => {
       const s = typeof l.source === "object" ? (l.source as any).id : l.source;
@@ -268,8 +220,6 @@ export function AskPage() {
     try {
       const newTh = await createThreadMutation.mutateAsync({
         title: "New Investigation",
-        acl_scope: aclScope,
-        as_of_date: asOfDate,
       });
       setActiveThreadId(newTh.thread_id);
       setSelectedMessageId(null);
@@ -336,8 +286,6 @@ export function AskPage() {
     if (!currentThreadId) {
       const created = await createThreadMutation.mutateAsync({
         title: query.slice(0, 45),
-        acl_scope: aclScope,
-        as_of_date: asOfDate,
       });
       currentThreadId = created.thread_id;
       setActiveThreadId(currentThreadId);
@@ -381,8 +329,6 @@ export function AskPage() {
         currentThreadId,
         {
           content: query,
-          acl_scope: aclScope,
-          as_of_date: asOfDate,
           retrieval_mode: mode,
           use_cache: useCache,
           use_rerank: rerank,
@@ -571,17 +517,6 @@ export function AskPage() {
     [filteredThreads]
   );
 
-  // Suggested follow-ups after message 1
-  const lastCompletedAsstMsg = useMemo(() => {
-    if (!activeThread?.messages) return null;
-    const assts = activeThread.messages.filter((m) => m.role === "assistant");
-    return assts.length > 0 ? assts[assts.length - 1] : null;
-  }, [activeThread]);
-
-  const suggestedFollowUps = useMemo(() => {
-    return getSuggestedFollowUps(lastCompletedAsstMsg);
-  }, [lastCompletedAsstMsg]);
-
   return (
     <TooltipProvider delayDuration={150}>
       <div className="flex-1 h-full overflow-hidden bg-zinc-950 select-none flex">
@@ -731,10 +666,8 @@ export function AskPage() {
                                     <div className="font-medium truncate text-zinc-200 group-hover:text-amber-300 transition-colors">
                                       {th.title}
                                     </div>
-                                    <div className="text-[10px] text-zinc-500 font-mono flex items-center gap-1.5 mt-0.5">
+                                    <div className="text-[10px] text-zinc-500 font-mono mt-0.5">
                                       <span>{th.message_count} runs</span>
-                                      <span>·</span>
-                                      <span className="truncate">{th.acl_scope}</span>
                                     </div>
                                   </div>
 
@@ -791,17 +724,6 @@ export function AskPage() {
                     <h1 className="text-sm font-semibold tracking-tight text-zinc-100 truncate">
                       {activeThread?.title || "Investigation Workspace"}
                     </h1>
-                    <div className="flex items-center gap-2 text-[10px] font-mono text-zinc-400 mt-0.5">
-                      <span className="flex items-center gap-1">
-                        <Shield className="h-2.5 w-2.5 text-zinc-500" />
-                        Scope: {activeThread?.acl_scope || aclScope}
-                      </span>
-                      <span>·</span>
-                      <span className="flex items-center gap-1">
-                        <Calendar className="h-2.5 w-2.5 text-zinc-500" />
-                        As of: {activeThread?.as_of_date || asOfDate}
-                      </span>
-                    </div>
                   </div>
                 </div>
 
@@ -812,75 +734,30 @@ export function AskPage() {
 
               {/* Messages Thread Scroll Area */}
               <div className="flex-1 overflow-y-auto p-4 lg:p-6 space-y-6">
-                {/* Empty State: Golden Suggestions */}
+                {/* Empty State */}
                 {(!activeThread?.messages || activeThread.messages.length === 0) &&
                   !liveStreamingMessage && (
-                    <div className="space-y-4 py-8 max-w-2xl mx-auto">
-                      <div className="text-center space-y-1.5">
-                        <div className="inline-flex items-center justify-center h-10 w-10 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 mb-2">
-                          <Sparkles className="h-5 w-5" />
-                        </div>
-                        <h2 className="text-base font-semibold text-zinc-100">
-                          Welcome to the Glass-Box RAG Lab
-                        </h2>
-                        <p className="text-xs text-zinc-400">
-                          Every retrieval step, query rewrite, cache hit, and provenance citation is fully transparent.
-                          Select a golden investigation query below or write your own.
-                        </p>
+                    <div className="py-8 max-w-2xl mx-auto text-center space-y-1.5">
+                      <div className="inline-flex items-center justify-center h-10 w-10 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-400 mb-2">
+                        <Sparkles className="h-5 w-5" />
                       </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-4">
-                        {GOLDEN_SUGGESTIONS.map((g) => (
-                          <button
-                            key={g.title}
-                            onClick={() => handleQuerySubmit(g.query, "hybrid", true, true)}
-                            className="p-3 text-left rounded-xl border border-zinc-800/80 bg-zinc-900/40 hover:bg-zinc-800/60 hover:border-zinc-700 transition-all cursor-pointer group space-y-1"
-                          >
-                            <div className="flex items-center justify-between text-xs">
-                              <span className="font-medium text-zinc-200 group-hover:text-amber-300 transition-colors">
-                                {g.title}
-                              </span>
-                              <Badge variant="outline" className="text-[9px] font-mono text-zinc-400 border-zinc-700">
-                                {g.category}
-                              </Badge>
-                            </div>
-                            <p className="text-[11px] text-zinc-400 line-clamp-2">
-                              "{g.query}"
-                            </p>
-                          </button>
-                        ))}
-                      </div>
+                      <h2 className="text-base font-semibold text-zinc-100">
+                        Welcome to the Glass-Box RAG Lab
+                      </h2>
+                      <p className="text-xs text-zinc-400">
+                        Every retrieval step, query rewrite, cache hit, and provenance citation is fully transparent.
+                        Write your own question below to begin.
+                      </p>
                     </div>
                   )}
 
                 {/* Messages Stream */}
                 {activeThread?.messages?.map((msg, idx) => {
                   const isUser = msg.role === "user";
-                  const prevMsg = idx > 0 ? activeThread.messages[idx - 1] : null;
-
-                  // Detect mid-thread scope change divider
-                  const showScopeDivider =
-                    idx > 0 &&
-                    msg.role === "user" &&
-                    prevMsg &&
-                    prevMsg.role === "assistant" &&
-                    activeThread.acl_scope !== "data-platform" &&
-                    idx === 2;
 
                   if (isUser) {
                     return (
-                      <React.Fragment key={msg.message_id}>
-                        {showScopeDivider && (
-                          <div className="flex items-center gap-3 my-4">
-                            <div className="h-[1px] flex-1 bg-zinc-800" />
-                            <Badge variant="outline" className="text-[10px] font-mono text-amber-400 border-amber-500/30 bg-amber-500/5 px-2 py-0.5">
-                              Scope changed to {activeThread.acl_scope}
-                            </Badge>
-                            <div className="h-[1px] flex-1 bg-zinc-800" />
-                          </div>
-                        )}
-
-                        <div className="flex items-start gap-3">
+                      <div key={msg.message_id} className="flex items-start gap-3">
                           <div className="h-7 w-7 rounded-lg bg-zinc-800 flex items-center justify-center shrink-0 border border-zinc-700">
                             <User className="h-4 w-4 text-zinc-300" />
                           </div>
@@ -895,8 +772,7 @@ export function AskPage() {
                               {msg.content}
                             </div>
                           </div>
-                        </div>
-                      </React.Fragment>
+                      </div>
                     );
                   }
 
@@ -1016,19 +892,6 @@ export function AskPage() {
                               <span>${(msg.cost_usd || 0.0028).toFixed(4)}</span>
                               <span>·</span>
                               <span>{msg.tokens || 310} tokens</span>
-
-                              {msg.trace_id && (
-                                <a
-                                  href={`/traces?id=${msg.trace_id}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="flex items-center gap-1 text-amber-400 hover:text-amber-300 ml-1 transition-colors"
-                                >
-                                  <span>Open trace</span>
-                                  <ExternalLink className="h-3 w-3" />
-                                </a>
-                              )}
                             </div>
 
                             {/* Message Actions */}
@@ -1178,30 +1041,6 @@ export function AskPage() {
                   </div>
                 )}
 
-                {/* Suggested Follow-Ups (Derived from last answer's entities) */}
-                {activeThread?.messages &&
-                  activeThread.messages.length > 0 &&
-                  !liveStreamingMessage &&
-                  suggestedFollowUps.length > 0 && (
-                    <div className="space-y-2 pt-2 pb-1">
-                      <div className="text-[10px] font-mono uppercase tracking-wider text-zinc-500 font-semibold flex items-center gap-1.5">
-                        <Sparkles className="h-3 w-3 text-amber-400" />
-                        <span>Suggested follow-up investigations</span>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {suggestedFollowUps.map((qText) => (
-                          <button
-                            key={qText}
-                            onClick={() => handleQuerySubmit(qText, "hybrid", true, true)}
-                            className="px-3 py-1.5 rounded-lg border border-zinc-800/80 bg-zinc-900/40 hover:bg-zinc-800/60 hover:border-amber-500/40 text-xs text-zinc-300 hover:text-amber-300 transition-colors cursor-pointer text-left font-sans"
-                          >
-                            {qText}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
                 <div ref={messagesEndRef} />
               </div>
 
@@ -1213,7 +1052,6 @@ export function AskPage() {
                   value={activeDraftQuery}
                   onChangeValue={setActiveDraftQuery}
                   onStopStreaming={handleStopStreaming}
-                  hideSuggestions={Boolean(activeThread?.messages && activeThread.messages.length > 0)}
                 />
               </div>
             </ResizablePanel>

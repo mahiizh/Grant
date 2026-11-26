@@ -2,15 +2,14 @@ import { useRef, useEffect, useState, useMemo } from "react";
 import ForceGraph3D, { ForceGraphMethods } from "react-force-graph-3d";
 import { UnrealBloomPass } from "three-stdlib";
 import * as THREE from "three";
-import { EnrichedNode } from "../hooks/useGraphAnalytics";
-import { GraphLink } from "../types/graph";
+import { GraphLink, GraphNode } from "../types/graph";
 
 export interface GraphCanvas3DProps {
-  nodes: EnrichedNode[];
+  nodes: GraphNode[];
   links: GraphLink[];
-  colorBy: "type" | "cluster" | "tier";
+  colorBy: "type" | "tier";
   selectedNodeId: string | null;
-  onSelectNode: (node: EnrichedNode) => void;
+  onSelectNode: (node: GraphNode) => void;
   activePath: string[] | null;
   highlightedPathNodes: Set<string>;
   zoomToTrigger: number;
@@ -29,15 +28,6 @@ const TIER_COLORS: Record<number, string> = {
   2: "#10B981",
   3: "#F59E0B",
 };
-
-const CLUSTER_COLORS = [
-  "#38BDF8",
-  "#10B981",
-  "#F59E0B",
-  "#8B5CF6",
-  "#EC4899",
-  "#06B6D4",
-];
 
 export function GraphCanvas3D({
   nodes,
@@ -153,9 +143,8 @@ export function GraphCanvas3D({
     }
   }, [selectedNodeId, nodes, prefersReducedMotion]);
 
-  const getNodeColor = (node: EnrichedNode): string => {
+  const getNodeColor = (node: GraphNode): string => {
     if (highlightedPathNodes.has(node.id)) return "#F59E0B";
-    if (colorBy === "cluster") return CLUSTER_COLORS[node.cluster % CLUSTER_COLORS.length];
     if (colorBy === "tier") return TIER_COLORS[node.tier || 1] || "#38BDF8";
     return TYPE_COLORS[node.type] || "#8B5CF6";
   };

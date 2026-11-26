@@ -1,14 +1,13 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { useApp } from "../../context/AppContext";
-import { Badge } from "../ui/badge";
+
 import { Button } from "../ui/button";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select";
-import { Search, Plus, Sun, Moon, Calendar, Shield, ChevronRight } from "lucide-react";
+import { Search, Plus, Sun, Moon, ChevronRight } from "lucide-react";
 
 export function Header() {
   const { pathname } = useLocation();
   const navigate = useNavigate();
-  const { theme, setTheme, aclScope, setAclScope, asOfDate, setAsOfDate, setCommandOpen } = useApp();
+  const { theme, setTheme, setCommandOpen } = useApp();
 
   // Compute clean breadcrumbs from route
   const getBreadcrumbs = () => {
@@ -22,16 +21,6 @@ export function Header() {
         return { section: "Workspace", page: "Documents & Ingestion" };
       case "/graph":
         return { section: "Workspace", page: "Knowledge Graph" };
-      case "/traces":
-        return { section: "Inspect", page: "Traces & Spans" };
-      case "/retrieval":
-        return { section: "Inspect", page: "Retrieval & RRF" };
-      case "/cache":
-        return { section: "Inspect", page: "Cache & Guardrails" };
-      case "/experiments":
-        return { section: "Evaluate", page: "Experiments & Baselines" };
-      case "/golden-set":
-        return { section: "Evaluate", page: "Golden Benchmark Gate" };
       case "/settings":
         return { section: "System", page: "Settings & Stores" };
       default:
@@ -41,59 +30,19 @@ export function Header() {
 
   const breadcrumbs = getBreadcrumbs();
 
-  const isMockMode = (import.meta.env.VITE_API_MODE ?? "mock") === "mock";
-
   return (
     <header className="h-14 border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur-md sticky top-0 z-20 px-4 flex items-center justify-between select-none">
-      {/* Left: Breadcrumbs & Sample Data Badge */}
+      {/* Left: Breadcrumbs */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-1.5 text-xs text-zinc-400 font-sans">
           <span className="text-zinc-500 font-normal">{breadcrumbs.section}</span>
           <ChevronRight className="h-3 w-3 text-zinc-600" />
           <span className="font-semibold text-zinc-200">{breadcrumbs.page}</span>
         </div>
-
-        {isMockMode && (
-          <Badge variant="outline" className="text-[10px] font-mono py-0 px-1.5 border-amber-500/30 bg-amber-500/10 text-amber-400">
-            Sample data
-          </Badge>
-        )}
       </div>
 
-      {/* Right: ACL Switcher, As Of Date, Cmd+K, New Query, Theme Toggle */}
+      {/* Right: Cmd+K, New Query, Theme Toggle */}
       <div className="flex items-center gap-2.5">
-        {/* ACL Scope Switcher */}
-        <div className="flex items-center gap-1.5">
-          <Shield className="h-3.5 w-3.5 text-zinc-500 hidden sm:block" />
-          <div className="w-40 sm:w-44">
-            <Select value={aclScope} onValueChange={setAclScope}>
-              <SelectTrigger className="h-7 text-[11px] font-mono">
-                <SelectValue placeholder="Scope" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="public">scope: public</SelectItem>
-                <SelectItem value="data-platform">scope: data-platform</SelectItem>
-                <SelectItem value="core-banking">scope: core-banking</SelectItem>
-                <SelectItem value="payments">scope: payments</SelectItem>
-                <SelectItem value="sre-reliability">scope: sre-oncall</SelectItem>
-                <SelectItem value="executive-audit">scope: executive-audit</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-
-        {/* Bi-Temporal "As Of" Date Picker */}
-        <div className="hidden md:flex items-center gap-1 px-2 py-0.5 rounded-md border border-zinc-800 bg-zinc-950/60 text-xs">
-          <Calendar className="h-3 w-3 text-zinc-500" />
-          <span className="text-[10px] font-mono text-zinc-500">As of:</span>
-          <input
-            type="date"
-            value={asOfDate}
-            onChange={(e) => setAsOfDate(e.target.value)}
-            className="bg-transparent border-0 text-[11px] font-mono text-zinc-300 focus:outline-none p-0 cursor-pointer"
-          />
-        </div>
-
         {/* Global Cmd+K Search Trigger */}
         <button
           onClick={() => setCommandOpen(true)}

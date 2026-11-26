@@ -8,7 +8,7 @@ import { QueryState } from "../components/ui/QueryState";
 const STORE_LABELS: Record<string, { name: string; detail: string; color: string }> = {
   neo4j: {
     name: "Neo4j Graph Database",
-    detail: "Bi-temporal · valid_from / valid_to",
+    detail: "Entity graph & relationships",
     color: "text-sky-400 border-sky-400/30",
   },
   qdrant: {
@@ -22,8 +22,8 @@ const STORE_LABELS: Record<string, { name: string; detail: string; color: string
     color: "text-indigo-400 border-indigo-400/30",
   },
   redis: {
-    name: "Redis Semantic Cache",
-    detail: "Exact + semantic response cache",
+    name: "Redis Exact Cache",
+    detail: "Exact response cache",
     color: "text-rose-400 border-rose-400/30",
   },
 };
@@ -109,26 +109,10 @@ export function SettingsPage() {
                     <CardTitle className="text-sm font-medium">Runtime Defaults</CardTitle>
                   </div>
                   <CardDescription className="text-xs">
-                    Defaults applied to new queries and graph views.
+                    Defaults applied to graph views.
                   </CardDescription>
                 </CardHeader>
-                <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40">
-                    <div className="text-xs text-zinc-400">Default ACL Scope</div>
-                    <div className="text-base font-semibold text-zinc-100 font-mono mt-1">
-                      {data.default_scope}
-                    </div>
-                    <div className="text-[10px] text-zinc-500 mt-0.5">
-                      {(data.acl_scopes ?? []).length} scopes available
-                    </div>
-                  </div>
-                  <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40">
-                    <div className="text-xs text-zinc-400">Default As-Of Date</div>
-                    <div className="text-base font-semibold text-zinc-100 font-mono mt-1">
-                      {data.default_as_of_date}
-                    </div>
-                    <div className="text-[10px] text-zinc-500 mt-0.5">Bi-temporal snapshot date</div>
-                  </div>
+                <CardContent>
                   <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40">
                     <div className="text-xs text-zinc-400">Canvas Theme</div>
                     <div className="text-base font-semibold text-zinc-100 font-mono mt-1">
@@ -200,8 +184,7 @@ export function SettingsPage() {
             <div className="flex justify-between py-1 border-b border-zinc-800/60">
               <span className="text-zinc-400">Backend API URL</span>
               <span className="font-mono text-zinc-200">
-                {import.meta.env.VITE_API_BASE_URL || "http://localhost:8000"} (
-                {import.meta.env.VITE_API_MODE ?? "live"} mode)
+                {import.meta.env.VITE_API_BASE_URL || "/api/v1"}
               </span>
             </div>
             <div className="flex justify-between py-1 border-b border-zinc-800/60">

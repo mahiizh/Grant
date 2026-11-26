@@ -26,7 +26,6 @@ import {
   Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useApp } from "../context/AppContext";
 import {
   useDocuments,
   useUploadDocument,
@@ -36,7 +35,6 @@ import {
 
 export function DocumentsPage() {
   const navigate = useNavigate();
-  const { asOfDate, aclScope } = useApp();
 
   const { data: docsResponse, isLoading, error, refetch } = useDocuments();
   const uploadDocumentMutation = useUploadDocument();
@@ -48,7 +46,6 @@ export function DocumentsPage() {
     file: File;
     estimatedChunks: number;
     title: string;
-    validFrom: string;
   } | null>(null);
 
   // Ingestion job state
@@ -79,11 +76,10 @@ export function DocumentsPage() {
         file,
         title: file.name,
         estimatedChunks: Math.max(Math.ceil(file.size / 1024 / 2), 4),
-        validFrom: asOfDate,
       });
       toast.info(`Prepared ${file.name} for extraction`);
     },
-    [asOfDate]
+    []
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -169,16 +165,8 @@ export function DocumentsPage() {
             Documents & Dual-Write Ingestion
           </h1>
           <p className="text-xs text-zinc-400 mt-1">
-            Transactional outbox pipeline ensuring simultaneous consistency between PostgreSQL, Qdrant vectors, and Neo4j bi-temporal graphs.
+            PostgreSQL remains the source of truth; the transactional outbox stages indexing, deletion and history work for Qdrant and Neo4j.
           </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Badge variant="outline" className="text-[11px] font-mono border-zinc-800 text-zinc-400">
-            Active Scope: {aclScope}
-          </Badge>
-          <Badge variant="outline" className="text-[11px] font-mono border-zinc-800 text-zinc-400">
-            Valid From: {asOfDate}
-          </Badge>
         </div>
       </div>
 
@@ -230,14 +218,6 @@ export function DocumentsPage() {
                 </div>
 
                 <div className="space-y-1.5 text-[11px] font-mono text-zinc-400">
-                  <div className="flex justify-between py-1 border-b border-zinc-800/60">
-                    <span>Target ACL:</span>
-                    <span className="text-zinc-200">{aclScope}</span>
-                  </div>
-                  <div className="flex justify-between py-1 border-b border-zinc-800/60">
-                    <span>Effective Valid From:</span>
-                    <span className="text-emerald-400">{stagedFile.validFrom}</span>
-                  </div>
                   <div className="flex justify-between py-1">
                     <span>Provenance Tier:</span>
                     <span className="text-sky-400">Tier 1 (Authoritative)</span>
@@ -527,8 +507,8 @@ export function DocumentsPage() {
               {[
                 { step: 1, store: "Postgres", detail: "Purging relational document record & outbox logs" },
                 { step: 2, store: "Qdrant", detail: "Deleting 14 vector points from grant_docs collection" },
-                { step: 3, store: "Neo4j", detail: "Unlinking 6 entities and pruning 11 bi-temporal edges" },
-                { step: 4, store: "Redis", detail: "Evicting 23 invalidated semantic response cache keys" },
+                { step: 3, store: "Neo4j", detail: "Removing graph relationships for this document" },
+                { step: 4, store: "Redis", detail: "Bumping the owner index version to invalidate cached answers" },
               ].map((s) => {
                 const isDone = deleteProgress.step > s.step;
                 const isCurrent = deleteProgress.step === s.step;

@@ -10,11 +10,6 @@ const AskPage = lazy(() => import("./pages/AskPage"));
 const OverviewPage = lazy(() => import("./pages/OverviewPage"));
 const DocumentsPage = lazy(() => import("./pages/DocumentsPage"));
 const GraphPage = lazy(() => import("./pages/GraphPage"));
-const TracesPage = lazy(() => import("./pages/TracesPage"));
-const RetrievalPage = lazy(() => import("./pages/RetrievalPage"));
-const CachePage = lazy(() => import("./pages/CachePage"));
-const ExperimentsPage = lazy(() => import("./pages/ExperimentsPage"));
-const GoldenSetPage = lazy(() => import("./pages/GoldenSetPage"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage"));
 
 function PageLoader() {
@@ -72,46 +67,6 @@ export function App() {
               element={
                 <Suspense fallback={<PageLoader />}>
                   <GraphPage />
-                </Suspense>
-              }
-            />
-            <Route
-              path="traces"
-              element={
-                <Suspense fallback={<PageLoader />}>
-                  <TracesPage />
-                </Suspense>
-              }
-            />
-            <Route
-              path="retrieval"
-              element={
-                <Suspense fallback={<PageLoader />}>
-                  <RetrievalPage />
-                </Suspense>
-              }
-            />
-            <Route
-              path="cache"
-              element={
-                <Suspense fallback={<PageLoader />}>
-                  <CachePage />
-                </Suspense>
-              }
-            />
-            <Route
-              path="experiments"
-              element={
-                <Suspense fallback={<PageLoader />}>
-                  <ExperimentsPage />
-                </Suspense>
-              }
-            />
-            <Route
-              path="golden-set"
-              element={
-                <Suspense fallback={<PageLoader />}>
-                  <GoldenSetPage />
                 </Suspense>
               }
             />

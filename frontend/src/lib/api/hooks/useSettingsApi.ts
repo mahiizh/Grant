@@ -17,8 +17,6 @@ export function useUpdateSettings() {
 
   return useMutation({
     mutationFn: async (payload: {
-      default_scope?: string;
-      default_as_of_date?: string;
       canvas_theme?: string;
     }) => {
       const { data, error } = await apiClient.PATCH("/settings", {

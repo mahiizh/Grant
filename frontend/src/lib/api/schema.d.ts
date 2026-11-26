@@ -141,7 +141,7 @@ export interface paths {
         };
         /**
          * Get Graph Path
-         * @description Compute the shortest ACL-permitted bi-temporal path between two nodes in Neo4j.
+         * @description Compute the shortest ACL-permitted path between two nodes in Neo4j.
          */
         get: operations["get_graph_path_api_v1_graph_path_get"];
         put?: never;
@@ -161,7 +161,7 @@ export interface paths {
         };
         /**
          * List Documents
-         * @description List all ingested documents with tokens, cost, and extracted entity counts.
+         * @description List ingested documents owned by the current user.
          */
         get: operations["list_documents_api_v1_documents_get"];
         put?: never;
@@ -305,7 +305,7 @@ export interface paths {
         };
         /**
          * Get Cache Stats
-         * @description Retrieve telemetry time series for exact and semantic cache performance.
+         * @description Retrieve telemetry time series for exact answer cache performance.
          *
          *     Cache hits/misses are counted in process memory only and are never exported,
          *     so a cross-process time series cannot be reconstructed. Returning 501 is
@@ -329,7 +329,7 @@ export interface paths {
         };
         /**
          * Get Cache Invalidations
-         * @description Audit log of semantic cache invalidations triggered by mutations in outbox.
+         * @description Audit log of exact cache invalidations triggered by mutations in outbox.
          */
         get: operations["get_cache_invalidations_api_v1_cache_invalidations_get"];
         put?: never;
@@ -378,33 +378,6 @@ export interface paths {
          * @description Trigger an automated evaluation run against the golden dataset.
          */
         post: operations["run_golden_evaluation_api_v1_evals_golden_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/experiments": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Experiments
-         * @description List retrieval experiments.
-         *
-         *     No experiment store exists, so this returns 501 rather than a hardcoded list
-         *     of runs with invented accuracy and latency numbers.
-         */
-        get: operations["list_experiments_api_v1_experiments_get"];
-        put?: never;
-        /**
-         * Update Experiment
-         * @description Adjust live traffic allocation split between experimental variants.
-         */
-        post: operations["update_experiment_api_v1_experiments_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -479,7 +452,7 @@ export interface paths {
         head?: never;
         /**
          * Update System Settings
-         * @description Update defaults (date, canvas theme). Note: active scope cannot be changed via settings.
+         * @description Update UI defaults. Shared scopes are credentials, not editable settings.
          */
         patch: operations["update_system_settings_api_v1_settings_patch"];
         trace?: never;
@@ -493,13 +466,13 @@ export interface paths {
         };
         /**
          * List Threads
-         * @description List all threads ordered by updated_at descending.
+         * @description List threads visible to the current user, ordered by updated_at descending.
          */
         get: operations["list_threads_api_v1_threads_get"];
         put?: never;
         /**
          * Create Thread
-         * @description Create a new conversation thread with optional title, ACL scope, and as-of time.
+         * @description Create a new owner-private thread, optionally shared to an authorized scope.
          */
         post: operations["create_thread_api_v1_threads_post"];
         delete?: never;
@@ -524,14 +497,14 @@ export interface paths {
         post?: never;
         /**
          * Delete Thread
-         * @description Delete thread and cascade messages.
+         * @description Delete thread, cascade messages, and stage chat-graph cleanup.
          */
         delete: operations["delete_thread_api_v1_threads__thread_id__delete"];
         options?: never;
         head?: never;
         /**
          * Update Thread
-         * @description Update thread title, ACL scope, or as-of date.
+         * @description Update thread title or shared scope.
          */
         patch: operations["update_thread_api_v1_threads__thread_id__patch"];
         trace?: never;
@@ -749,13 +722,8 @@ export interface components {
         CreateThreadRequest: {
             /** Title */
             title?: string | null;
-            /**
-             * Acl Scope
-             * @default data-platform
-             */
-            acl_scope: string;
-            /** As Of Date */
-            as_of_date?: string | null;
+            /** Shared Scope */
+            shared_scope?: string | null;
         };
         /** DocumentDeleteResponse */
         DocumentDeleteResponse: {
@@ -814,8 +782,6 @@ export interface components {
             ingested_at: string;
             /** Target Node Id */
             target_node_id: string;
-            /** Valid From */
-            valid_from: string;
             /**
              * Tokens
              * @default 0
@@ -826,6 +792,21 @@ export interface components {
              * @default 0
              */
             cost_usd: number;
+            /**
+             * Extraction Engine
+             * @default unknown
+             */
+            extraction_engine: string;
+            /**
+             * Extraction Model
+             * @default
+             */
+            extraction_model: string;
+            /**
+             * Extraction Status
+             * @default unknown
+             */
+            extraction_status: string;
         };
         /** DocumentStatusResponse */
         DocumentStatusResponse: {
@@ -852,6 +833,21 @@ export interface components {
              * @default 0
              */
             relations: number;
+            /**
+             * Extraction Engine
+             * @default unknown
+             */
+            extraction_engine: string;
+            /**
+             * Extraction Model
+             * @default
+             */
+            extraction_model: string;
+            /**
+             * Extraction Status
+             * @default unknown
+             */
+            extraction_status: string;
         };
         /** DocumentUploadResponse */
         DocumentUploadResponse: {
@@ -894,38 +890,6 @@ export interface components {
             retrieval_method: string;
             /** Path */
             path?: string[] | null;
-        };
-        /** ExperimentRun */
-        ExperimentRun: {
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            /** Status */
-            status: string;
-            /** Variant A Route */
-            variant_a_route: string;
-            /** Variant B Route */
-            variant_b_route: string;
-            /** Traffic Split */
-            traffic_split: number;
-            /** Variant A Accuracy */
-            variant_a_accuracy: number;
-            /** Variant B Accuracy */
-            variant_b_accuracy: number;
-            /** P95 Latency Ms */
-            p95_latency_ms: number;
-            /** Cost Per 1K */
-            cost_per_1k: number;
-            /** Total Queries */
-            total_queries: number;
-        };
-        /** ExperimentsResponse */
-        ExperimentsResponse: {
-            /** Experiments */
-            experiments: components["schemas"]["ExperimentRun"][];
-            /** Total */
-            total: number;
         };
         /** FeedbackRequest */
         FeedbackRequest: {
@@ -1043,14 +1007,8 @@ export interface components {
             label: string;
             /** Tier */
             tier?: number | null;
-            /** Valid From */
-            valid_from?: string | null;
-            /** Valid To */
-            valid_to?: string | null;
-            /** Tx Time */
-            tx_time?: string | null;
-            /** Chunk Hash */
-            chunk_hash?: string | null;
+            /** Ingested At */
+            ingested_at?: string | null;
         };
         /** GraphNeighborsResponse */
         GraphNeighborsResponse: {
@@ -1071,20 +1029,10 @@ export interface components {
             name: string;
             /** Type */
             type: string;
-            /** Pagerank */
-            pagerank?: number | null;
-            /** Community */
-            community?: number | null;
-            /** Cluster */
-            cluster?: string | null;
-            /** Valid From */
-            valid_from?: string | null;
-            /** Valid To */
-            valid_to?: string | null;
-            /** Tx Time */
-            tx_time?: string | null;
-            /** Chunk Hash */
-            chunk_hash?: string | null;
+            /** Aliases */
+            aliases?: string[];
+            /** Ingested At */
+            ingested_at?: string | null;
             /**
              * Degree
              * @default 0
@@ -1092,11 +1040,8 @@ export interface components {
             degree: number;
             /** Source Kind */
             source_kind?: string | null;
-            /**
-             * Source Kinds
-             * @default []
-             */
-            source_kinds: string[];
+            /** Source Kinds */
+            source_kinds?: string[];
         };
         /** GraphPathResponse */
         GraphPathResponse: {
@@ -1178,13 +1123,14 @@ export interface components {
              * @default []
              */
             citations: components["schemas"]["CitationItem"][];
-            /** Source Kind */
-            source_kind?: string | null;
             /**
-             * Web Sources
-             * @default []
+             * Source Kind
+             * @default docs
+             * @enum {string}
              */
-            web_sources: {
+            source_kind: "docs" | "web" | "unverified";
+            /** Web Sources */
+            web_sources?: {
                 [key: string]: unknown;
             }[];
             /** Query Id */
@@ -1247,13 +1193,14 @@ export interface components {
              * @default []
              */
             generations: components["schemas"]["MessageGeneration"][];
-            /** Source Kind */
-            source_kind?: string | null;
             /**
-             * Web Sources
-             * @default []
+             * Source Kind
+             * @default docs
+             * @enum {string}
              */
-            web_sources: {
+            source_kind: "docs" | "web" | "unverified";
+            /** Web Sources */
+            web_sources?: {
                 [key: string]: unknown;
             }[];
             /** Query Id */
@@ -1304,22 +1251,21 @@ export interface components {
         };
         /**
          * QueryRequest
-         * @description User query payload with optional scope, temporal filter, and answer policy.
+         * @description User query payload with an optional shared scope and answer policy.
          */
         QueryRequest: {
             /** Query */
             query: string;
             /** Scope */
             scope?: string | null;
-            /** As Of */
-            as_of?: string | null;
             /** Thread Id */
             thread_id?: string | null;
             /**
              * Answer Policy
              * @default grounded_plus_web
+             * @enum {string}
              */
-            answer_policy?: "grounded_only" | "grounded_plus_web";
+            answer_policy: "grounded_only" | "grounded_plus_web";
         };
         /**
          * QueryResponse
@@ -1347,13 +1293,11 @@ export interface components {
             /**
              * Source Kind
              * @default docs
+             * @enum {string}
              */
-            source_kind?: "docs" | "web" | "unverified";
-            /**
-             * Web Sources
-             * @default []
-             */
-            web_sources: {
+            source_kind: "docs" | "web" | "unverified";
+            /** Web Sources */
+            web_sources?: {
                 [key: string]: unknown;
             }[];
             /** Query Id */
@@ -1419,10 +1363,8 @@ export interface components {
         SendMessageRequest: {
             /** Content */
             content: string;
-            /** Acl Scope */
-            acl_scope?: string | null;
-            /** As Of Date */
-            as_of_date?: string | null;
+            /** Shared Scope */
+            shared_scope?: string | null;
             /** Retrieval Mode */
             retrieval_mode?: string | null;
             /**
@@ -1438,23 +1380,14 @@ export interface components {
             /**
              * Answer Policy
              * @default grounded_plus_web
+             * @enum {string}
              */
-            answer_policy?: "grounded_only" | "grounded_plus_web";
+            answer_policy: "grounded_only" | "grounded_plus_web";
         };
         /** SettingsResponse */
         SettingsResponse: {
-            /** Acl Scopes */
-            acl_scopes?: string[];
-            /**
-             * Default Scope
-             * @default data-platform
-             */
-            default_scope: string;
-            /**
-             * Default As Of Date
-             * @default 2026-04-12
-             */
-            default_as_of_date: string;
+            /** Shared Scopes */
+            shared_scopes?: string[];
             /**
              * Canvas Theme
              * @default dark
@@ -1548,10 +1481,8 @@ export interface components {
             thread_id: string;
             /** Title */
             title: string;
-            /** Acl Scope */
-            acl_scope: string;
-            /** As Of Date */
-            as_of_date?: string | null;
+            /** Shared Scope */
+            shared_scope?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -1574,10 +1505,8 @@ export interface components {
             thread_id: string;
             /** Title */
             title: string;
-            /** Acl Scope */
-            acl_scope: string;
-            /** As Of Date */
-            as_of_date?: string | null;
+            /** Shared Scope */
+            shared_scope?: string | null;
             /**
              * Created At
              * Format: date-time
@@ -1661,17 +1590,8 @@ export interface components {
             /** Total */
             total: number;
         };
-        /** UpdateExperimentRequest */
-        UpdateExperimentRequest: {
-            /** Experiment Id */
-            experiment_id: string;
-            /** Traffic Split */
-            traffic_split: number;
-        };
         /** UpdateSettingsRequest */
         UpdateSettingsRequest: {
-            /** Default As Of Date */
-            default_as_of_date?: string | null;
             /** Canvas Theme */
             canvas_theme?: string | null;
         };
@@ -1679,10 +1599,8 @@ export interface components {
         UpdateThreadRequest: {
             /** Title */
             title?: string | null;
-            /** Acl Scope */
-            acl_scope?: string | null;
-            /** As Of Date */
-            as_of_date?: string | null;
+            /** Shared Scope */
+            shared_scope?: string | null;
         };
         /** ValidationError */
         ValidationError: {
@@ -1825,7 +1743,6 @@ export interface operations {
         parameters: {
             query?: {
                 scope?: string | null;
-                as_of?: string | null;
                 limit?: number;
                 source_kind?: string | null;
             };
@@ -1862,7 +1779,7 @@ export interface operations {
             query?: {
                 depth?: number;
                 scope?: string | null;
-                as_of?: string | null;
+                source_kind?: string | null;
             };
             header?: {
                 "X-Dev-User"?: string | null;
@@ -1900,7 +1817,7 @@ export interface operations {
                 from: string;
                 to: string;
                 scope?: string | null;
-                as_of?: string | null;
+                source_kind?: string | null;
             };
             header?: {
                 "X-Dev-User"?: string | null;
@@ -1933,7 +1850,9 @@ export interface operations {
     list_documents_api_v1_documents_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1948,12 +1867,23 @@ export interface operations {
                     "application/json": components["schemas"]["DocumentsResponse"];
                 };
             };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
         };
     };
     upload_document_api_v1_documents_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -1986,7 +1916,9 @@ export interface operations {
     get_document_status_api_v1_documents__document_id__status_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
             path: {
                 document_id: string;
             };
@@ -2017,7 +1949,9 @@ export interface operations {
     get_document_impact_api_v1_documents__document_id__impact_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
             path: {
                 document_id: string;
             };
@@ -2048,7 +1982,9 @@ export interface operations {
     delete_document_api_v1_documents__document_id__delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
             path: {
                 document_id: string;
             };
@@ -2148,7 +2084,6 @@ export interface operations {
                 vector_cutoff?: number;
                 cross_encoder_cutoff?: number;
                 scope?: string | null;
-                as_of?: string | null;
             };
             header?: {
                 "X-Dev-User"?: string | null;
@@ -2315,59 +2250,6 @@ export interface operations {
             };
         };
     };
-    list_experiments_api_v1_experiments_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExperimentsResponse"];
-                };
-            };
-        };
-    };
-    update_experiment_api_v1_experiments_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdateExperimentRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExperimentRun"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     get_guardrail_metrics_api_v1_metrics_guardrails_get: {
         parameters: {
             query?: never;
@@ -2464,7 +2346,9 @@ export interface operations {
     list_threads_api_v1_threads_get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
             path?: never;
             cookie?: never;
         };
@@ -2477,6 +2361,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ThreadSummary"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -2519,7 +2412,9 @@ export interface operations {
     get_thread_api_v1_threads__thread_id__get: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
             path: {
                 thread_id: string;
             };
@@ -2550,7 +2445,9 @@ export interface operations {
     delete_thread_api_v1_threads__thread_id__delete: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
             path: {
                 thread_id: string;
             };
@@ -2583,7 +2480,9 @@ export interface operations {
     update_thread_api_v1_threads__thread_id__patch: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
             path: {
                 thread_id: string;
             };
@@ -2655,7 +2554,9 @@ export interface operations {
     record_feedback_api_v1_threads__thread_id__messages__msg_id__feedback_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
             path: {
                 thread_id: string;
                 msg_id: string;
@@ -2691,7 +2592,9 @@ export interface operations {
     add_to_golden_dataset_api_v1_threads__thread_id__messages__msg_id__golden_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
             path: {
                 thread_id: string;
                 msg_id: string;
@@ -2729,7 +2632,9 @@ export interface operations {
     regenerate_message_api_v1_threads__thread_id__messages__msg_id__regenerate_post: {
         parameters: {
             query?: never;
-            header?: never;
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
             path: {
                 thread_id: string;
                 msg_id: string;

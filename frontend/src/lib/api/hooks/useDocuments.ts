@@ -1,12 +1,9 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { apiClient, formatApiError } from "../client";
-import { useApp } from "../../../context/AppContext";
+import { apiClient, formatApiError, API_BASE_URL } from "../client";
 
 export function useDocuments() {
-  const { aclScope, asOfDate } = useApp();
-
   return useQuery({
-    queryKey: ["documents", aclScope, asOfDate],
+    queryKey: ["documents"],
     queryFn: async () => {
       const { data, error } = await apiClient.GET("/documents");
       if (error) throw new Error(formatApiError(error, "Failed to fetch documents"));
@@ -57,7 +54,7 @@ export function useUploadDocument() {
       const formData = new FormData();
       formData.append("file", file);
 
-      const response = await fetch("/documents", {
+      const response = await fetch(`${API_BASE_URL}/documents`, {
         method: "POST",
         body: formData,
       });

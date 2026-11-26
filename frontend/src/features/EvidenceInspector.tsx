@@ -2,8 +2,7 @@ import { useState } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
 import { Badge } from "../components/ui/badge";
 import { GraphCanvas2D } from "./GraphCanvas2D";
-import { EnrichedNode } from "../hooks/useGraphAnalytics";
-import { GraphLink } from "../types/graph";
+import { GraphLink, GraphNode } from "../types/graph";
 import {
   FileText,
   Network,
@@ -37,7 +36,7 @@ export interface EvidenceInspectorProps {
   chunks: EvidenceChunk[];
   selectedChunkId: number | null;
   onSelectChunk: (id: number) => void;
-  subgraphNodes: EnrichedNode[];
+  subgraphNodes: GraphNode[];
   subgraphLinks: GraphLink[];
   onSelectNode: (nodeId: string) => void;
   spans: SpanRecord[];

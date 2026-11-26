@@ -2,12 +2,10 @@ import { useState } from "react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { EnrichedNode } from "../hooks/useGraphAnalytics";
-import { GraphLink } from "../types/graph";
+import { GraphLink, GraphNode } from "../types/graph";
 import {
   Sparkles,
   ArrowRight,
-  Calendar,
   Layers,
   Copy,
   Check,
@@ -17,8 +15,8 @@ import {
 import { toast } from "sonner";
 
 export interface NodeInspectorPanelProps {
-  node: EnrichedNode | null;
-  nodes: EnrichedNode[];
+  node: GraphNode | null;
+  nodes: GraphNode[];
   links: GraphLink[];
   onSelectNode: (nodeId: string) => void;
   onFindPath: (sourceId: string, targetId: string) => void;
@@ -42,7 +40,7 @@ export function NodeInspectorPanel({
         <Compass className="h-10 w-10 text-zinc-700 mb-3 animate-pulse" />
         <h3 className="text-sm font-medium text-zinc-300">No Node Selected</h3>
         <p className="text-xs text-zinc-500 mt-1 max-w-xs leading-relaxed">
-          Select a node from the canvas, table, or search to inspect its neighborhood, provenance, and bi-temporal history.
+          Select a node from the canvas, table, or search to inspect its neighborhood and provenance.
         </p>
       </div>
     );
@@ -66,7 +64,6 @@ export function NodeInspectorPanel({
 
   const handleCopyCypher = () => {
     const cypher = `MATCH (n {id: "${node.id}"})-[r]-(m)
-WHERE n.valid_from <= "${node.valid_from}" AND n.valid_to >= "${node.valid_from}"
 RETURN n, r, m LIMIT 50;`;
     navigator.clipboard.writeText(cypher);
     setCopiedCypher(true);
@@ -88,9 +85,9 @@ RETURN n, r, m LIMIT 50;`;
             </Badge>
           </div>
           <div className="flex items-center gap-2 text-[11px] text-zinc-400 font-mono">
-            <span className="truncate">{node.clusterName}</span>
+            <span className="truncate">{node.source_kind || "unknown source"}</span>
             <span>·</span>
-            <span className="tabular-nums">Degree: {node.degree}</span>
+            <span className="tabular-nums">Tier {node.tier}</span>
           </div>
         </div>
 
@@ -119,19 +116,13 @@ RETURN n, r, m LIMIT 50;`;
               value="relations"
               className="text-xs data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-amber-400 rounded-none px-0 pb-2"
             >
-              Relations ({node.degree})
+              Relations ({node.degree ?? 0})
             </TabsTrigger>
             <TabsTrigger
               value="provenance"
               className="text-xs data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-amber-400 rounded-none px-0 pb-2"
             >
               Provenance
-            </TabsTrigger>
-            <TabsTrigger
-              value="history"
-              className="text-xs data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-amber-400 rounded-none px-0 pb-2"
-            >
-              Bi-Temporal
             </TabsTrigger>
           </TabsList>
         </div>
@@ -148,23 +139,17 @@ RETURN n, r, m LIMIT 50;`;
               </p>
             </div>
 
-            {/* PageRank Metric Gauge */}
+            {/* Connectivity summary */}
             <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40 space-y-2">
               <div className="flex justify-between items-center text-[11px]">
-                <span className="font-mono text-zinc-400">PageRank Centrality</span>
+                <span className="font-mono text-zinc-400">Graph Degree</span>
                 <span className="font-mono font-semibold text-amber-400 tabular-nums">
-                  {node.pageRank?.toFixed(4) || "0.0000"}
+                  {node.degree ?? 0}
                 </span>
               </div>
-              <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
-                <div
-                  className="bg-amber-400 h-full rounded-full transition-all duration-500"
-                  style={{ width: `${Math.min(((node.pageRank || 0) / 0.15) * 100, 100)}%` }}
-                />
-              </div>
               <div className="flex justify-between text-[10px] font-mono text-zinc-500">
-                <span>In-degree: {node.inDegree}</span>
-                <span>Out-degree: {node.outDegree}</span>
+                <span>Source: {node.source_kind || "unknown"}</span>
+                <span>Tier {node.tier}</span>
               </div>
             </div>
 
@@ -273,48 +258,19 @@ RETURN n, r, m LIMIT 50;`;
               </div>
 
               <div className="flex items-center justify-between py-1 border-t border-zinc-800/60">
-                <span className="text-zinc-400">Source Chunk Hash</span>
-                <span className="font-mono text-zinc-200">sha256:{node.chunkHash}</span>
+                <span className="text-zinc-400">Source Kind</span>
+                <span className="font-mono text-zinc-200">{node.source_kind || "unknown"}</span>
               </div>
 
               <div className="flex items-center justify-between py-1 border-t border-zinc-800/60">
                 <span className="text-zinc-400">Ingestion Timestamp</span>
-                <span className="font-mono text-zinc-200">{node.lastUpdated}</span>
+                <span className="font-mono text-zinc-200">{node.ingested_at || "—"}</span>
               </div>
 
               <div className="flex items-center justify-between py-1 border-t border-zinc-800/60">
                 <span className="text-zinc-400">Extraction Method</span>
                 <span className="font-mono text-zinc-200">GraphRAG LLM Triplet Parser</span>
               </div>
-            </div>
-          </TabsContent>
-
-          {/* Tab 4: Bi-Temporal History */}
-          <TabsContent value="history" className="space-y-3 m-0">
-            <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40 space-y-2">
-              <div className="flex items-center gap-1.5 text-zinc-200 font-medium">
-                <Calendar className="h-3.5 w-3.5 text-amber-400" />
-                <span>Bi-Temporal Dimensions</span>
-              </div>
-              <div className="space-y-1.5 text-[11px] font-mono pt-1">
-                <div className="flex justify-between py-1 border-b border-zinc-800/60">
-                  <span className="text-zinc-400">Valid From</span>
-                  <span className="text-emerald-400">{node.valid_from}</span>
-                </div>
-                <div className="flex justify-between py-1 border-b border-zinc-800/60">
-                  <span className="text-zinc-400">Valid To</span>
-                  <span className="text-zinc-400">{node.valid_to}</span>
-                </div>
-                <div className="flex justify-between py-1">
-                  <span className="text-zinc-400">Tx Timestamp</span>
-                  <span className="text-sky-400">{node.tx_time}</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/30 text-[11px] text-zinc-400 leading-relaxed">
-              <span className="font-semibold text-zinc-300 block mb-1">Version Diff:</span>
-              Current state is the active head revision. No retro-active mutations recorded in Neo4j valid time bounds.
             </div>
           </TabsContent>
         </div>

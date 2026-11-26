@@ -9,11 +9,6 @@ import { AppProvider } from "../context/AppContext";
 import { OverviewPage } from "../pages/OverviewPage";
 import { AskPage } from "../pages/AskPage";
 import { DocumentsPage } from "../pages/DocumentsPage";
-import { TracesPage } from "../pages/TracesPage";
-import { RetrievalPage } from "../pages/RetrievalPage";
-import { CachePage } from "../pages/CachePage";
-import { ExperimentsPage } from "../pages/ExperimentsPage";
-import { GoldenSetPage } from "../pages/GoldenSetPage";
 import { SettingsPage } from "../pages/SettingsPage";
 
 function renderWithContext(component: React.ReactElement) {
@@ -30,11 +25,6 @@ const routes = [
   { name: "OverviewPage", component: <OverviewPage /> },
   { name: "AskPage", component: <AskPage /> },
   { name: "DocumentsPage", component: <DocumentsPage /> },
-  { name: "TracesPage", component: <TracesPage /> },
-  { name: "RetrievalPage", component: <RetrievalPage /> },
-  { name: "CachePage", component: <CachePage /> },
-  { name: "ExperimentsPage", component: <ExperimentsPage /> },
-  { name: "GoldenSetPage", component: <GoldenSetPage /> },
   { name: "SettingsPage", component: <SettingsPage /> },
 ];
 

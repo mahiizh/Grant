@@ -16,10 +16,6 @@ interface AppContextType {
   setTheme: (theme: "dark" | "light") => void;
   canvasTheme: "dark" | "match";
   setCanvasTheme: (val: "dark" | "match") => void;
-  aclScope: string;
-  setAclScope: (scope: string) => void;
-  asOfDate: string;
-  setAsOfDate: (date: string) => void;
   sidebarCollapsed: boolean;
   setSidebarCollapsed: (collapsed: boolean) => void;
   commandOpen: boolean;
@@ -65,8 +61,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem("grant_canvas_theme", val);
   };
 
-  const [aclScope, setAclScope] = useState<string>("data-platform");
-  const [asOfDate, setAsOfDate] = useState<string>("2026-04-12");
   const [commandOpen, setCommandOpen] = useState<boolean>(false);
 
   const [sidebarCollapsed, setSidebarCollapsedState] = useState<boolean>(() => {
@@ -149,10 +143,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setTheme,
         canvasTheme,
         setCanvasTheme,
-        aclScope,
-        setAclScope,
-        asOfDate,
-        setAsOfDate,
         sidebarCollapsed,
         setSidebarCollapsed,
         commandOpen,

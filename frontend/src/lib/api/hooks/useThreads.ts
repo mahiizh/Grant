@@ -73,8 +73,7 @@ export interface MessageItem {
 export interface ThreadSummary {
   thread_id: string;
   title: string;
-  acl_scope: string;
-  as_of_date?: string | null;
+  shared_scope?: string | null;
   created_at: string;
   updated_at: string;
   message_count: number;
@@ -84,8 +83,7 @@ export interface ThreadSummary {
 export interface ThreadDetail {
   thread_id: string;
   title: string;
-  acl_scope: string;
-  as_of_date?: string | null;
+  shared_scope?: string | null;
   created_at: string;
   updated_at: string;
   messages: MessageItem[];
@@ -122,7 +120,7 @@ export function useThread(threadId: string | null) {
 export function useCreateThread() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (payload: { title?: string; acl_scope?: string; as_of_date?: string | null }) => {
+    mutationFn: async (payload: { title?: string }) => {
       const res = await fetch(`${API_BASE_URL}/threads`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -147,8 +145,6 @@ export function useUpdateThread() {
     }: {
       threadId: string;
       title?: string;
-      acl_scope?: string;
-      as_of_date?: string | null;
     }) => {
       const res = await fetch(`${API_BASE_URL}/threads/${threadId}`, {
         method: "PATCH",
@@ -269,8 +265,6 @@ export async function streamSendMessage(
   threadId: string,
   payload: {
     content: string;
-    acl_scope?: string;
-    as_of_date?: string | null;
     retrieval_mode?: string;
     use_cache?: boolean;
     use_rerank?: boolean;

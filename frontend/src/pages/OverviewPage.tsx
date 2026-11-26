@@ -39,7 +39,7 @@ export function OverviewPage() {
             GraphRAG Intelligence Lab Overview
           </h1>
           <p className="text-xs text-zinc-400 mt-1">
-            Telemetry and service-level indicators for bi-temporal retrieval, semantic caching, and claim faithfulness.
+            Telemetry and service-level indicators for grounded retrieval, exact caching, and answer provenance.
           </p>
         </div>
 
@@ -55,7 +55,7 @@ export function OverviewPage() {
         </div>
       </div>
 
-      {/* 6 KPI Cards Grid */}
+      {/* KPI Cards */}
       <QueryState
         isLoading={isLoading}
         error={error}
@@ -83,11 +83,10 @@ export function OverviewPage() {
               title: "Golden-Set Accuracy",
               value: percent(data.golden_set_accuracy),
               subtext: isUnmeasured(data.golden_set_accuracy)
-                ? "Run the golden-set eval to record accuracy"
+                ? "No recorded accuracy available"
                 : "Latest recorded evaluation run",
               icon: ShieldCheck,
               color: "text-emerald-400",
-              target: "/golden-set",
             },
             {
               title: "P95 Pipeline Latency",
@@ -95,21 +94,19 @@ export function OverviewPage() {
                 ? NOT_MEASURED
                 : `${data.p95_latency_ms} ms`,
               subtext: isUnmeasured(data.p95_latency_ms)
-                ? "No completed query traces recorded yet"
+                ? "No completed queries recorded yet"
                 : "Computed from stored assistant messages",
               icon: Clock,
               color: "text-amber-400",
-              target: "/traces",
             },
             {
               title: "Cache Hit Rate",
               value: percent(data.cache_hit_rate),
               subtext: isUnmeasured(data.cache_hit_rate)
                 ? "No cache-tagged messages recorded yet"
-                : "Exact + semantic hits from stored messages",
+                : "Exact hits from stored messages",
               icon: Zap,
               color: "text-emerald-400",
-              target: "/cache",
             },
             {
               title: "Cost Per Correct Answer",
@@ -119,7 +116,6 @@ export function OverviewPage() {
               subtext: "The pipeline does not persist per-answer cost",
               icon: Coins,
               color: "text-emerald-400",
-              target: "/experiments",
             },
             {
               title: "Unverified Facts Pending",
@@ -127,7 +123,6 @@ export function OverviewPage() {
               subtext: "Chunks whose provenance is not marked verified",
               icon: CheckCircle2,
               color: "text-sky-400",
-              target: "/retrieval",
             },
           ];
 
@@ -139,8 +134,10 @@ export function OverviewPage() {
                 return (
                   <Card
                     key={kpi.title}
-                    onClick={() => navigate(kpi.target)}
-                    className="bg-zinc-900/60 border-zinc-800 hover:border-zinc-700 transition-all cursor-pointer group"
+                    onClick={kpi.target ? () => navigate(kpi.target) : undefined}
+                    className={`bg-zinc-900/60 border-zinc-800 transition-all group ${
+                      kpi.target ? "hover:border-zinc-700 cursor-pointer" : ""
+                    }`}
                   >
                     <CardHeader className="pb-2">
                       <div className="flex items-center justify-between">
@@ -171,8 +168,8 @@ export function OverviewPage() {
         }}
       </QueryState>
 
-      {/* Quick Launch Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+      {/* Quick Launch */}
+      <div className="pt-2">
         <div
           onClick={() => navigate("/graph")}
           className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/80 hover:border-zinc-700 transition-all cursor-pointer space-y-1.5 group"
@@ -182,33 +179,7 @@ export function OverviewPage() {
             <ArrowRight className="h-3.5 w-3.5" />
           </div>
           <p className="text-xs text-zinc-400 leading-relaxed">
-            Inspect entities and relationships with client-computed PageRank, communities, and degree.
-          </p>
-        </div>
-
-        <div
-          onClick={() => navigate("/retrieval")}
-          className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/80 hover:border-zinc-700 transition-all cursor-pointer space-y-1.5 group"
-        >
-          <div className="flex items-center justify-between text-xs font-semibold text-zinc-200 group-hover:text-amber-400">
-            <span>RRF & Dense/Sparse Fusion</span>
-            <ArrowRight className="h-3.5 w-3.5" />
-          </div>
-          <p className="text-xs text-zinc-400 leading-relaxed">
-            Compare dense, sparse, hybrid, and full retrieval with live rank shifts.
-          </p>
-        </div>
-
-        <div
-          onClick={() => navigate("/traces")}
-          className="p-4 rounded-xl border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900/80 hover:border-zinc-700 transition-all cursor-pointer space-y-1.5 group"
-        >
-          <div className="flex items-center justify-between text-xs font-semibold text-zinc-200 group-hover:text-amber-400">
-            <span>Distributed Spans &amp; Waterfall</span>
-            <ArrowRight className="h-3.5 w-3.5" />
-          </div>
-          <p className="text-xs text-zinc-400 leading-relaxed">
-            Review recorded pipeline spans and per-stage latency.
+            Inspect entities and relationships with source provenance and degree.
           </p>
         </div>
       </div>

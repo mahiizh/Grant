@@ -8,11 +8,6 @@ import {
   MessageSquareQuote,
   FileText,
   Network,
-  Activity,
-  Layers,
-  Zap,
-  FlaskConical,
-  CheckCircle2,
   Settings,
   PanelLeftClose,
   PanelLeftOpen,
@@ -29,21 +24,6 @@ export function Sidebar() {
         { label: "Ask", to: "/", icon: MessageSquareQuote, badge: "Glass-Box" },
         { label: "Documents", to: "/documents", icon: FileText },
         { label: "Graph", to: "/graph", icon: Network },
-      ],
-    },
-    {
-      group: "Inspect",
-      items: [
-        { label: "Traces", to: "/traces", icon: Activity },
-        { label: "Retrieval", to: "/retrieval", icon: Layers },
-        { label: "Cache", to: "/cache", icon: Zap },
-      ],
-    },
-    {
-      group: "Evaluate",
-      items: [
-        { label: "Experiments", to: "/experiments", icon: FlaskConical },
-        { label: "Golden set", to: "/golden-set", icon: CheckCircle2 },
       ],
     },
   ];

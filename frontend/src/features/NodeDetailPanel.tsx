@@ -2,15 +2,14 @@ import { useState } from "react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from "../components/ui/sheet";
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
-import { EnrichedNode } from "../hooks/useGraphAnalytics";
-import { GraphLink } from "../types/graph";
+import { GraphLink, GraphNode } from "../types/graph";
 import { Route, Sparkles, ExternalLink, ArrowRight, ShieldCheck } from "lucide-react";
 
 export interface NodeDetailPanelProps {
-  node: EnrichedNode | null;
+  node: GraphNode | null;
   isOpen: boolean;
   onClose: () => void;
-  allNodes: EnrichedNode[];
+  allNodes: GraphNode[];
   links: GraphLink[];
   onSelectNode: (nodeId: string) => void;
   onFindPath: (sourceId: string, targetId: string) => void;
@@ -55,7 +54,7 @@ export function NodeDetailPanel({
               {node.type}
             </Badge>
             <Badge variant="outline" className="text-[10px] text-zinc-400">
-              {node.clusterName}
+              {node.source_kind || "unknown"}
             </Badge>
             {node.status && (
               <Badge
@@ -78,25 +77,22 @@ export function NodeDetailPanel({
         <div className="py-4 space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div className="p-3 rounded-xl border border-zinc-800 bg-zinc-900/60">
-              <span className="text-[11px] text-zinc-400 block pb-1">PageRank Centrality</span>
+              <span className="text-[11px] text-zinc-400 block pb-1">Connections</span>
               <span className="text-lg font-mono font-bold text-sky-400">
-                {node.pageRank.toFixed(4)}
+                {node.degree ?? 0}
               </span>
-              <div className="w-full bg-zinc-800 h-1.5 rounded-full mt-2 overflow-hidden">
-                <div
-                  className="bg-sky-400 h-full rounded-full transition-all duration-500"
-                  style={{ width: `${Math.min(node.pageRank * 800, 100)}%` }}
-                />
-              </div>
+              <span className="text-[11px] text-zinc-500 block mt-1 font-mono">
+                across returned graph
+              </span>
             </div>
 
             <div className="p-3 rounded-xl border border-zinc-800 bg-zinc-900/60">
-              <span className="text-[11px] text-zinc-400 block pb-1">Degrees (Total / In / Out)</span>
+              <span className="text-[11px] text-zinc-400 block pb-1">Confidence Tier</span>
               <span className="text-lg font-mono font-bold text-purple-400">
-                {node.degree}
+                Tier {node.tier}
               </span>
               <span className="text-[11px] text-zinc-500 block mt-1 font-mono">
-                &darr; {node.inDegree} in • &uarr; {node.outDegree} out
+                {node.tier === 1 ? "Authoritative" : node.tier === 2 ? "Derived" : "Inferred"}
               </span>
             </div>
           </div>
@@ -107,7 +103,7 @@ export function NodeDetailPanel({
               <Route className="h-4 w-4" /> Find Shortest Reasoning Path
             </div>
             <p className="text-[11px] text-zinc-400">
-              Compute Graphology bidirectional shortest path from <strong className="text-zinc-200">{node.name}</strong> to any node with glowing directional particle beams.
+              Explore a connected path from <strong className="text-zinc-200">{node.name}</strong> to any node with glowing directional particle beams.
             </p>
 
             <div className="flex gap-2">
@@ -197,17 +193,17 @@ export function NodeDetailPanel({
             </div>
           </div>
 
-          {/* Provenance and Temporal Info */}
+          {/* Provenance */}
           <div className="p-3 rounded-lg border border-zinc-800/60 bg-zinc-950/40 text-[11px] text-zinc-400 space-y-1">
             <div className="flex items-center justify-between">
               <span className="flex items-center gap-1.5 text-zinc-300">
-                <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" /> Bi-Temporal Provenance
+                <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" /> Source Provenance
               </span>
-              <span className="font-mono text-zinc-500">Tier 1 Document</span>
+              <span className="font-mono text-zinc-500">Tier {node.tier}</span>
             </div>
             <div className="flex items-center justify-between text-zinc-500 font-mono text-[10px] pt-1">
-              <span>Valid From: {node.lastUpdated || "2026-04-12"}</span>
-              <span>Valid To: Ongoing</span>
+              <span>Source: {node.source_kind || "—"}</span>
+              <span>Ingested: {node.ingested_at || "—"}</span>
             </div>
           </div>
         </div>

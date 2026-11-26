@@ -1,22 +1,19 @@
 import { useRef, useEffect, useState, useMemo, useCallback } from "react";
 import ForceGraph2D, { ForceGraphMethods } from "react-force-graph-2d";
-import { EnrichedNode } from "../hooks/useGraphAnalytics";
-import { GraphLink } from "../types/graph";
+import { GraphLink, GraphNode } from "../types/graph";
 import { NodeContextMenu } from "./NodeContextMenu";
 import { useApp } from "../context/AppContext";
 import { toast } from "sonner";
 
 export interface GraphCanvas2DProps {
-  nodes: EnrichedNode[];
+  nodes: GraphNode[];
   links: GraphLink[];
-  colorBy: "type" | "cluster" | "tier";
+  colorBy: "type" | "tier";
   selectedNodeId: string | null;
-  onSelectNode: (node: EnrichedNode) => void;
+  onSelectNode: (node: GraphNode) => void;
   activePath: string[] | null;
   highlightedPathNodes: Set<string>;
   zoomToTrigger: number;
-  filterDate?: string;
-  onCenterCoordinates?: (x: number, y: number) => void;
   onFindPathRequest?: (sourceId: string) => void;
 }
 
@@ -33,15 +30,6 @@ const TIER_COLORS: Record<number, string> = {
   2: "#10B981",
   3: "#F59E0B",
 };
-
-const CLUSTER_COLORS = [
-  "#38BDF8",
-  "#10B981",
-  "#F59E0B",
-  "#8B5CF6",
-  "#EC4899",
-  "#06B6D4",
-];
 
 const GLYPH_MAP: Record<string, string> = {
   mechanism: "M",
@@ -60,21 +48,20 @@ export function GraphCanvas2D({
   activePath,
   highlightedPathNodes,
   zoomToTrigger,
-  filterDate = "2026-04-12",
   onFindPathRequest,
 }: GraphCanvas2DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fgRef = useRef<ForceGraphMethods | undefined>(undefined);
   const { theme, canvasTheme } = useApp();
   const [dimensions, setDimensions] = useState({ width: 800, height: 500 });
-  const [hoverNode, setHoverNode] = useState<EnrichedNode | null>(null);
+  const [hoverNode, setHoverNode] = useState<GraphNode | null>(null);
 
   // Hidden nodes state (e.g. from context menu)
   const [hiddenNodeIds, setHiddenNodeIds] = useState<Set<string>>(new Set());
 
   // Right-click context menu state
   const [contextMenu, setContextMenu] = useState<{
-    node: EnrichedNode;
+    node: GraphNode;
     position: { x: number; y: number };
   } | null>(null);
 
@@ -216,10 +203,7 @@ export function GraphCanvas2D({
 
   // Helper to determine node color
   const getNodeColor = useCallback(
-    (node: EnrichedNode): string => {
-      if (colorBy === "cluster") {
-        return CLUSTER_COLORS[node.cluster % CLUSTER_COLORS.length];
-      }
+    (node: GraphNode): string => {
       if (colorBy === "tier") {
         return TIER_COLORS[node.tier || 1] || "#38BDF8";
       }
@@ -263,22 +247,18 @@ export function GraphCanvas2D({
       const isPathNode = highlightedPathNodes.has(node.id);
       const isDimmed = hoverNode !== null && !hoverNeighbors.has(node.id);
 
-      const isFutureNode = filterDate && node.valid_from && node.valid_from > filterDate;
-
       const color = getNodeColor(node);
       const radius = node.val || 6;
       const screenRadius = radius * globalScale;
 
       ctx.save();
 
-      if (isFutureNode) {
-        ctx.globalAlpha = 0.08;
-      } else if (isDimmed) {
+      if (isDimmed) {
         ctx.globalAlpha = 0.15;
       }
 
       // Glow ONLY on hover, selected, or active path
-      if (!isFutureNode && (isHovered || isSelected || isPathNode)) {
+      if (isHovered || isSelected || isPathNode) {
         ctx.shadowColor = isPathNode ? "#F59E0B" : isSelected ? "#38BDF8" : color;
         ctx.shadowBlur = isSelected ? 24 : isHovered ? 18 : 14;
       } else {
@@ -303,7 +283,7 @@ export function GraphCanvas2D({
       ctx.stroke();
 
       // Draw node glyph letter inside circle
-      if (screenRadius > 5 && !isFutureNode) {
+      if (screenRadius > 5) {
         ctx.shadowBlur = 0;
         const glyph = GLYPH_MAP[node.type] || "•";
         const glyphSize = Math.max(radius * 0.9, 3);
@@ -318,8 +298,7 @@ export function GraphCanvas2D({
 
       // Draw label
       const shouldDrawLabel =
-        ((globalScale > 1.2 && screenRadius > 4) || isHovered || isSelected || isPathNode) &&
-        !isFutureNode;
+        (globalScale > 1.2 && screenRadius > 4) || isHovered || isSelected || isPathNode;
 
       if (shouldDrawLabel && !isDimmed) {
         const label = node.name;
@@ -350,7 +329,7 @@ export function GraphCanvas2D({
 
       ctx.restore();
     },
-    [selectedNodeId, hoverNode, hoverNeighbors, highlightedPathNodes, getNodeColor, filterDate, isLightCanvas]
+    [selectedNodeId, hoverNode, hoverNeighbors, highlightedPathNodes, getNodeColor, isLightCanvas]
   );
 
   // Link directional particles
@@ -379,16 +358,12 @@ export function GraphCanvas2D({
         return isLightCanvas ? "rgba(0, 0, 0, 0.04)" : "rgba(255, 255, 255, 0.02)";
       }
 
-      if (filterDate && link.valid_from && link.valid_from > filterDate) {
-        return "rgba(255, 255, 255, 0.02)";
-      }
-
       const tier = link.tier || 1;
       if (tier === 3) return "rgba(245, 158, 11, 0.4)";
       if (tier === 2) return isLightCanvas ? "rgba(0, 0, 0, 0.12)" : "rgba(255, 255, 255, 0.15)";
       return isLightCanvas ? "rgba(0, 0, 0, 0.25)" : "rgba(255, 255, 255, 0.35)";
     },
-    [activePathLinkKeys, hoverNode, hoverNeighbors, filterDate, isLightCanvas]
+    [activePathLinkKeys, hoverNode, hoverNeighbors, isLightCanvas]
   );
 
   const getLinkWidth = useCallback(
@@ -410,52 +385,13 @@ export function GraphCanvas2D({
     [activePathLinkKeys]
   );
 
-  // Louvain hulls
-  const handleRenderFramePost = useCallback(
-    (ctx: CanvasRenderingContext2D, globalScale: number) => {
-      if (colorBy !== "cluster") return;
-
-      const clusterPoints = new Map<number, { x: number; y: number }[]>();
-      visibleNodes.forEach((n: any) => {
-        if (n.x !== undefined && n.y !== undefined) {
-          if (!clusterPoints.has(n.cluster)) {
-            clusterPoints.set(n.cluster, []);
-          }
-          clusterPoints.get(n.cluster)!.push({ x: n.x, y: n.y });
-        }
-      });
-
-      ctx.save();
-      clusterPoints.forEach((points, clusterId) => {
-        if (points.length < 2) return;
-        const color = CLUSTER_COLORS[clusterId % CLUSTER_COLORS.length];
-
-        const cx = points.reduce((acc, p) => acc + p.x, 0) / points.length;
-        const cy = points.reduce((acc, p) => acc + p.y, 0) / points.length;
-
-        const maxDist = Math.max(...points.map((p) => Math.hypot(p.x - cx, p.y - cy)));
-        const r = maxDist + 28;
-
-        ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, 2 * Math.PI);
-        ctx.fillStyle = `${color}0D`;
-        ctx.fill();
-        ctx.strokeStyle = `${color}25`;
-        ctx.lineWidth = 1.2 / globalScale;
-        ctx.stroke();
-      });
-      ctx.restore();
-    },
-    [colorBy, visibleNodes]
-  );
-
   // Context Menu handlers
-  const handleExpandNeighbors = (node: EnrichedNode) => {
+  const handleExpandNeighbors = (node: GraphNode) => {
     onSelectNode(node);
     toast.info(`Focused neighborhood of ${node.name}`);
   };
 
-  const handleFindPathFromHere = (node: EnrichedNode) => {
+  const handleFindPathFromHere = (node: GraphNode) => {
     if (onFindPathRequest) {
       onFindPathRequest(node.id);
     } else {
@@ -463,7 +399,7 @@ export function GraphCanvas2D({
     }
   };
 
-  const handleHideNode = (node: EnrichedNode) => {
+  const handleHideNode = (node: GraphNode) => {
     setHiddenNodeIds((prev) => new Set([...prev, node.id]));
     toast.info(`Hidden node "${node.name}" from current canvas view`);
   };
@@ -517,7 +453,6 @@ export function GraphCanvas2D({
         }}
         onEngineStop={handleEngineStop}
         onRenderFramePre={handleRenderFramePre}
-        onRenderFramePost={handleRenderFramePost}
         cooldownTicks={120}
         d3VelocityDecay={0.4}
       />

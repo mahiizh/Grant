@@ -1,25 +1,19 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiClient, formatApiError } from "../client";
-import { useApp } from "../../../context/AppContext";
 
 export function useGraph(options?: {
-  scope?: string;
-  asOf?: string;
   limit?: number;
   sourceKind?: string;
 }) {
-  const { aclScope, asOfDate } = useApp();
-  const scope = options?.scope ?? aclScope;
-  const as_of = options?.asOf ?? asOfDate;
   const limit = options?.limit ?? 100;
   const source_kind = options?.sourceKind;
 
   return useQuery({
-    queryKey: ["graph", { scope, as_of, limit, source_kind }],
+    queryKey: ["graph", { limit, source_kind }],
     queryFn: async () => {
       const { data, error } = await apiClient.GET("/graph", {
         params: {
-          query: { scope, as_of, limit, source_kind },
+          query: { limit, source_kind },
         },
       });
       if (error) throw new Error(formatApiError(error, "Failed to fetch knowledge graph"));
@@ -29,10 +23,8 @@ export function useGraph(options?: {
 }
 
 export function useGraphNeighbors(nodeId: string | null, depth = 1) {
-  const { aclScope, asOfDate } = useApp();
-
   return useQuery({
-    queryKey: ["graph-neighbors", nodeId, depth, aclScope, asOfDate],
+    queryKey: ["graph-neighbors", nodeId, depth],
     queryFn: async () => {
       if (!nodeId) return null;
       const { data, error } = await apiClient.GET("/graph/nodes/{node_id}/neighbors", {
@@ -49,20 +41,13 @@ export function useGraphNeighbors(nodeId: string | null, depth = 1) {
 }
 
 export function useGraphPath(fromNode: string | null, toNode: string | null) {
-  const { aclScope, asOfDate } = useApp();
-
   return useQuery({
-    queryKey: ["graph-path", fromNode, toNode, aclScope, asOfDate],
+    queryKey: ["graph-path", fromNode, toNode],
     queryFn: async () => {
       if (!fromNode || !toNode) return null;
       const { data, error } = await apiClient.GET("/graph/path", {
         params: {
-          query: {
-            from: fromNode,
-            to: toNode,
-            scope: aclScope,
-            as_of: asOfDate,
-          },
+          query: { from: fromNode, to: toNode },
         },
       });
       if (error) throw new Error(formatApiError(error, "Failed to compute graph path"));

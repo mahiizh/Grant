@@ -2,11 +2,10 @@ import { useState } from "react";
 import { ChevronDown, ChevronUp, Layers } from "lucide-react";
 
 export interface LegendProps {
-  colorBy: "type" | "cluster" | "tier";
-  clusters: { id: number; name: string; count: number; color: string }[];
+  colorBy: "type" | "tier";
 }
 
-export function GraphLegend({ colorBy, clusters }: LegendProps) {
+export function GraphLegend({ colorBy }: LegendProps) {
   const [collapsed, setCollapsed] = useState(false);
 
   const typeItems = [
@@ -41,7 +40,7 @@ export function GraphLegend({ colorBy, clusters }: LegendProps) {
       <div className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-2 flex items-center justify-between">
         <span className="flex items-center gap-1.5">
           <Layers className="h-3 w-3 text-zinc-500" />
-          Legend ({colorBy === "type" ? "Types" : colorBy === "cluster" ? "Louvain" : "Tiers"})
+          Legend ({colorBy === "type" ? "Types" : "Tiers"})
         </span>
         <button
           onClick={() => setCollapsed(true)}
@@ -74,24 +73,10 @@ export function GraphLegend({ colorBy, clusters }: LegendProps) {
               <span className="text-[11px] font-medium text-zinc-300">{item.label}</span>
             </div>
           ))}
-
-        {colorBy === "cluster" &&
-          clusters.slice(0, 5).map((c) => (
-            <div key={c.id} className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <span
-                  className="h-2.5 w-2.5 rounded-full shrink-0"
-                  style={{ backgroundColor: c.color }}
-                />
-                <span className="text-[11px] text-zinc-300 truncate max-w-[140px]">{c.name}</span>
-              </div>
-              <span className="text-[10px] font-mono text-zinc-500">{c.count} nodes</span>
-            </div>
-          ))}
       </div>
 
       <div className="mt-2.5 pt-2 border-t border-zinc-800/60 text-[10px] text-zinc-500 flex items-center justify-between font-mono">
-        <span>Node = PageRank</span>
+        <span>Node = Degree</span>
         <span>Edges = Provenance</span>
       </div>
     </div>

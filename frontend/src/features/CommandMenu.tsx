@@ -7,14 +7,14 @@ import {
   CommandGroup,
   CommandItem,
 } from "../components/ui/command";
-import { EnrichedNode } from "../hooks/useGraphAnalytics";
+import type { GraphNode } from "../types/graph";
 import { Badge } from "../components/ui/badge";
 import { Network, Database, Zap, Users, ArrowRight } from "lucide-react";
 
 export interface CommandMenuProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  nodes: EnrichedNode[];
+  nodes: GraphNode[];
   onSelectNode: (nodeId: string) => void;
 }
 
