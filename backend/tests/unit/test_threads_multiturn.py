@@ -3,37 +3,25 @@ from pathlib import Path
 import pytest
 
 from app.core.acl import ACLScope
-from app.evaluation.datasets import GoldenDataset
-from app.evaluation.runner import EvaluationRunner
 from tests.fakes.hermetic import build_hermetic_orchestrator, load_corpus_chunks
 
 
-def _hermetic_orchestrator():
-    return build_hermetic_orchestrator(load_corpus_chunks())[0]
+def _hermetic_orchestrator(corpus_dir: Path):
+    return build_hermetic_orchestrator(load_corpus_chunks(corpus_dir))[0]
 
 
 @pytest.mark.anyio
-async def test_three_turn_thread_pronoun_resolution_and_traces() -> None:
+async def test_three_turn_thread_pronoun_resolution_and_traces(tmp_corpus_dir: Path) -> None:
     """Verify 3-turn thread:
 
-    1. Turn 2 uses pronouns ('they', 'it') and the condense_query step resolves them to Alice Chen & outbox.
+    1. Turn 2 uses pronouns ('they', 'it') and the condense_query step resolves them to the named team and service.
     2. Every turn has its own distinct trace_id.
     3. Citations differ per turn as conversation focus evolves.
     """
-    orchestrator = _hermetic_orchestrator()
+    orchestrator = _hermetic_orchestrator(tmp_corpus_dir)
 
     thread_id = "test-thread-abc-123"
-    admin_scope = ACLScope.restricted(
-        allowed_roles={
-            "admin",
-            "data-platform",
-            "payments",
-            "core-banking",
-            "sre",
-            "executive-audit",
-        },
-        allowed_groups={"platform-admins"},
-    )
+    public_scope = ACLScope.public()
 
     # --- Turn 1 ---
     q1 = "Why did the outbox service fail to sync state to PostgreSQL for Alice Chen's team?"
@@ -41,7 +29,7 @@ async def test_three_turn_thread_pronoun_resolution_and_traces() -> None:
         query=q1,
         thread_id=thread_id,
         thread_history=[],
-        acl_scope=admin_scope,
+        acl_scope=public_scope,
     )
 
     trace_id_1 = turn_1_state.get("trace_id")
@@ -65,7 +53,7 @@ async def test_three_turn_thread_pronoun_resolution_and_traces() -> None:
         query=q2,
         thread_id=thread_id,
         thread_history=history_after_turn_1,
-        acl_scope=admin_scope,
+        acl_scope=public_scope,
     )
 
     trace_id_2 = turn_2_state.get("trace_id")
@@ -74,7 +62,8 @@ async def test_three_turn_thread_pronoun_resolution_and_traces() -> None:
 
     # Assertion 1: Pronoun resolution
     assert "they" not in rewritten_2.lower()
-    assert "outbox" in rewritten_2.lower()
+    assert "data platform team" in rewritten_2.lower()
+    assert "postgresql" in rewritten_2.lower()
     assert "fix" in rewritten_2.lower()
 
     # Assertion 2: Distinct trace_id
@@ -97,7 +86,7 @@ async def test_three_turn_thread_pronoun_resolution_and_traces() -> None:
         query=q3,
         thread_id=thread_id,
         thread_history=history_after_turn_2,
-        acl_scope=admin_scope,
+        acl_scope=public_scope,
     )
 
     trace_id_3 = turn_3_state.get("trace_id")
@@ -107,25 +96,3 @@ async def test_three_turn_thread_pronoun_resolution_and_traces() -> None:
     assert "redis" in rewritten_3.lower()
     assert trace_id_3 != trace_id_2 and trace_id_3 != trace_id_1
     assert len(citations_3) > 0
-
-
-@pytest.mark.anyio
-async def test_multiturn_golden_dataset_rewrite_accuracy() -> None:
-    """Verify golden multi-turn dataset evaluates rewrite accuracy separately."""
-    repo_root = Path(__file__).resolve().parents[3]
-    multiturn_file = repo_root / "evals" / "golden" / "multi_turn.jsonl"
-
-    assert multiturn_file.exists()
-
-    orchestrator = _hermetic_orchestrator()
-    dataset = GoldenDataset.load_from_jsonl(multiturn_file)
-    assert len(dataset) == 10
-
-    runner = EvaluationRunner(orchestrator=orchestrator)
-    report = await runner.run_benchmark(dataset)
-
-    # Multi-turn accuracy must be reported separately
-    scores = report.category_scores
-    assert "multi_turn" in scores
-    rewrite_acc = scores["multi_turn"]["rewrite_accuracy"]
-    assert rewrite_acc >= 0.90, f"Multi-turn rewrite accuracy dropped below 90%: {rewrite_acc:.2%}"

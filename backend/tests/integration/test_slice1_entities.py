@@ -241,7 +241,7 @@ async def test_slice1_entity_pipeline_six_checks() -> None:
                     session=session,
                     text="Docling is a software used in our pipeline.",
                     thread_id=thread_id,
-                    acl_scope="public",
+                    shared_scope=None,
                     message_id=message_id,
                     owner_user_id=OWNER,
                     role="user",

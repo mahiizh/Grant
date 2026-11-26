@@ -94,15 +94,14 @@ def test_entity_relation_extraction() -> None:
 
 
 @pytest.mark.anyio
-async def test_end_to_end_corpus_ingestion(test_session: AsyncSession) -> None:
-    repo_root = Path(__file__).resolve().parents[3]
-    corpus_dir = repo_root / "corpus"
-
-    # Ingest the 3 foundational corpus files
+async def test_end_to_end_corpus_ingestion(
+    test_session: AsyncSession,
+    tmp_corpus_dir: Path,
+) -> None:
     files = [
-        corpus_dir / "rfc_001_storage_architecture.md",
-        corpus_dir / "postmortem_inc_2026_04.md",
-        corpus_dir / "team_directory_2026.md",
+        tmp_corpus_dir / "rfc_001_storage_architecture.md",
+        tmp_corpus_dir / "postmortem_inc_2026_04.md",
+        tmp_corpus_dir / "team_directory_2026.md",
     ]
 
     for file_path in files:

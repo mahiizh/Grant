@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -25,14 +26,17 @@ async def test_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 @pytest.fixture
-async def client(test_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+async def client(
+    test_session: AsyncSession,
+    tmp_corpus_dir: Path,
+) -> AsyncGenerator[AsyncClient, None]:
     async def override_get_db() -> AsyncGenerator[AsyncSession, None]:
         yield test_session
 
     app.dependency_overrides[get_db_session] = override_get_db
 
     previous_orchestrator = query_route.get_orchestrator()
-    orchestrator = build_hermetic_orchestrator(load_corpus_chunks())[0]
+    orchestrator = build_hermetic_orchestrator(load_corpus_chunks(tmp_corpus_dir))[0]
     query_route.set_orchestrator(orchestrator)
 
     transport = ASGITransport(app=app)
@@ -50,13 +54,14 @@ async def client(test_session: AsyncSession) -> AsyncGenerator[AsyncClient, None
 async def test_threads_crud_and_messages(client: AsyncClient) -> None:
     # 1. Create thread
     res = await client.post(
-        "/api/v1/threads", json={"title": "Investigation INC-04", "acl_scope": "sre"}
+        "/api/v1/threads",
+        json={"title": "Investigation INC-04", "shared_scope": "shared-operations"},
     )
     assert res.status_code == 201
     thread_data = res.json()
     thread_id = thread_data["thread_id"]
     assert thread_data["title"] == "Investigation INC-04"
-    assert thread_data["acl_scope"] == "sre"
+    assert thread_data["shared_scope"] == "shared-operations"
     assert thread_data["messages"] == []
 
     # 2. List threads
@@ -94,7 +99,8 @@ async def test_threads_crud_and_messages(client: AsyncClient) -> None:
     assert res.status_code == 200
     turn2 = res.json()
     assert "they" not in turn2["rewritten_query"].lower()
-    assert "outbox" in turn2["rewritten_query"].lower()
+    assert "data platform team" in turn2["rewritten_query"].lower()
+    assert "postgresql" in turn2["rewritten_query"].lower()
     assert turn2["trace_id"] != turn1["trace_id"]
     asst_msg_id_2 = turn2["message_id"]
 

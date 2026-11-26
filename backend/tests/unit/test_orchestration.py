@@ -6,14 +6,12 @@ from fastapi.testclient import TestClient
 
 from app.api.routes.query import get_orchestrator, set_orchestrator
 from app.cache.exact import ExactCache
-from app.cache.semantic import SemanticCache
 from app.core.acl import ACLScope
-from app.domain import Chunk, Entity, Provenance, Relation, TemporalBounds
+from app.domain import Chunk, Entity, Provenance, Relation
 from app.graph.retrievers import GraphRetriever as RealGraphRetriever
 from app.llm.gateway import ModelResponse
 from app.main import app
-from app.orchestration.router import QueryRouter
-from app.orchestration.workflow import RAGOrchestrator
+from app.orchestration.workflow import RAGOrchestrator, classify_route
 from app.retrieval.filters import RetrievalFilter
 from app.retrieval.hybrid import HybridRetriever as RealHybridRetriever
 from tests.fakes.fake_gateway import FakeModelGateway
@@ -38,7 +36,7 @@ def build_test_orchestrator(cache_enabled: bool = True) -> RAGOrchestrator:
         text="PostgreSQL 16 acts as the single source of truth for all documents.",
         tokens=12,
         acl_scope=acl,
-        temporal=TemporalBounds(valid_from=now),
+        ingested_at=now,
         provenance=prov,
     )
     c2 = Chunk(
@@ -48,7 +46,7 @@ def build_test_orchestrator(cache_enabled: bool = True) -> RAGOrchestrator:
         text="Incident INC-2026-04 impacted PaymentGateway with a 24% failure rate.",
         tokens=11,
         acl_scope=acl,
-        temporal=TemporalBounds(valid_from=now),
+        ingested_at=now,
         provenance=prov,
     )
 
@@ -61,7 +59,7 @@ def build_test_orchestrator(cache_enabled: bool = True) -> RAGOrchestrator:
         name="Bob Kumar",
         entity_type="PERSON",
         acl_scope=acl,
-        temporal=TemporalBounds.current(),
+        ingested_at=now,
         provenance=prov,
     )
     e2 = Entity(
@@ -69,7 +67,7 @@ def build_test_orchestrator(cache_enabled: bool = True) -> RAGOrchestrator:
         name="Elena Rostova",
         entity_type="PERSON",
         acl_scope=acl,
-        temporal=TemporalBounds.current(),
+        ingested_at=now,
         provenance=prov,
     )
     rel = Relation(
@@ -78,7 +76,7 @@ def build_test_orchestrator(cache_enabled: bool = True) -> RAGOrchestrator:
         target_entity_id="ent_elena",
         relation_type="COORDINATES_WITH",
         acl_scope=acl,
-        temporal=TemporalBounds.current(),
+        ingested_at=now,
         provenance=prov,
     )
 
@@ -87,45 +85,39 @@ def build_test_orchestrator(cache_enabled: bool = True) -> RAGOrchestrator:
 
     # Inject FakeRedis so unit tests never require a live Redis server.
     exact_cache = ExactCache(redis_client=cast(Any, FakeRedis())) if cache_enabled else None
-    sem_cache = SemanticCache(redis_client=cast(Any, FakeRedis())) if cache_enabled else None
 
     return RAGOrchestrator(
         hybrid_retriever=cast(RealHybridRetriever, hybrid),
         graph_retriever=cast(RealGraphRetriever, graph),
         exact_cache=exact_cache,
-        semantic_cache=sem_cache,
         cache_enabled=cache_enabled,
     )
 
 
-def test_query_router_classification() -> None:
-    # 1. Unanswerable -> abstain
-    assert QueryRouter.route("What was the company ARR for fiscal year 2025?") == "abstain"
-    assert QueryRouter.route("Which AWS region hosts the cluster?") == "abstain"
+def test_inline_route_classification() -> None:
+    # 1. Unanswerable -> abstain in grounded_only
+    assert classify_route("What was the company ARR for fiscal year 2025?") == "abstain"
+    assert classify_route("Which AWS region hosts the cluster?") == "abstain"
 
-    # 2. Multi-hop -> graph
+    # 2. Generic multi-hop -> graph (no corpus/team-specific keywords)
     assert (
-        QueryRouter.route(
-            "Who leads the team responsible for the database "
-            "where outbox events are initially staged?"
-        )
+        classify_route("What is the upstream dependency chain for the payment service?")
         == "graph"
     )
 
     # 3. Global summary -> hybrid
     assert (
-        QueryRouter.route("Summarize the responsibilities across all engineering teams") == "hybrid"
+        classify_route("Summarize the responsibilities across all engineering teams") == "hybrid"
     )
 
     # 4. Local fact -> vector
-    assert QueryRouter.route("Which database acts as the single source of truth?") == "vector"
+    assert classify_route("Which database acts as the single source of truth?") == "vector"
 
 
 @pytest.mark.anyio
 async def test_orchestrator_vector_fact_execution() -> None:
     orchestrator = build_test_orchestrator()
     orchestrator.exact_cache.clear()
-    orchestrator.semantic_cache.clear()
 
     state = await orchestrator.run(
         query="Which database acts as the single source of truth?",
@@ -157,7 +149,6 @@ async def test_orchestrator_vector_fact_execution() -> None:
 async def test_orchestrator_retrieval_configs(config: str, method: str) -> None:
     orchestrator = build_test_orchestrator()
     orchestrator.exact_cache.clear()
-    orchestrator.semantic_cache.clear()
 
     state = await orchestrator.run(
         query="Which database acts as the single source of truth?",
@@ -340,7 +331,6 @@ def test_fastapi_query_endpoint() -> None:
             "/api/v1/query",
             json={
                 "query": "Which database acts as the single source of truth?",
-                "tenant_id": "default",
             },
         )
     finally:

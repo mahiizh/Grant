@@ -3,244 +3,201 @@ from datetime import UTC, datetime
 import pytest
 
 from app.core.acl import ACLScope
-from app.domain import Chunk, Entity, Provenance, Relation, TemporalBounds
+from app.domain import Chunk, Entity, Provenance, Relation
 from app.retrieval.filters import RetrievalFilter
 from tests.fakes.in_memory_indexers import FakeNeo4jIndexer
 from tests.fakes.in_memory_retrievers import FakeGraphRetriever
 
 
-def test_acl_scope_union() -> None:
-    scope_restricted = ACLScope.restricted(allowed_roles={"security", "audit"})
-    scope_public = ACLScope.public()
+def test_acl_scope_union_never_widens_to_public() -> None:
+    owner_scope = ACLScope.owner("alice")
+    public_scope = ACLScope.public()
 
-    union_scope = scope_restricted.union(scope_public)
-    assert union_scope.is_public is True
-    assert "security" in union_scope.allowed_roles
+    merged = owner_scope.union(public_scope)
+    assert merged == owner_scope
+    assert not merged.permits(owner_user_id="bob")
 
-    # Unauthenticated/public user permits
-    assert union_scope.permits(user_roles=frozenset()) is True
-
-    # Two disjoint restricted scopes
-    scope_a = ACLScope.restricted(allowed_roles={"engineering"})
-    scope_b = ACLScope.restricted(allowed_roles={"finance"}, allowed_groups={"cfo-office"})
-    merged = scope_a.union(scope_b)
-    assert merged.is_public is False
-    assert merged.permits(user_roles=frozenset({"hr"})) is False
-    assert merged.permits(user_roles=frozenset({"engineering"})) is True
-    assert merged.permits(user_roles=frozenset({"finance"})) is True
-    assert merged.permits(user_roles=frozenset(), user_groups=frozenset({"cfo-office"})) is True
+    shared_a = ACLScope.shared("shared-analytics")
+    shared_b = ACLScope.shared("shared-finance")
+    merged_shared = shared_a.union(shared_b)
+    assert merged_shared.shared_scope == "shared-analytics"
+    assert merged_shared.permits(shared_scopes={"shared-analytics"})
+    assert not merged_shared.permits(shared_scopes={"shared-finance"})
 
 
-def test_entity_acl_leak_restricted_ingested_before_public() -> None:
-    """Security leak test:
-
-    Ingest a restricted doc before a public doc that mention the same entity.
-    A user without access must see the shared entity, but MUST NOT see the
-    restricted edges, chunks, or path hops.
-    """
+def test_entity_acl_leak_owner_ingested_before_shared() -> None:
+    """A caller with a shared scope sees shared nodes/edges, never another owner's."""
     prov = Provenance.from_document("security_test.md")
-    t = TemporalBounds(valid_from=datetime(2026, 1, 1, tzinfo=UTC), valid_to=None)
+    ingested_at = datetime(2026, 1, 1, tzinfo=UTC)
 
-    acl_restricted = ACLScope.restricted(allowed_roles={"admin"})
-    acl_public = ACLScope.public()
+    acl_shared = ACLScope.shared("shared-operations")
+    acl_secret = ACLScope.owner("bob")
 
-    # 1. Restricted Document Chunks, Entities, and Edges (Ingested First)
-    chk_restricted = Chunk(
-        chunk_id="chk_sec_001",
-        doc_id="doc_restricted_vault",
-        index=0,
-        text="The Master Key is stored inside the Hardware HSM Vault.",
-        tokens=12,
-        acl_scope=acl_restricted,
-        temporal=t,
-        provenance=prov,
-    )
-
-    ent_shared_res = Entity(
-        entity_id="ent_vault",
-        name="HSM Vault",
-        entity_type="SYSTEM",
-        acl_scope=acl_restricted,
-        temporal=t,
-        provenance=prov,
-        source_chunk_ids=["chk_sec_001"],
-    )
-
-    ent_secret = Entity(
-        entity_id="ent_key",
-        name="Master Key",
-        entity_type="SECRET",
-        acl_scope=acl_restricted,
-        temporal=t,
-        provenance=prov,
-        source_chunk_ids=["chk_sec_001"],
-    )
-
-    rel_secret = Relation(
-        relation_id="rel_sec_001",
-        source_entity_id="ent_vault",
-        target_entity_id="ent_key",
-        relation_type="PROTECTS",
-        acl_scope=acl_restricted,
-        temporal=t,
-        provenance=prov,
-        source_chunk_ids=["chk_sec_001"],
-    )
-
-    # 2. Public Document Chunks, Entities, and Edges (Ingested Second)
-    chk_public = Chunk(
-        chunk_id="chk_pub_001",
-        doc_id="doc_public_overview",
+    # Shared document chunk, entities, and edge.
+    chk_shared = Chunk(
+        chunk_id="chk_shared_001",
+        doc_id="doc_shared_overview",
         index=0,
         text="Our HSM Vault is certified for FIPS 140-2 Level 3 compliance.",
         tokens=14,
-        acl_scope=acl_public,
-        temporal=t,
+        acl_scope=acl_shared,
+        ingested_at=ingested_at,
         provenance=prov,
     )
-
-    ent_shared_pub = Entity(
+    ent_vault = Entity(
         entity_id="ent_vault",
         name="HSM Vault",
         entity_type="SYSTEM",
-        acl_scope=acl_public,
-        temporal=t,
+        acl_scope=acl_shared,
+        ingested_at=ingested_at,
         provenance=prov,
-        source_chunk_ids=["chk_pub_001"],
+        source_chunk_ids=["chk_shared_001"],
     )
-
     ent_public = Entity(
         entity_id="ent_compliance",
         name="FIPS Compliance",
         entity_type="STANDARD",
-        acl_scope=acl_public,
-        temporal=t,
+        acl_scope=acl_shared,
+        ingested_at=ingested_at,
         provenance=prov,
-        source_chunk_ids=["chk_pub_001"],
+        source_chunk_ids=["chk_shared_001"],
     )
-
     rel_public = Relation(
-        relation_id="rel_pub_001",
+        relation_id="rel_shared_001",
         source_entity_id="ent_vault",
         target_entity_id="ent_compliance",
         relation_type="COMPLIES_WITH",
-        acl_scope=acl_public,
-        temporal=t,
+        acl_scope=acl_shared,
+        ingested_at=ingested_at,
         provenance=prov,
-        source_chunk_ids=["chk_pub_001"],
+        source_chunk_ids=["chk_shared_001"],
     )
 
-    # Ingest in exact order: Restricted BEFORE Public
-    entities = [ent_shared_res, ent_secret, ent_shared_pub, ent_public]
-    relations = [rel_secret, rel_public]
-    chunks = [chk_restricted, chk_public]
+    # Another user's private chunk, entity, and edge.
+    chk_secret = Chunk(
+        chunk_id="chk_secret_001",
+        doc_id="doc_bob_vault",
+        index=0,
+        text="The Master Key is stored inside the Hardware HSM Vault.",
+        tokens=12,
+        acl_scope=acl_secret,
+        ingested_at=ingested_at,
+        provenance=prov,
+    )
+    ent_secret = Entity(
+        entity_id="ent_key",
+        name="Master Key",
+        entity_type="SECRET",
+        acl_scope=acl_secret,
+        ingested_at=ingested_at,
+        provenance=prov,
+        source_chunk_ids=["chk_secret_001"],
+    )
+    rel_secret = Relation(
+        relation_id="rel_secret_001",
+        source_entity_id="ent_vault",
+        target_entity_id="ent_key",
+        relation_type="PROTECTS",
+        acl_scope=acl_secret,
+        ingested_at=ingested_at,
+        provenance=prov,
+        source_chunk_ids=["chk_secret_001"],
+    )
 
     graph = FakeGraphRetriever()
-    graph.index_graph(entities=entities, relations=relations, chunks=chunks)
+    graph.index_graph(
+        entities=[ent_vault, ent_public, ent_secret],
+        relations=[rel_public, rel_secret],
+        chunks=[chk_shared, chk_secret],
+    )
 
-    # Caller without admin access (public user)
-    filter_public = RetrievalFilter(acl_scope=acl_public, user_roles=frozenset())
+    caller = RetrievalFilter(
+        acl_scope=acl_shared,
+        owner_user_id="alice",
+    )
 
-    # --- Node Visibility Checks ---
-    # Public user CAN see the shared entity because public doc mentions it
-    matches = graph.search_entities("HSM Vault", filter_criteria=filter_public)
-    assert len(matches) == 1
-    assert matches[0]["name"] == "HSM Vault"
+    assert len(graph.search_entities("HSM Vault", filter_criteria=caller)) == 1
+    assert len(graph.search_entities("FIPS Compliance", filter_criteria=caller)) == 1
+    assert len(graph.search_entities("Master Key", filter_criteria=caller)) == 0
 
-    # Public user CAN see the public entity
-    pub_matches = graph.search_entities("FIPS Compliance", filter_criteria=filter_public)
-    assert len(pub_matches) == 1
+    shared_path = graph.find_path("HSM Vault", "FIPS Compliance", filter_criteria=caller)
+    assert shared_path is not None
+    assert list(shared_path) == ["HSM Vault", "COMPLIES_WITH", "FIPS Compliance"]
 
-    # Public user CANNOT see the secret entity
-    secret_matches = graph.search_entities("Master Key", filter_criteria=filter_public)
-    assert len(secret_matches) == 0
-
-    # --- Edge & Path Hop Checks ---
-    # Public user CAN traverse the public edge
-    pub_path = graph.find_path("HSM Vault", "FIPS Compliance", filter_criteria=filter_public)
-    assert pub_path is not None
-    assert list(pub_path) == ["HSM Vault", "COMPLIES_WITH", "FIPS Compliance"]
-
-    # Public user CANNOT traverse the restricted edge to Master Key
-    secret_path = graph.find_path("HSM Vault", "Master Key", filter_criteria=filter_public)
+    secret_path = graph.find_path("HSM Vault", "Master Key", filter_criteria=caller)
     assert secret_path is None
 
-    # --- Chunk Evidence Retrieval Checks ---
-    # Evidence retrieved for the shared entity MUST NOT contain the restricted chunk
-    evidence = graph.retrieve_path_evidence(["HSM Vault"], filter_criteria=filter_public)
+    evidence = graph.retrieve_path_evidence(["HSM Vault"], filter_criteria=caller)
     evidence_chunk_ids = {ev.chunk_id for ev in evidence}
-    assert "chk_sec_001" not in evidence_chunk_ids
-    assert "chk_pub_001" in evidence_chunk_ids
+    assert "chk_secret_001" not in evidence_chunk_ids
+    assert "chk_shared_001" in evidence_chunk_ids
 
-    # --- Admin Verification (Non-vacuity) ---
-    filter_admin = RetrievalFilter(acl_scope=acl_public, user_roles=frozenset({"admin"}))
-    admin_secret = graph.search_entities("Master Key", filter_criteria=filter_admin)
-    assert len(admin_secret) == 1
-
-    admin_path = graph.find_path("HSM Vault", "Master Key", filter_criteria=filter_admin)
+    admin = RetrievalFilter(acl_scope=ACLScope.public(), is_admin=True)
+    assert len(graph.search_entities("Master Key", filter_criteria=admin)) == 1
+    admin_path = graph.find_path("HSM Vault", "Master Key", filter_criteria=admin)
     assert admin_path is not None
     assert list(admin_path) == ["HSM Vault", "PROTECTS", "Master Key"]
-
-    admin_evidence = graph.retrieve_path_evidence(["HSM Vault"], filter_criteria=filter_admin)
-    admin_chunk_ids = {ev.chunk_id for ev in admin_evidence}
-    assert "chk_sec_001" in admin_chunk_ids
-    assert "chk_pub_001" in admin_chunk_ids
+    admin_chunks = {
+        ev.chunk_id
+        for ev in graph.retrieve_path_evidence(list(admin_path), filter_criteria=admin)
+    }
+    assert "chk_secret_001" in admin_chunks
+    assert "chk_shared_001" in admin_chunks
 
 
 @pytest.mark.asyncio
 async def test_fake_neo4j_indexer_recompute_and_delete() -> None:
-    """Verify Neo4j indexer scope union on ingest and recompute/cleanup on delete."""
+    """Verify the fake indexer tightens ACLs on ingest and relaxes them on delete."""
     indexer = FakeNeo4jIndexer()
 
-    # 1. Ingest restricted chunk & node
+    # 1. Public chunk and node.
     await indexer.merge_chunk(
-        chunk_id="c_res_1",
-        doc_id="doc_res",
-        text="Restricted text",
-        acl_scope={"tenant_id": "default", "is_public": False, "allowed_roles": ["finance"]},
+        chunk_id="c_pub_1",
+        doc_id="doc_pub",
+        text="Public text",
+        acl_scope={},
     )
     await indexer.merge_node(
         entity_id="e_corp",
         name="AcmeCorp",
         entity_type="Company",
-        acl_scope={"tenant_id": "default", "is_public": False, "allowed_roles": ["finance"]},
+        acl_scope={},
+        properties={"doc_id": "doc_pub"},
+    )
+    await indexer.link_chunk_entity("c_pub_1", "e_corp")
+
+    node = indexer._nodes["e_corp"]
+    assert node["acl_is_public"] is True
+    assert node["acl_owner_user_id"] == ""
+
+    # 2. Another user's private chunk mentioning the same entity tightens it.
+    await indexer.merge_chunk(
+        chunk_id="c_res_1",
+        doc_id="doc_res",
+        text="Restricted text",
+        acl_scope={"owner_user_id": "bob"},
+    )
+    await indexer.merge_node(
+        entity_id="e_corp",
+        name="AcmeCorp",
+        entity_type="Company",
+        acl_scope={"owner_user_id": "bob"},
         properties={"doc_id": "doc_res"},
     )
     await indexer.link_chunk_entity("c_res_1", "e_corp")
 
     node = indexer._nodes["e_corp"]
     assert node["acl_is_public"] is False
-    assert "finance" in node["acl_allowed_roles"]
+    assert node["acl_owner_user_id"] == "bob"
+    assert "bob" in node["owner_user_ids"]
+    assert "acl_allowed_roles" not in node
 
-    # 2. Ingest public chunk & node mentioning the same entity
-    await indexer.merge_chunk(
-        chunk_id="c_pub_1",
-        doc_id="doc_pub",
-        text="Public text",
-        acl_scope={"tenant_id": "default", "is_public": True, "allowed_roles": []},
-    )
-    await indexer.merge_node(
-        entity_id="e_corp",
-        name="AcmeCorp",
-        entity_type="Company",
-        acl_scope={"tenant_id": "default", "is_public": True, "allowed_roles": []},
-        properties={"doc_id": "doc_pub"},
-    )
-    await indexer.link_chunk_entity("c_pub_1", "e_corp")
-
-    node = indexer._nodes["e_corp"]
-    # Entity must now be visible publicly because public doc mentions it
-    assert node["acl_is_public"] is True
-    assert "finance" in node["acl_allowed_roles"]
-
-    # 3. Delete the public doc
-    await indexer.delete_by_doc_id("doc_pub")
-    # Entity must now revert to restricted because only doc_res mentions it!
-    node = indexer._nodes["e_corp"]
-    assert node["acl_is_public"] is False
-    assert "finance" in node["acl_allowed_roles"]
-
-    # 4. Delete the restricted doc
+    # 3. Delete the private doc; the entity reverts to public.
     await indexer.delete_by_doc_id("doc_res")
-    # Entity was solely mentioned by these two docs, so it must be deleted
+    node = indexer._nodes["e_corp"]
+    assert node["acl_is_public"] is True
+    assert node["acl_owner_user_id"] == ""
+
+    # 4. Delete the public doc; the orphaned entity is removed.
+    await indexer.delete_by_doc_id("doc_pub")
     assert "e_corp" not in indexer._nodes

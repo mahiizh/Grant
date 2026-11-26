@@ -301,7 +301,7 @@ class FakeGraphRetriever:
                     update={
                         "acl_scope": existing.acl_scope.union(e.acl_scope),
                         "source_chunk_ids": list(
-                            set(existing.source_chunk_ids + e.source_chunk_ids)
+                            dict.fromkeys(existing.source_chunk_ids + e.source_chunk_ids)
                         ),
                     }
                 )
@@ -328,37 +328,43 @@ class FakeGraphRetriever:
                     if new_scope != e.acl_scope:
                         self._entities[e_id] = e.model_copy(update={"acl_scope": new_scope})
 
-    @staticmethod
-    def _permits_entity(entity: Entity, filter_criteria: RetrievalFilter | None) -> bool:
-        if filter_criteria is None:
-            return True
-        if not entity.acl_scope.permits(
-            user_roles=filter_criteria.user_roles,
-            user_groups=filter_criteria.user_groups,
-            tenant_id=filter_criteria.acl_scope.tenant_id,
-            is_admin=filter_criteria.is_admin,
-        ):
-            return False
-        return not (
-            filter_criteria.as_of_time is not None
-            and not entity.temporal.is_valid_at(filter_criteria.as_of_time)
-        )
+    def _permits_source_chunk(self, chunk_id: str, filter_criteria: RetrievalFilter) -> bool:
+        chunk = self._chunks.get(chunk_id)
+        return chunk is not None and filter_criteria.permits_chunk(chunk)
 
-    @staticmethod
-    def _permits_relation(relation: Relation, filter_criteria: RetrievalFilter | None) -> bool:
+    def _permits_entity(self, entity: Entity, filter_criteria: RetrievalFilter | None) -> bool:
         if filter_criteria is None:
             return True
-        if not relation.acl_scope.permits(
-            user_roles=filter_criteria.user_roles,
-            user_groups=filter_criteria.user_groups,
-            tenant_id=filter_criteria.acl_scope.tenant_id,
+        linked = [
+            cid for cid in entity.source_chunk_ids if cid in self._chunks
+        ]
+        if linked:
+            if not any(self._permits_source_chunk(cid, filter_criteria) for cid in linked):
+                return False
+        elif not entity.acl_scope.permits(
+            owner_user_id=filter_criteria.owner_user_id,
+            shared_scope=filter_criteria.acl_scope.shared_scope,
             is_admin=filter_criteria.is_admin,
         ):
             return False
-        return not (
-            filter_criteria.as_of_time is not None
-            and not relation.temporal.is_valid_at(filter_criteria.as_of_time)
-        )
+        return True
+
+    def _permits_relation(self, relation: Relation, filter_criteria: RetrievalFilter | None) -> bool:
+        if filter_criteria is None:
+            return True
+        linked = [
+            cid for cid in relation.source_chunk_ids if cid in self._chunks
+        ]
+        if linked:
+            if not any(self._permits_source_chunk(cid, filter_criteria) for cid in linked):
+                return False
+        elif not relation.acl_scope.permits(
+            owner_user_id=filter_criteria.owner_user_id,
+            shared_scope=filter_criteria.acl_scope.shared_scope,
+            is_admin=filter_criteria.is_admin,
+        ):
+            return False
+        return True
 
     def search_entities(
         self,

@@ -4,13 +4,13 @@ from typing import Any, cast
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from app.acquisition.web import WebPage
-from app.acquisition.web_ingest import _web_doc_id, sanitize_web_markdown
+from app.web_grounding.web import WebPage
+from app.web_grounding.web_ingest import _web_doc_id, sanitize_web_markdown
 from app.api.routes.graph import _with_source_kind
 from app.core.acl import ACLScope
 from app.db.models import Base
 from app.db.outbox import OutboxEventType, OutboxService
-from app.domain import Chunk, Evidence, Provenance, TemporalBounds
+from app.domain import Chunk, Evidence, Provenance
 from app.evaluation.datasets import GoldenDataset, GoldenQuestion
 from app.evaluation.runner import EvaluationRunner
 from app.graph.retrievers import GraphRetriever as RealGraphRetriever
@@ -113,7 +113,6 @@ class EvidenceHybridRetriever:
     """Retriever returning one local document chunk."""
 
     def __init__(self) -> None:
-        now = TemporalBounds.current()
         self.chunk = Chunk(
             chunk_id="chunk_docs_1",
             doc_id="doc_docs_1",
@@ -121,7 +120,6 @@ class EvidenceHybridRetriever:
             text="PostgreSQL is the authoritative document store.",
             tokens=8,
             acl_scope=ACLScope.public(),
-            temporal=now,
             provenance=Provenance.from_document("corpus/docs.md"),
         )
         self.evidence = [

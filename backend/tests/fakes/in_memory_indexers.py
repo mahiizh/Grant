@@ -67,7 +67,7 @@ class FakeNeo4jIndexer:
         doc_id: str,
         text: str,
         acl_scope: dict[str, Any] | None = None,
-        temporal: dict[str, Any] | None = None,
+        ingested_at: str | None = None,
         owner_user_id: str | None = None,
         properties: dict[str, Any] | None = None,
     ) -> None:
@@ -77,7 +77,7 @@ class FakeNeo4jIndexer:
             "text": text,
             "owner_user_id": owner_user_id,
             "acl_scope": acl_scope or {},
-            "temporal": temporal or {},
+            "ingested_at": ingested_at,
             "properties": properties or {},
         }
 
@@ -102,23 +102,28 @@ class FakeNeo4jIndexer:
         if not chunks:
             return
         doc_ids = {c["doc_id"] for c in chunks if c.get("doc_id")}
-        is_public = any(c.get("acl_scope", {}).get("is_public", False) for c in chunks)
-        roles: set[str] = set()
-        groups: set[str] = set()
-        for c in chunks:
-            roles.update(c.get("acl_scope", {}).get("allowed_roles", []))
-            groups.update(c.get("acl_scope", {}).get("allowed_groups", []))
+        owners: set[str] = set()
+        shared: set[str] = set()
+        public = True
+        for chunk in chunks:
+            scope = chunk.get("acl_scope", {})
+            owner = chunk.get("owner_user_id") or scope.get("owner_user_id")
+            if owner:
+                owners.add(str(owner))
+            if scope.get("shared_scope"):
+                shared.add(str(scope["shared_scope"]))
+            if owner or scope.get("shared_scope"):
+                public = False
         node = self._nodes[entity_id]
-        node["doc_ids"] = list(doc_ids)
+        node["doc_ids"] = sorted(doc_ids)
         node["acl_scope"] = {
-            "tenant_id": "default",
-            "is_public": is_public,
-            "allowed_roles": list(roles),
-            "allowed_groups": list(groups),
+            "owner_user_id": sorted(owners)[0] if owners else None,
+            "shared_scope": sorted(shared)[0] if shared else None,
         }
-        node["acl_is_public"] = is_public
-        node["acl_allowed_roles"] = list(roles)
-        node["acl_allowed_groups"] = list(groups)
+        node["acl_owner_user_id"] = node["acl_scope"]["owner_user_id"] or ""
+        node["acl_shared_scope"] = node["acl_scope"]["shared_scope"] or ""
+        node["acl_is_public"] = public
+        node["owner_user_ids"] = sorted(owners)
 
     async def delete_chunk(self, chunk_id: str) -> bool:
         if chunk_id in self._chunks:
@@ -135,46 +140,46 @@ class FakeNeo4jIndexer:
         name: str,
         entity_type: str,
         acl_scope: dict[str, Any] | None = None,
-        temporal: dict[str, Any] | None = None,
+        ingested_at: str | None = None,
         properties: dict[str, Any] | None = None,
     ) -> None:
         scope = acl_scope or {}
         props = properties or {}
         doc_id = props.get("doc_id", "")
+        owner = scope.get("owner_user_id") or None
+        shared = scope.get("shared_scope") or None
+        is_public = bool(scope.get("is_public", not owner and not shared))
         if entity_id in self._nodes:
             existing = self._nodes[entity_id]
             existing["name"] = name
             existing["entity_type"] = entity_type
-            if doc_id:
-                existing.setdefault("doc_ids", []).append(doc_id)
+            if doc_id and doc_id not in existing.setdefault("doc_ids", []):
+                existing["doc_ids"].append(doc_id)
             ex_scope = existing.get("acl_scope", {})
-            is_public = ex_scope.get("is_public", False) or scope.get("is_public", False)
-            roles = set(ex_scope.get("allowed_roles", [])) | set(scope.get("allowed_roles", []))
-            groups = set(ex_scope.get("allowed_groups", [])) | set(scope.get("allowed_groups", []))
-            merged_scope = {
-                "tenant_id": scope.get("tenant_id", "default"),
-                "is_public": is_public,
-                "allowed_roles": list(roles),
-                "allowed_groups": list(groups),
-            }
-            existing["acl_scope"] = merged_scope
+            owner = ex_scope.get("owner_user_id") or owner
+            shared = ex_scope.get("shared_scope") or shared
+            is_public = not owner and not shared and (
+                bool(existing.get("acl_is_public")) or is_public
+            )
+            existing["acl_scope"] = {"owner_user_id": owner, "shared_scope": shared}
+            existing["acl_owner_user_id"] = owner or ""
+            existing["acl_shared_scope"] = shared or ""
             existing["acl_is_public"] = is_public
-            existing["acl_allowed_roles"] = list(roles)
-            existing["acl_allowed_groups"] = list(groups)
+            existing["owner_user_ids"] = list(
+                dict.fromkeys(existing.get("owner_user_ids", []) + ([owner] if owner else []))
+            )
         else:
-            is_public = bool(scope.get("is_public", False))
-            init_roles = list(scope.get("allowed_roles", []))
-            init_groups = list(scope.get("allowed_groups", []))
             self._nodes[entity_id] = {
                 "entity_id": entity_id,
                 "name": name,
                 "entity_type": entity_type,
-                "acl_scope": dict(scope),
+                "acl_scope": {"owner_user_id": owner, "shared_scope": shared},
+                "acl_owner_user_id": owner or "",
+                "acl_shared_scope": shared or "",
                 "acl_is_public": is_public,
-                "acl_allowed_roles": init_roles,
-                "acl_allowed_groups": init_groups,
+                "owner_user_ids": [owner] if owner else [],
                 "doc_ids": [doc_id] if doc_id else [],
-                "temporal": temporal or {},
+                "ingested_at": ingested_at,
                 "properties": props,
             }
 
@@ -184,7 +189,7 @@ class FakeNeo4jIndexer:
         target_id: str,
         relation_type: str,
         acl_scope: dict[str, Any] | None = None,
-        temporal: dict[str, Any] | None = None,
+        ingested_at: str | None = None,
         properties: dict[str, Any] | None = None,
     ) -> str:
         props = properties or {}
@@ -196,7 +201,7 @@ class FakeNeo4jIndexer:
             "target_id": target_id,
             "relation_type": relation_type,
             "acl_scope": acl_scope or {},
-            "temporal": temporal or {},
+            "ingested_at": ingested_at,
             "properties": props,
             "chunk_id": chunk_id,
             "doc_id": props.get("doc_id", ""),
@@ -276,12 +281,15 @@ class FakeNeo4jIndexer:
         source_kind: str,
         is_abstention: bool,
         acl_scope: dict[str, Any] | None,
-        temporal: dict[str, Any] | None,
+        ingested_at: str | None,
         query_entities: list[dict[str, Any]],
         answer_entities: list[dict[str, Any]],
         cites: list[dict[str, Any]],
         web_sources: list[dict[str, Any]],
     ) -> None:
+        scope = acl_scope or {}
+        query_owner = scope.get("owner_user_id") or owner_user_id
+        query_shared = scope.get("shared_scope")
         self._queries[query_id] = {
             "query_id": query_id,
             "raw_query": raw_query,
@@ -289,7 +297,10 @@ class FakeNeo4jIndexer:
             "thread_id": thread_id,
             "owner_user_id": owner_user_id,
             "answer_policy": answer_policy,
-            "acl_scope": acl_scope or {},
+            "acl_scope": scope,
+            "acl_owner_user_id": query_owner or "",
+            "acl_shared_scope": query_shared or "",
+            "acl_is_public": not query_owner and not query_shared,
             "entities": query_entities,
         }
         self._answers[answer_id] = {
@@ -302,7 +313,7 @@ class FakeNeo4jIndexer:
             "cites": cites,
             "web_sources": web_sources,
             "acl_scope": acl_scope or {},
-            "temporal": temporal or {},
+            "ingested_at": ingested_at,
         }
         self._query_answer_edges.append((query_id, answer_id))
         if previous_query_id:

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -97,35 +98,74 @@ def test_evaluate_retrieval_aggregate() -> None:
     assert results["hit_rate@1"] == 1.0
 
 
-def test_load_golden_dataset() -> None:
-    # Locate evals/golden/questions.jsonl from repo root
-    repo_root = Path(__file__).resolve().parents[3]
-    golden_path = repo_root / "evals" / "golden" / "questions.jsonl"
-    assert golden_path.exists(), f"Expected golden dataset file at {golden_path}"
+def test_load_golden_dataset(tmp_path: Path) -> None:
+    rows = [
+        {
+            "id": "fact_001",
+            "category": "fact",
+            "cluster_id": "user_fact",
+            "split": "test",
+            "query": "What is the p99 target?",
+            "expected_doc_ids": ["doc_1"],
+            "optimal_strategy": "vector",
+        },
+        {
+            "id": "multi_hop_001",
+            "category": "multi_hop",
+            "cluster_id": "user_multi_hop",
+            "split": "test",
+            "query": "What depends on the storage service?",
+            "expected_doc_ids": ["doc_1", "doc_2"],
+            "optimal_strategy": "graph",
+        },
+        {
+            "id": "global_001",
+            "category": "global",
+            "cluster_id": "user_global",
+            "split": "test",
+            "query": "Summarize all service owners",
+            "optimal_strategy": "hybrid",
+        },
+        {
+            "id": "unanswerable_001",
+            "category": "unanswerable",
+            "cluster_id": "user_unanswerable",
+            "split": "test",
+            "query": "What was the company ARR?",
+            "optimal_strategy": "abstain",
+        },
+        {
+            "id": "paraphrase_001",
+            "category": "paraphrase",
+            "cluster_id": "user_paraphrase",
+            "split": "test",
+            "query": "What is the latency SLA?",
+            "optimal_strategy": "cache",
+        },
+    ]
+    golden_path = tmp_path / "questions.jsonl"
+    golden_path.write_text(
+        "\n".join(json.dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
 
     dataset = GoldenDataset.load_from_jsonl(golden_path)
-    assert len(dataset) == 20
+    assert len(dataset) == 5
+    assert dataset.categories == {
+        "fact",
+        "multi_hop",
+        "global",
+        "unanswerable",
+        "paraphrase",
+    }
+    assert dataset.summary()["total"] == 5
 
-    # Verify all 5 categories are covered
-    expected_categories = {"fact", "multi_hop", "global", "unanswerable", "paraphrase"}
-    assert dataset.categories == expected_categories
-
-    # Verify summary
-    summary = dataset.summary()
-    assert summary["total"] == 20
-    assert summary["fact"] == 6
-    assert summary["multi_hop"] == 4
-    assert summary["global"] == 2
-    assert summary["unanswerable"] == 4
-    assert summary["paraphrase"] == 4
-
-    # Verify specific lookup
     q = dataset.get_by_id("multi_hop_001")
     assert isinstance(q, GoldenQuestion)
     assert q.category == "multi_hop"
     assert q.optimal_strategy == "graph"
     assert q.expected_path is None
-    assert len(q.expected_doc_ids) >= 2
+    assert q.expected_doc_ids == ["doc_1", "doc_2"]
 
 
 def test_dataset_missing_file_error() -> None:

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from app.core.acl import ACLScope
-from app.domain import Chunk, Provenance, TemporalBounds
+from app.domain import Chunk, Provenance
 from app.orchestration.grounding import (
     asks_about_absent_entity,
     evidence_mentions_any,
@@ -54,12 +54,11 @@ async def test_orchestrator_abstains_on_absent_service() -> None:
         text="EventStream targets a p99 latency of 33ms and provides stream ingestion.",
         tokens=12,
         acl_scope=ACLScope.public(),
-        temporal=TemporalBounds(valid_from=now),
+        ingested_at=now,
         provenance=prov,
     )
     orchestrator, _ = build_hermetic_orchestrator([chunk])
     orchestrator.exact_cache.clear()
-    orchestrator.semantic_cache.clear()
 
     state = await orchestrator.run(query="Which team owns PhotonIndex?")
 

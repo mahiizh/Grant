@@ -9,7 +9,9 @@ from app.cache.invalidation import CacheInvalidator
 from app.core.acl import ACLScope
 from app.db.models import Base
 from app.db.postgres import DocumentRepository
-from app.domain import Chunk, Document, Provenance, TemporalBounds
+from datetime import UTC, datetime
+
+from app.domain import Chunk, Document, Provenance
 from app.indexing import Neo4jIndexer, OutboxWorker, QdrantIndexer
 from app.indexing.deletion import verify_document_deleted
 from tests.fakes.fake_redis import FakeRedis
@@ -31,7 +33,7 @@ async def test_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 def _build_document() -> Document:
-    now = TemporalBounds.current()
+    now = datetime(2026, 4, 1, tzinfo=UTC)
     prov = Provenance.from_document("corpus/deletion.md")
     acl = ACLScope.public()
     chunks = [
@@ -41,7 +43,7 @@ def _build_document() -> Document:
             index=index,
             text=f"Deletable chunk {index}",
             acl_scope=acl,
-            temporal=now,
+            ingested_at=now,
             provenance=prov,
         )
         for index in range(2)
@@ -52,7 +54,7 @@ def _build_document() -> Document:
         content="Deletable chunk 0\nDeletable chunk 1",
         chunks=chunks,
         acl_scope=acl,
-        temporal=now,
+        ingested_at=now,
         provenance=prov,
     )
 
@@ -183,7 +185,7 @@ async def test_verified_delete_reports_stale_cache_keys(test_session: AsyncSessi
 
     # A cache entry written after invalidation still cites the deleted doc.
     redis.seed(
-        "sem:late",
+        "exact:late",
         json.dumps(
             {"query": "q", "answer": "a", "evidence": [{"doc_id": "doc_del", "chunk_id": "c"}]}
         ),

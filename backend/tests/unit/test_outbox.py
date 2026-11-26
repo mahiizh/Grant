@@ -8,12 +8,7 @@ from app.core.acl import ACLScope
 from app.db.models import Base
 from app.db.outbox import OutboxEventType, OutboxService, OutboxStatus
 from app.db.postgres import DocumentRepository
-from app.domain import (
-    Chunk,
-    Document,
-    Provenance,
-    TemporalBounds,
-)
+from app.domain import Chunk, Document, Provenance
 
 
 @pytest.fixture
@@ -117,9 +112,9 @@ async def test_outbox_retry_and_dead_letter(test_session: AsyncSession) -> None:
 @pytest.mark.anyio
 async def test_document_repository_save_and_retrieve(test_session: AsyncSession) -> None:
     now = datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
-    temporal = TemporalBounds.current(valid_from=now)
+    ingested_at = now
     prov = Provenance.from_document(source_uri="corpus/rfc_001.md")
-    acl = ACLScope.restricted(allowed_roles={"platform_engineer"}, tenant_id="acme")
+    acl = ACLScope.owner("usr_acme_01")
 
     chunk_1 = Chunk(
         chunk_id="chk_rfc001_0001",
@@ -128,7 +123,7 @@ async def test_document_repository_save_and_retrieve(test_session: AsyncSession)
         text="Section 1: Outbox pattern",
         tokens=5,
         acl_scope=acl,
-        temporal=temporal,
+        ingested_at=ingested_at,
         provenance=prov,
     )
     chunk_2 = Chunk(
@@ -138,7 +133,7 @@ async def test_document_repository_save_and_retrieve(test_session: AsyncSession)
         text="Section 2: Qdrant vectors",
         tokens=5,
         acl_scope=acl,
-        temporal=temporal,
+        ingested_at=ingested_at,
         provenance=prov,
     )
     doc = Document(
@@ -147,7 +142,7 @@ async def test_document_repository_save_and_retrieve(test_session: AsyncSession)
         content="Section 1: Outbox pattern\nSection 2: Qdrant vectors",
         chunks=[chunk_1, chunk_2],
         acl_scope=acl,
-        temporal=temporal,
+        ingested_at=ingested_at,
         provenance=prov,
         version=1,
     )
@@ -168,9 +163,9 @@ async def test_document_repository_save_and_retrieve(test_session: AsyncSession)
     assert retrieved is not None
     assert retrieved.doc_id == "doc_rfc001"
     assert retrieved.title == "RFC 001 Storage"
-    assert retrieved.acl_scope.tenant_id == "acme"
-    assert not retrieved.acl_scope.is_public
-    assert "platform_engineer" in retrieved.acl_scope.allowed_roles
+    assert retrieved.acl_scope.owner_user_id == "usr_acme_01"
+    assert retrieved.acl_scope.shared_scope is None
+    assert retrieved.chunks[0].acl_scope.owner_user_id == "usr_acme_01"
     assert len(retrieved.chunks) == 2
     assert retrieved.chunks[0].chunk_id == "chk_rfc001_0001"
     assert retrieved.chunks[1].chunk_id == "chk_rfc001_0002"
@@ -179,7 +174,7 @@ async def test_document_repository_save_and_retrieve(test_session: AsyncSession)
 @pytest.mark.anyio
 async def test_document_repository_delete_and_invalidation(test_session: AsyncSession) -> None:
     now = datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
-    temporal = TemporalBounds.current(valid_from=now)
+    ingested_at = now
     prov = Provenance.from_document(source_uri="corpus/postmortem.md")
     acl = ACLScope.public()
 
@@ -190,7 +185,7 @@ async def test_document_repository_delete_and_invalidation(test_session: AsyncSe
         text="Sev-1 Postmortem",
         tokens=3,
         acl_scope=acl,
-        temporal=temporal,
+        ingested_at=ingested_at,
         provenance=prov,
     )
     doc = Document(
@@ -199,7 +194,7 @@ async def test_document_repository_delete_and_invalidation(test_session: AsyncSe
         content="Sev-1 Postmortem",
         chunks=[chunk],
         acl_scope=acl,
-        temporal=temporal,
+        ingested_at=ingested_at,
         provenance=prov,
     )
 
@@ -238,9 +233,9 @@ def _build_document(
     chunk_id: str = "chk_idem_0001",
 ) -> Document:
     now = datetime(2026, 4, 1, 12, 0, 0, tzinfo=UTC)
-    temporal = TemporalBounds.current(valid_from=now)
+    ingested_at = now
     prov = Provenance.from_document(source_uri="corpus/idempotency.md")
-    acl = ACLScope.restricted(allowed_roles={"platform_engineer"}, tenant_id="acme")
+    acl = ACLScope.owner("usr_acme_01")
     chunk = Chunk(
         chunk_id=chunk_id,
         doc_id=doc_id,
@@ -248,7 +243,7 @@ def _build_document(
         text=chunk_text,
         tokens=5,
         acl_scope=acl,
-        temporal=temporal,
+        ingested_at=ingested_at,
         provenance=prov,
     )
     return Document(
@@ -257,7 +252,7 @@ def _build_document(
         content=content,
         chunks=[chunk],
         acl_scope=acl,
-        temporal=temporal,
+        ingested_at=ingested_at,
         provenance=prov,
         version=1,
     )

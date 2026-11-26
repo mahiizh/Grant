@@ -1,8 +1,6 @@
 from collections.abc import Sequence
 from pathlib import Path
 
-from langgraph.checkpoint.memory import MemorySaver
-
 from app.core.acl import ACLScope
 from app.domain import Chunk, Entity, Relation
 from app.ingestion.chunking import chunk_parsed_document
@@ -11,7 +9,7 @@ from app.ingestion.extraction import EntityRelationExtractor
 from app.ingestion.parse import parse_markdown
 from app.orchestration.workflow import RAGOrchestrator
 from tests.fakes.fake_gateway import FakeModelGateway
-from tests.fakes.in_memory_cache import FakeExactCache, FakeSemanticCache
+from tests.fakes.in_memory_cache import FakeExactCache
 from tests.fakes.in_memory_retrievers import (
     FakeBM25Retriever,
     FakeDenseRetriever,
@@ -19,32 +17,31 @@ from tests.fakes.in_memory_retrievers import (
     FakeHybridRetriever,
 )
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
 
-
-def _scope_for(parsed_scope: str | None) -> ACLScope:
-    if parsed_scope and parsed_scope.lower() != "public":
-        return ACLScope.restricted(
-            allowed_roles=frozenset([parsed_scope]),
-            allowed_groups=frozenset([parsed_scope]),
-        )
+def _scope_for(metadata: dict[str, object]) -> ACLScope:
+    """Mirror ingestion frontmatter parsing: only owner/shared are meaningful."""
+    shared = metadata.get("shared_scope") or metadata.get("acl_scope")
+    if shared and str(shared).lower() != "public":
+        return ACLScope.shared(str(shared))
     return ACLScope.public()
 
 
-def load_corpus_chunks(corpus_dir: Path | str | None = None) -> list[Chunk]:
-    """Reproduce the ingestion chunker over the corpus without any external store.
-
-    Uses the same corpus walk as ``app.ingestion.cli`` (root, adversarial, and
-    synthetic documents), so the hermetic harness sees the same chunks a live
-    ingest does.
-    """
-    root = Path(corpus_dir) if corpus_dir is not None else REPO_ROOT / "corpus"
+def load_corpus_chunks(corpus_dir: Path | str) -> list[Chunk]:
+    """Chunk a caller-supplied corpus directory without touching any demo corpus."""
+    root = Path(corpus_dir).expanduser().resolve()
+    if not root.is_dir():
+        raise FileNotFoundError(f"Corpus directory not found at: {root}")
 
     chunks: list[Chunk] = []
     for path in iter_corpus_files(root):
         parsed = parse_markdown(path.read_text(encoding="utf-8"), source_path=path.as_posix())
-        scope = _scope_for(parsed.metadata.get("acl_scope"))
-        chunks.extend(chunk_parsed_document(parsed, path.as_posix(), scope))
+        scope = _scope_for(parsed.metadata)
+        owner = parsed.metadata.get("owner_user_id")
+        owner_user_id = str(owner) if owner else None
+        produced = chunk_parsed_document(parsed, path.as_posix(), scope)
+        if owner_user_id is not None:
+            produced = [c.model_copy(update={"owner_user_id": owner_user_id}) for c in produced]
+        chunks.extend(produced)
     return chunks
 
 
@@ -66,7 +63,15 @@ def build_hermetic_orchestrator(
             if entity.entity_id not in all_entities:
                 all_entities[entity.entity_id] = entity
             else:
-                all_entities[entity.entity_id].source_chunk_ids.append(chunk.chunk_id)
+                existing = all_entities[entity.entity_id]
+                all_entities[entity.entity_id] = existing.model_copy(
+                    update={
+                        "acl_scope": existing.acl_scope.union(entity.acl_scope),
+                        "source_chunk_ids": list(
+                            dict.fromkeys(existing.source_chunk_ids + entity.source_chunk_ids)
+                        ),
+                    }
+                )
         all_relations.extend(relations)
 
     dense = FakeDenseRetriever(embedding_dim=128)
@@ -81,8 +86,6 @@ def build_hermetic_orchestrator(
         hybrid_retriever=hybrid,  # type: ignore[arg-type]
         graph_retriever=graph,  # type: ignore[arg-type]
         exact_cache=FakeExactCache(),  # type: ignore[arg-type]
-        semantic_cache=FakeSemanticCache(similarity_threshold=0.45),  # type: ignore[arg-type]
         model_gateway=FakeModelGateway(),
-        checkpointer=MemorySaver(),
     )
     return orchestrator, materialized

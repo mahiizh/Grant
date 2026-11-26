@@ -1,5 +1,4 @@
 import os
-import shutil
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
@@ -10,20 +9,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 # Keep test runs hermetic: no live model calls, no external stores, and all
-# evaluation data is written to temp directories, never to tracked files under
-# evals/. Set this before importing app.main so the cached Settings pick the
-# overrides up.
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_GOLDEN_DIR = Path(tempfile.mkdtemp(prefix="graphrag-golden-"))
-for _source in sorted((_REPO_ROOT / "evals" / "golden").glob("*")):
-    if _source.is_file():
-        shutil.copy2(_source, _GOLDEN_DIR / _source.name)
-
+# evaluation data is written to temp directories, never to tracked files.
+# Set this before importing app.main so the cached Settings pick the overrides up.
 os.environ["APP_ENV"] = "test"
 # An empty value overrides any key loaded from .env, so the mock path is used.
 os.environ["GEMINI_API_KEY"] = ""
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-os.environ["EVAL_GOLDEN_DIR"] = str(_GOLDEN_DIR)
+os.environ["EVAL_GOLDEN_DIR"] = tempfile.mkdtemp(prefix="graphrag-golden-")
 os.environ["EVAL_CANDIDATES_DIR"] = tempfile.mkdtemp(prefix="graphrag-candidates-")
 os.environ["LLM_CACHE_DIR"] = tempfile.mkdtemp(prefix="graphrag-llm-cache-")
 
@@ -41,8 +33,8 @@ from tests.fakes.fake_web import FakeWebClient, FakeWebIngestor  # noqa: E402
 @pytest.fixture(autouse=True)
 def mock_graspreach(monkeypatch: pytest.MonkeyPatch) -> Generator[Any, None, None]:
     """No test may reach the real web; inject configurable in-memory fakes."""
-    from app.acquisition import web as web_module
-    from app.acquisition import web_ingest as web_ingest_module
+    from app.web_grounding import web as web_module
+    from app.web_grounding import web_ingest as web_ingest_module
     from app.orchestration import workflow as workflow_module
 
     client = FakeWebClient()
@@ -63,3 +55,36 @@ def client() -> Generator[TestClient, None, None]:
     app = create_app()
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture
+def tmp_corpus_dir(tmp_path: Path) -> Path:
+    """Create a small caller-owned corpus so tests never depend on demo assets."""
+    corpus = tmp_path / "corpus"
+    corpus.mkdir()
+    documents = {
+        "rfc_001_storage_architecture.md": """# RFC 001: Storage Architecture
+**Document ID**: `doc_rfc_storage_001`
+
+## Overview
+PostgreSQL 16 is the single source of truth. OutboxWorker stages events in the PostgreSQL outbox.
+Alice Chen leads the Data Platform Team. Redis caches exact answers.
+""",
+        "postmortem_inc_2026_04.md": """# Postmortem INC-2026-04
+**Document ID**: `doc_postmortem_inc_04`
+
+## Impact
+INC-2026-04 degraded PaymentGateway with a 24% failure rate. Bob Kumar coordinated the response.
+Qdrant and Neo4j were synchronized after the fix.
+""",
+        "team_directory_2026.md": """# Team Directory
+**Document ID**: `doc_team_directory_2026`
+
+## Teams
+The Data Platform Team owns PostgreSQL. The Payments Team owns PaymentGateway.
+Elena Rostova coordinates with Bob Kumar during incidents.
+""",
+    }
+    for filename, content in documents.items():
+        (corpus / filename).write_text(content, encoding="utf-8")
+    return corpus

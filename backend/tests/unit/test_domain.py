@@ -13,7 +13,6 @@ from app.domain import (
     Provenance,
     Relation,
     SourceTier,
-    TemporalBounds,
     generate_chunk_id,
     generate_doc_id,
     generate_entity_id,
@@ -51,58 +50,9 @@ def test_normalize_entity_name() -> None:
     assert normalize_entity_name("Core-Banking Service!") == "core-banking_service"
 
 
-def test_temporal_bounds_validity() -> None:
-    t_base = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
-    t_end = datetime(2026, 6, 1, 0, 0, 0, tzinfo=UTC)
-
-    # Valid to before valid from should raise
-    with pytest.raises(ValueError):
-        TemporalBounds(valid_from=t_end, valid_to=t_base)
-
-    bounds = TemporalBounds(valid_from=t_base, valid_to=t_end, source_version=1)
-    # Target prior to valid_from
-    assert not bounds.is_valid_at(datetime(2025, 12, 31, tzinfo=UTC))
-    # Target within interval
-    assert bounds.is_valid_at(datetime(2026, 3, 15, tzinfo=UTC))
-    # Target at valid_from
-    assert bounds.is_valid_at(t_base)
-    # Target at or after valid_to
-    assert not bounds.is_valid_at(t_end)
-    assert not bounds.is_valid_at(datetime(2026, 7, 1, tzinfo=UTC))
-
-
-def test_temporal_invalidation_and_overlap() -> None:
-    t_start = datetime(2026, 1, 1, tzinfo=UTC)
-    bounds_v1 = TemporalBounds.current(valid_from=t_start, source_version=1)
-
-    t_inval = datetime(2026, 4, 1, tzinfo=UTC)
-    bounds_v2 = bounds_v1.invalidate(invalidated_at=t_inval)
-
-    assert bounds_v2.valid_to == t_inval
-    assert bounds_v2.source_version == 2
-    assert not bounds_v2.is_valid_at(datetime(2026, 5, 1, tzinfo=UTC))
-
-    # Overlaps check
-    b1 = TemporalBounds(
-        valid_from=datetime(2026, 1, 1, tzinfo=UTC),
-        valid_to=datetime(2026, 3, 1, tzinfo=UTC),
-    )
-    b2 = TemporalBounds(
-        valid_from=datetime(2026, 2, 1, tzinfo=UTC),
-        valid_to=datetime(2026, 4, 1, tzinfo=UTC),
-    )
-    b3 = TemporalBounds(
-        valid_from=datetime(2026, 5, 1, tzinfo=UTC),
-        valid_to=None,
-    )
-
-    assert b1.overlaps(b2)
-    assert not b1.overlaps(b3)
-
-
 def test_provenance_citation_rules() -> None:
     # Tier 1: Ingested doc
-    doc_prov = Provenance.from_document(source_uri="corpus/rfc_001.md")
+    doc_prov = Provenance.from_document(source_uri="docs/rfc_001.md")
     assert doc_prov.tier == SourceTier.TIER_1_DOCUMENT
     assert doc_prov.verified
     assert doc_prov.can_cite()
@@ -120,33 +70,35 @@ def test_provenance_citation_rules() -> None:
     assert not recall_prov.can_cite(min_trust_to_cite=0.7)
 
     # Promoting model recall
-    promoted = recall_prov.promote("corpus/rfc_001.md#page=2")
+    promoted = recall_prov.promote("docs/rfc_001.md#page=2")
     assert promoted.verified
     assert promoted.can_cite(min_trust_to_cite=0.7)
 
 
 def test_acl_scope_enforcement() -> None:
-    public_scope = ACLScope.public(tenant_id="tenant_a")
-    assert public_scope.permits(user_roles=set(), tenant_id="tenant_a")
-    # Wrong tenant rejected
-    assert not public_scope.permits(user_roles=set(), tenant_id="tenant_b")
+    public_scope = ACLScope.public()
+    assert public_scope.permits()
 
-    restricted_scope = ACLScope.restricted(
-        allowed_roles={"admin", "sre_lead"},
-        tenant_id="tenant_a",
-    )
-    # Regular user denied
-    assert not restricted_scope.permits(user_roles={"engineer"}, tenant_id="tenant_a")
-    # Matching role permitted
-    assert restricted_scope.permits(user_roles={"sre_lead"}, tenant_id="tenant_a")
-    # Admin override permitted
-    assert restricted_scope.permits(user_roles=set(), tenant_id="tenant_a", is_admin=True)
+    owner_scope = ACLScope.owner("alice")
+    assert owner_scope.permits(owner_user_id="alice")
+    assert not owner_scope.permits(owner_user_id="bob")
+    assert owner_scope.permits(owner_user_id="bob", is_admin=True)
+
+    shared_scope = ACLScope.shared("shared-operations")
+    assert shared_scope.permits(shared_scopes={"shared-operations"})
+    assert not shared_scope.permits(shared_scopes={"shared-finance"})
+    assert shared_scope.permits(is_admin=True)
+
+    # Conflicting unions keep the first value instead of widening to public.
+    merged = owner_scope.union(ACLScope.shared("shared-operations"))
+    assert merged.owner_user_id == "alice"
+    assert merged.shared_scope == "shared-operations"
+    assert not merged.permits(owner_user_id="bob")
 
 
 def test_domain_model_assembly() -> None:
-    now = datetime.now(UTC)
-    temporal = TemporalBounds.current(valid_from=now)
-    prov = Provenance.from_document(source_uri="corpus/rfc_001.md")
+    ingested_at = datetime(2026, 1, 1, tzinfo=UTC)
+    prov = Provenance.from_document(source_uri="docs/rfc_001.md")
     acl = ACLScope.public()
 
     chunk = Chunk(
@@ -156,7 +108,7 @@ def test_domain_model_assembly() -> None:
         text="Sample text content.",
         tokens=4,
         acl_scope=acl,
-        temporal=temporal,
+        ingested_at=ingested_at,
         provenance=prov,
     )
     doc = Document(
@@ -165,7 +117,7 @@ def test_domain_model_assembly() -> None:
         content="Sample text content.",
         chunks=[chunk],
         acl_scope=acl,
-        temporal=temporal,
+        ingested_at=ingested_at,
         provenance=prov,
     )
     entity = Entity(
@@ -174,7 +126,7 @@ def test_domain_model_assembly() -> None:
         entity_type="DATABASE",
         source_chunk_ids=[chunk.chunk_id],
         acl_scope=acl,
-        temporal=temporal,
+        ingested_at=ingested_at,
         provenance=prov,
     )
     rel = Relation(
@@ -184,7 +136,7 @@ def test_domain_model_assembly() -> None:
         relation_type="HOSTED_ON",
         source_chunk_ids=[chunk.chunk_id],
         acl_scope=acl,
-        temporal=temporal,
+        ingested_at=ingested_at,
         provenance=prov,
     )
     evidence = Evidence(
@@ -204,6 +156,9 @@ def test_domain_model_assembly() -> None:
 
     assert rel.relation_id == "rel_01"
     assert doc.chunks[0].chunk_id == "chunk_01"
+    assert doc.chunks[0].ingested_at == ingested_at
+    assert not hasattr(chunk, "temporal")
+    assert not hasattr(doc, "valid_from")
     assert answer.evidence[0].score == 0.92
     assert not answer.is_abstention
 

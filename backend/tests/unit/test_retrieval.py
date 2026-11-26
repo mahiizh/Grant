@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from app.core.acl import ACLScope
-from app.domain import Chunk, Entity, Provenance, Relation, TemporalBounds
+from app.domain import Chunk, Entity, Provenance, Relation
 from app.evaluation.retrieval_metrics import ndcg_at_k, recall_at_k
 from app.retrieval.filters import RetrievalFilter
 from tests.fakes.in_memory_retrievers import (
@@ -21,11 +21,8 @@ from tests.fakes.in_memory_retrievers import (
 def create_sample_chunks() -> list[Chunk]:
     now = datetime(2026, 3, 1, tzinfo=UTC)
     prov = Provenance.from_document("corpus/rfc_001.md")
-    acl_public = ACLScope.public(tenant_id="default")
-    acl_restricted = ACLScope.restricted(
-        allowed_roles={"sre_lead"},
-        tenant_id="default",
-    )
+    acl_public = ACLScope.public()
+    acl_restricted = ACLScope.owner("sre-lead-owner")
 
     c1 = Chunk(
         chunk_id="chunk_storage_01",
@@ -34,7 +31,7 @@ def create_sample_chunks() -> list[Chunk]:
         text="PostgreSQL 16 acts as the single source of truth and outbox mechanism.",
         tokens=12,
         acl_scope=acl_public,
-        temporal=TemporalBounds(valid_from=now),
+        ingested_at=now,
         provenance=prov,
     )
     c2 = Chunk(
@@ -44,7 +41,7 @@ def create_sample_chunks() -> list[Chunk]:
         text="Qdrant provides vector search indexing dense semantic embeddings and BM25.",
         tokens=12,
         acl_scope=acl_public,
-        temporal=TemporalBounds(valid_from=now),
+        ingested_at=now,
         provenance=prov,
     )
     c3 = Chunk(
@@ -54,7 +51,7 @@ def create_sample_chunks() -> list[Chunk]:
         text="Incident INC-2026-04 degraded PaymentGateway with a 24% failure rate.",
         tokens=11,
         acl_scope=acl_public,
-        temporal=TemporalBounds(valid_from=datetime(2026, 4, 12, tzinfo=UTC)),
+        ingested_at=datetime(2026, 4, 12, tzinfo=UTC),
         provenance=prov,
     )
     c4 = Chunk(
@@ -64,7 +61,7 @@ def create_sample_chunks() -> list[Chunk]:
         text="Internal security incident postmortem details for SRE lead only.",
         tokens=10,
         acl_scope=acl_restricted,
-        temporal=TemporalBounds(valid_from=now),
+        ingested_at=now,
         provenance=prov,
     )
     return [c1, c2, c3, c4]
@@ -118,16 +115,13 @@ def test_hybrid_reciprocal_rank_fusion() -> None:
     assert ndcg == 1.0
 
 
-def test_retrieval_acl_and_temporal_prefiltering() -> None:
+def test_retrieval_acl_prefiltering() -> None:
     chunks = create_sample_chunks()
     hybrid = HybridRetriever()
     hybrid.index_chunks(chunks)
 
     # 1. Unprivileged user cannot retrieve chunk_secret_04
-    unprivileged_filter = RetrievalFilter(
-        user_roles=frozenset({"junior_dev"}),
-        is_admin=False,
-    )
+    unprivileged_filter = RetrievalFilter(owner_user_id="junior_dev")
     evidence_public = hybrid.search(
         query="security audit postmortem",
         top_k=5,
@@ -136,10 +130,10 @@ def test_retrieval_acl_and_temporal_prefiltering() -> None:
     retrieved_ids = {e.chunk_id for e in evidence_public}
     assert "chunk_secret_04" not in retrieved_ids
 
-    # 2. Privileged SRE lead CAN retrieve chunk_secret_04
+    # 2. The named owner CAN retrieve chunk_secret_04
     privileged_filter = RetrievalFilter(
-        user_roles=frozenset({"sre_lead"}),
-        is_admin=False,
+        acl_scope=ACLScope.owner("sre-lead-owner"),
+        owner_user_id="sre-lead-owner",
     )
     evidence_priv = hybrid.search(
         query="security audit postmortem",
@@ -149,21 +143,21 @@ def test_retrieval_acl_and_temporal_prefiltering() -> None:
     priv_ids = {e.chunk_id for e in evidence_priv}
     assert "chunk_secret_04" in priv_ids
 
-    # 3. Temporal filtering: as_of_time in March 2026 cannot see April 2026 incident
-    march_filter = RetrievalFilter(
-        as_of_time=datetime(2026, 3, 15, tzinfo=UTC),
+    # 3. A shared-scope caller cannot read another user's private chunk.
+    shared_filter = RetrievalFilter(
+        acl_scope=ACLScope.shared("shared-operations"),
+        owner_user_id="shared-reader",
     )
-    march_evidence = hybrid.search(
-        query="INC-2026-04 payment degradation",
+    shared_evidence = hybrid.search(
+        query="security audit postmortem",
         top_k=5,
-        filter_criteria=march_filter,
+        filter_criteria=shared_filter,
     )
-    march_ids = {e.chunk_id for e in march_evidence}
-    assert "chunk_incident_03" not in march_ids
+    assert "chunk_secret_04" not in {e.chunk_id for e in shared_evidence}
 
 
 def test_graph_multi_hop_path_traversal() -> None:
-    now = TemporalBounds.current()
+    now = datetime(2026, 4, 12, tzinfo=UTC)
     prov = Provenance.from_document("corpus/sample.md")
     acl = ACLScope.public()
 
@@ -175,7 +169,7 @@ def test_graph_multi_hop_path_traversal() -> None:
         name="Bob Kumar",
         entity_type="PERSON",
         acl_scope=acl,
-        temporal=now,
+        ingested_at=now,
         provenance=prov,
     )
     e2 = Entity(
@@ -183,7 +177,7 @@ def test_graph_multi_hop_path_traversal() -> None:
         name="INC-2026-04",
         entity_type="INCIDENT",
         acl_scope=acl,
-        temporal=now,
+        ingested_at=now,
         provenance=prov,
     )
     e3 = Entity(
@@ -192,7 +186,7 @@ def test_graph_multi_hop_path_traversal() -> None:
         entity_type="SERVICE",
         source_chunk_ids=["chunk_incident_03"],
         acl_scope=acl,
-        temporal=now,
+        ingested_at=now,
         provenance=prov,
     )
     e4 = Entity(
@@ -200,7 +194,7 @@ def test_graph_multi_hop_path_traversal() -> None:
         name="Payments Team",
         entity_type="TEAM",
         acl_scope=acl,
-        temporal=now,
+        ingested_at=now,
         provenance=prov,
     )
     e5 = Entity(
@@ -208,7 +202,7 @@ def test_graph_multi_hop_path_traversal() -> None:
         name="Elena Rostova",
         entity_type="PERSON",
         acl_scope=acl,
-        temporal=now,
+        ingested_at=now,
         provenance=prov,
     )
 
@@ -220,7 +214,7 @@ def test_graph_multi_hop_path_traversal() -> None:
             target_entity_id=e2.entity_id,
             relation_type="COMMANDED",
             acl_scope=acl,
-            temporal=now,
+            ingested_at=now,
             provenance=prov,
         ),
         Relation(
@@ -229,7 +223,7 @@ def test_graph_multi_hop_path_traversal() -> None:
             target_entity_id=e3.entity_id,
             relation_type="IMPACTED",
             acl_scope=acl,
-            temporal=now,
+            ingested_at=now,
             provenance=prov,
         ),
         Relation(
@@ -238,7 +232,7 @@ def test_graph_multi_hop_path_traversal() -> None:
             target_entity_id=e4.entity_id,
             relation_type="OWNED_BY",
             acl_scope=acl,
-            temporal=now,
+            ingested_at=now,
             provenance=prov,
         ),
         Relation(
@@ -247,7 +241,7 @@ def test_graph_multi_hop_path_traversal() -> None:
             target_entity_id=e5.entity_id,
             relation_type="LED_BY",
             acl_scope=acl,
-            temporal=now,
+            ingested_at=now,
             provenance=prov,
         ),
     ]

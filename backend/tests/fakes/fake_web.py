@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from app.acquisition.web import WebPage, WebSearchError
+from app.web_grounding.web import WebPage, WebSearchError
 from app.core.acl import ACLScope
 from app.domain import Evidence, Provenance
 

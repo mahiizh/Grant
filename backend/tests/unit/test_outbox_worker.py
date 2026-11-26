@@ -1,4 +1,5 @@
 from collections.abc import AsyncGenerator
+from datetime import UTC, datetime
 from typing import cast
 
 import pytest
@@ -9,7 +10,7 @@ from app.core.acl import ACLScope
 from app.db.models import Base
 from app.db.outbox import OutboxEventType, OutboxService, OutboxStatus
 from app.db.postgres import DocumentRepository
-from app.domain import Chunk, Document, Provenance, TemporalBounds
+from app.domain import Chunk, Document, Provenance
 from app.indexing import Neo4jIndexer, OutboxWorker, QdrantIndexer
 from tests.fakes.in_memory_indexers import FakeNeo4jIndexer, FakeQdrantIndexer
 
@@ -38,7 +39,7 @@ async def test_session() -> AsyncGenerator[AsyncSession, None]:
 @pytest.mark.anyio
 async def test_outbox_worker_processes_chunks(test_session: AsyncSession) -> None:
     # 1. Stage chunks in Postgres
-    now = TemporalBounds.current()
+    now = datetime(2026, 4, 1, tzinfo=UTC)
     prov = Provenance.from_document("corpus/rfc_001.md")
     acl = ACLScope.public()
 
@@ -48,7 +49,7 @@ async def test_outbox_worker_processes_chunks(test_session: AsyncSession) -> Non
         index=0,
         text="Sample chunk for vector indexing",
         acl_scope=acl,
-        temporal=now,
+        ingested_at=now,
         provenance=prov,
     )
     doc = Document(
@@ -57,7 +58,7 @@ async def test_outbox_worker_processes_chunks(test_session: AsyncSession) -> Non
         content="Sample chunk for vector indexing",
         chunks=[chunk_1],
         acl_scope=acl,
-        temporal=now,
+        ingested_at=now,
         provenance=prov,
     )
     await DocumentRepository.save_document(session=test_session, document=doc)
@@ -92,7 +93,7 @@ async def test_outbox_worker_processes_chunks(test_session: AsyncSession) -> Non
 
 @pytest.mark.anyio
 async def test_outbox_worker_processes_deletion(test_session: AsyncSession) -> None:
-    now = TemporalBounds.current()
+    now = datetime(2026, 4, 1, tzinfo=UTC)
     prov = Provenance.from_document("corpus/rfc_001.md")
     acl = ACLScope.public()
 
@@ -102,7 +103,7 @@ async def test_outbox_worker_processes_deletion(test_session: AsyncSession) -> N
         index=0,
         text="Deletable chunk",
         acl_scope=acl,
-        temporal=now,
+        ingested_at=now,
         provenance=prov,
     )
     doc = Document(
@@ -111,7 +112,7 @@ async def test_outbox_worker_processes_deletion(test_session: AsyncSession) -> N
         content="Deletable chunk",
         chunks=[chunk_1],
         acl_scope=acl,
-        temporal=now,
+        ingested_at=now,
         provenance=prov,
     )
     await DocumentRepository.save_document(session=test_session, document=doc)
