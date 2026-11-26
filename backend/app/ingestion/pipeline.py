@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 _CHUNK_EXTRACTION_CACHE: dict[str, dict[str, Any]] = {}
 
 
-def _extractor_version(settings: Any | None = None) -> str:
+def _extractor_version(settings: Any | None = None, *, use_gliner: bool = True) -> str:
     """Hash extraction config so a model/label/threshold/stoplist change re-extracts."""
     settings = settings or get_settings()
     return hashlib.sha256(
@@ -35,6 +35,7 @@ def _extractor_version(settings: Any | None = None) -> str:
                 "threshold": settings.GLINER_THRESHOLD,
                 "threshold_by_type": settings.GLINER_THRESHOLD_BY_TYPE,
                 "stoplist": list(settings.GLINER_STOPLIST),
+                "use_gliner": use_gliner,
             },
             sort_keys=True,
         ).encode("utf-8")
@@ -67,8 +68,14 @@ class IngestionPipeline:
         acl_scope: ACLScope | None = None,
         owner_user_id: str | None = None,
         entity_resolver: Any | None = None,
+        use_gliner: bool = True,
     ) -> IngestionSummary:
-        """Ingest raw markdown text content into PostgreSQL and stage outbox index events."""
+        """Ingest raw markdown text content into PostgreSQL and stage outbox index events.
+
+        ``use_gliner=False`` keeps the local GLiNER model out of the calling
+        process; it is used for HTTP-side web write-back, where deterministic
+        extraction is sufficient and the worker remains the only GLiNER owner.
+        """
         parsed = parse_markdown(content, source_path=source_uri)
 
         # Respect a named shared scope from frontmatter if present and not explicitly overridden.
@@ -111,7 +118,7 @@ class IngestionPipeline:
                     getattr(existing, "shared_scope", None),
                     (existing.metadata_json or {}).get("extractor_version", ""),
                 )
-                extractor_version = _extractor_version()
+                extractor_version = _extractor_version(use_gliner=use_gliner)
                 new_fp = (
                     content_hash,
                     owner_user_id,
@@ -153,12 +160,13 @@ class IngestionPipeline:
         gliner_used = False
         fallback_used = False
         inference_timeout = get_settings().GLINER_INFERENCE_TIMEOUT_SECONDS
-        try:
-            gliner_extractor = await off_loop(
-                get_gliner_extractor, timeout=inference_timeout
-            )
-        except Exception:
-            logger.exception("Failed to initialize GLiNER extractor; heuristic fallback will be used")
+        if use_gliner:
+            try:
+                gliner_extractor = await off_loop(
+                    get_gliner_extractor, timeout=inference_timeout
+                )
+            except Exception:
+                logger.exception("Failed to initialize GLiNER extractor; heuristic fallback will be used")
 
         for chunk in chunks:
             chunk_hash = hashlib.sha256(chunk.text.encode("utf-8")).hexdigest()
@@ -167,19 +175,21 @@ class IngestionPipeline:
                 ext_result = cached_data["result"]
                 logger.debug("Reusing cached extraction for chunk %s ($0)", chunk.chunk_id)
             else:
-                try:
-                    if gliner_extractor is None:
-                        raise RuntimeError("GLiNER extractor unavailable")
-                    ext_result = await off_loop(
-                        gliner_extractor.extract_from_chunk,
-                        chunk,
-                        timeout=inference_timeout,
-                    )
-                    gliner_used = True
-                except Exception:
-                    logger.exception("GLiNER extraction failed for chunk %s; using heuristic fallback", chunk.chunk_id)
+                ext_result = None
+                if use_gliner and gliner_extractor is not None:
+                    try:
+                        ext_result = await off_loop(
+                            gliner_extractor.extract_from_chunk,
+                            chunk,
+                            timeout=inference_timeout,
+                        )
+                        gliner_used = True
+                    except Exception:
+                        logger.exception("GLiNER extraction failed for chunk %s; using heuristic fallback", chunk.chunk_id)
+                if ext_result is None:
                     ext_result = EntityRelationExtractor.extract_from_chunk(chunk)
-                    fallback_used = True
+                    if use_gliner:
+                        fallback_used = True
                 # Local extraction cost model: no LLM tokens/cost
                 ext_tokens = 0
                 ext_cost = 0.0

@@ -1,7 +1,9 @@
 import logging
+import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 
 from app.api.schemas.documents import (
@@ -16,13 +18,13 @@ from app.api.schemas.documents import (
 from app.cache.invalidation import CacheInvalidator
 from app.core.auth import AuthenticatedUser, get_current_user
 from app.db.models import DocumentRecord as DBDocumentRecord
-from app.db.models import OutboxEventRecord
+from app.db.models import IngestionJobRecord, OutboxEventRecord
 from app.db.postgres import DocumentRepository, get_session
 from app.indexing.deletion import verify_document_deleted
 from app.indexing.neo4j_indexer import Neo4jIndexer
 from app.indexing.outbox_worker import OutboxWorker
 from app.indexing.qdrant_indexer import EntityVectorIndex, QdrantIndexer
-from app.ingestion.pipeline import IngestionPipeline
+from app.ingestion.parse import parse_markdown
 
 logger = logging.getLogger(__name__)
 
@@ -74,7 +76,7 @@ async def upload_document(
     file: UploadFile = File(...),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> DocumentUploadResponse:
-    """Upload document for parsing, chunking, outbox staging, and automatic indexing."""
+    """Persist the upload and enqueue a job; the worker does all heavy work."""
     filename = (file.filename or "").lower()
     content_type = (file.content_type or "").lower()
     if filename.endswith(".pdf") or content_type == "application/pdf":
@@ -85,27 +87,35 @@ async def upload_document(
 
     content_bytes = await file.read()
     content_str = content_bytes.decode("utf-8", errors="replace")
+    source_uri = file.filename or "uploaded.md"
+    parsed = parse_markdown(content_str, source_path=source_uri)
+    job_id = f"job-{uuid.uuid4().hex[:12]}"
+    now = datetime.now(UTC)
 
+    # Only a row write and a commit happen on the request path. Parsing, GLiNER,
+    # entity resolution, and Qdrant/Neo4j indexing move to the worker process.
     async with get_session() as session:
-        summary = await IngestionPipeline.ingest_text(
-            session=session,
-            content=content_str,
-            source_uri=file.filename or "uploaded.md",
-            owner_user_id=current_user.user_id,
+        session.add(
+            IngestionJobRecord(
+                job_id=job_id,
+                document_id=parsed.doc_id,
+                owner_user_id=current_user.user_id,
+                file_name=source_uri,
+                content=content_bytes,
+                status="queued",
+                active_step="queued",
+                step_index=0,
+                extraction_status="pending",
+                created_at=now,
+            )
         )
 
-    # Process staged outbox events to sync Qdrant and Neo4j immediately
-    try:
-        worker = OutboxWorker()
-        await worker.drain()
-    except Exception as e:
-        logger.warning("Background outbox drain after upload encountered error: %s", e)
-
     return DocumentUploadResponse(
-        document_id=summary.doc_id,
-        title=summary.title,
-        status="ingested",
-        message=f"Document ingested: {summary.chunk_count} chunks, {summary.entity_count} entities extracted.",
+        document_id=parsed.doc_id,
+        job_id=job_id,
+        title=parsed.title,
+        status="queued",
+        message="Upload accepted; background worker will parse, extract, and index it.",
     )
 
 
@@ -114,8 +124,46 @@ async def get_document_status(
     document_id: str,
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> DocumentStatusResponse:
-    """Get current ingestion pipeline progress for document."""
+    """Get current ingestion job progress for a document or job id."""
     async with get_session() as session:
+        job_stmt = select(IngestionJobRecord).where(
+            or_(
+                IngestionJobRecord.document_id == document_id,
+                IngestionJobRecord.job_id == document_id,
+            )
+        )
+        if current_user.user_id is not None:
+            job_stmt = job_stmt.where(
+                IngestionJobRecord.owner_user_id == current_user.user_id
+            )
+        job = (
+            await session.execute(
+                job_stmt.order_by(IngestionJobRecord.created_at.desc()).limit(1)
+            )
+        ).scalar_one_or_none()
+
+        if job is not None:
+            ingest_ms = None
+            if job.completed_at is not None and job.created_at is not None:
+                ingest_ms = round(
+                    (job.completed_at - job.created_at).total_seconds() * 1000.0, 2
+                )
+            return DocumentStatusResponse(
+                id=job.document_id,
+                job_id=job.job_id,
+                status=job.status,
+                active_step=job.active_step,
+                step_index=job.step_index,
+                total_steps=6,
+                entities=job.entity_count,
+                relations=job.relation_count,
+                extraction_engine=job.extraction_engine,
+                extraction_model=job.extraction_model,
+                extraction_status=job.extraction_status,
+                error=job.error,
+                ingest_ms=ingest_ms,
+            )
+
         stmt = (
             select(DBDocumentRecord)
             .options(selectinload(DBDocumentRecord.chunks))
@@ -130,7 +178,6 @@ async def get_document_status(
             raise HTTPException(status_code=404, detail="Document not found")
 
         meta = doc.metadata_json or {}
-        # Check outbox events for this doc
         outbox_stmt = select(OutboxEventRecord).where(
             OutboxEventRecord.payload["doc_id"].astext == document_id,
             OutboxEventRecord.status == "PENDING",
@@ -141,10 +188,10 @@ async def get_document_status(
     is_processing = pending_events > 0
     return DocumentStatusResponse(
         id=doc.doc_id,
-        status="processing" if is_processing else "indexed",
+        status="processing" if is_processing else "completed",
         active_step="outbox_sync" if is_processing else "complete",
-        step_index=3 if is_processing else 4,
-        total_steps=4,
+        step_index=3 if is_processing else 6,
+        total_steps=6,
         entities=meta.get("entity_count", 0),
         relations=meta.get("relation_count", 0),
         extraction_engine=str(meta.get("extraction_engine", "unknown")),

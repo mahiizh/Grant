@@ -26,13 +26,15 @@ class DocumentsResponse(BaseModel):
 
 class DocumentUploadResponse(BaseModel):
     document_id: str
+    job_id: str
     title: str
-    status: str = "ingesting"
+    status: str = "queued"
     message: str = "Document ingestion pipeline started"
 
 
 class DocumentStatusResponse(BaseModel):
     id: str
+    job_id: str | None = None
     status: str
     active_step: str
     step_index: int
@@ -42,6 +44,8 @@ class DocumentStatusResponse(BaseModel):
     extraction_engine: str = "unknown"
     extraction_model: str = ""
     extraction_status: str = "unknown"
+    error: str | None = None
+    ingest_ms: float | None = None
 
 
 class DocumentImpactResponse(BaseModel):

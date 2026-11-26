@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { useNavigate } from "react-router-dom";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../components/ui/table";
@@ -31,6 +31,7 @@ import {
   useUploadDocument,
   useDeleteDocument,
   useDocumentImpact,
+  useDocumentStatus,
 } from "../lib/api/hooks/useDocuments";
 
 export function DocumentsPage() {
@@ -48,13 +49,14 @@ export function DocumentsPage() {
     title: string;
   } | null>(null);
 
-  // Ingestion job state
+  // Ingestion job state. The upload returns immediately; the worker progress
+  // comes from GET /documents/{id}/status.
   const [inFlightJob, setInFlightJob] = useState<{
     fileName: string;
-    activeStep: number;
-    entities: number;
-    relations: number;
+    documentId: string;
+    jobId: string;
   } | null>(null);
+  const { data: jobStatus } = useDocumentStatus(inFlightJob?.documentId ?? null);
 
   // Delete dialog blast radius state
   const [deleteDoc, setDeleteDoc] = useState<any | null>(null);
@@ -93,35 +95,39 @@ export function DocumentsPage() {
     multiple: false,
   });
 
-  // Start ingestion pipeline simulation
+  // Upload is accepted in <1s; the worker performs extraction and indexing.
   const handleConfirmIngest = () => {
     if (!stagedFile) return;
 
     const fileName = stagedFile.title;
     const file = stagedFile.file;
     setStagedFile(null);
-    setInFlightJob({
-      fileName,
-      activeStep: 0,
-      entities: 12,
-      relations: 18,
-    });
-
-    const steps = [1, 2, 3, 4, 5];
-    steps.forEach((step, idx) => {
-      setTimeout(() => {
-        setInFlightJob((prev) => (prev ? { ...prev, activeStep: step } : null));
-        if (step === 5) {
-          uploadDocumentMutation.mutate(file, {
-            onSuccess: () => {
-              setInFlightJob(null);
-              toast.success(`Successfully committed ${fileName} to Qdrant & Neo4j!`);
-            },
-          });
-        }
-      }, (idx + 1) * 700);
+    uploadDocumentMutation.mutate(file, {
+      onSuccess: (response: any) => {
+        setInFlightJob({
+          fileName,
+          documentId: response.document_id,
+          jobId: response.job_id,
+        });
+        toast.success(`${fileName} queued; worker is processing it.`);
+      },
+      onError: () => {
+        setInFlightJob(null);
+      },
     });
   };
+
+  useEffect(() => {
+    if (!inFlightJob || !jobStatus) return;
+    if (jobStatus.status === "completed") {
+      setInFlightJob(null);
+      refetch();
+      toast.success(`Successfully indexed ${inFlightJob.fileName} in Qdrant & Neo4j!`);
+    } else if (jobStatus.status === "failed") {
+      setInFlightJob(null);
+      toast.error(jobStatus.error || `Worker failed to ingest ${inFlightJob.fileName}`);
+    }
+  }, [inFlightJob, jobStatus, refetch]);
 
   // Handle delete execution with live per-store checklist (Item 6)
   const handleExecuteDelete = () => {
@@ -253,14 +259,15 @@ export function DocumentsPage() {
               </span>
             </div>
             <span className="text-amber-400">
-              {inFlightJob.entities} entities · {inFlightJob.relations} relations extracted
+              {jobStatus?.entities ?? 0} entities · {jobStatus?.relations ?? 0} relations extracted
             </span>
           </div>
 
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 text-xs">
             {stepsList.map((stepName, idx) => {
-              const isPast = idx < inFlightJob.activeStep;
-              const isCurrent = idx === inFlightJob.activeStep;
+              const activeStep = Math.max(0, (jobStatus?.step_index ?? 1) - 1);
+              const isPast = idx < activeStep;
+              const isCurrent = idx === activeStep;
 
               return (
                 <div

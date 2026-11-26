@@ -5,6 +5,7 @@ from sqlalchemy import (
     JSON,
     Boolean,
     CheckConstraint,
+    LargeBinary,
     DateTime,
     Float,
     ForeignKey,
@@ -121,6 +122,44 @@ class OutboxEventRecord(Base):
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     __table_args__ = (Index("ix_outbox_status_created", "status", "created_at"),)
+
+
+class IngestionJobRecord(Base):
+    """Queued upload plus the raw bytes the background worker must process.
+
+    The HTTP handler only writes this row, so upload latency is independent of
+    parsing, GLiNER extraction, entity resolution, and downstream indexing.
+    """
+
+    __tablename__ = "ingestion_jobs"
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    document_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    file_name: Mapped[str] = mapped_column(Text, nullable=False)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="queued", nullable=False, index=True)
+    active_step: Mapped[str] = mapped_column(
+        String(64), default="queued", nullable=False
+    )
+    step_index: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    entity_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    relation_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    extraction_engine: Mapped[str] = mapped_column(
+        String(32), default="unknown", nullable=False
+    )
+    extraction_model: Mapped[str] = mapped_column(String(256), default="", nullable=False)
+    extraction_status: Mapped[str] = mapped_column(
+        String(32), default="pending", nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, nullable=False, index=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    __table_args__ = (Index("ix_ingestion_jobs_owner_status", "owner_user_id", "status"),)
 
 
 class ThreadRecord(Base):
