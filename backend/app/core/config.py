@@ -73,9 +73,12 @@ class Settings(BaseSettings):
     RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     RRF_K: int = 60
     HYBRID_PREFETCH_MULTIPLIER: int = 5
-    # Retrieved evidence below this score is treated as no document evidence at
-    # all: it is excluded from generation and cannot satisfy grounded_only.
-    EVIDENCE_MIN_SCORE: float = 0.0
+    RERANK_TIMEOUT_SECONDS: float = 5.0
+    # Evidence scores are not comparable across scoring schemes. Cross-encoder
+    # logits (``retrieval_method == "rerank"``) use one floor while fused RRF
+    # scores (returned when reranking times out) use a separate floor.
+    EVIDENCE_MIN_RERANK_SCORE: float = 0.0
+    EVIDENCE_MIN_FUSED_SCORE: float = 0.02
     ACQUISITION_ENABLED: bool = False
     MAX_ACQUISITION_CALLS: int = 3
     MIN_TRUST_TO_CITE: float = 0.7

@@ -1,3 +1,5 @@
+import asyncio
+import logging
 from collections.abc import Sequence
 from typing import Any
 
@@ -7,6 +9,8 @@ from app.retrieval.dense import DenseRetriever
 from app.retrieval.filters import RetrievalFilter
 from app.retrieval.reranker import get_reranker
 from app.retrieval.sparse import BM25Retriever
+
+logger = logging.getLogger(__name__)
 
 
 def reciprocal_rank_fusion(
@@ -38,6 +42,7 @@ class HybridRetriever:
         rrf_k: int | None = None,
         prefetch_multiplier: int | None = None,
         reranker: Any | None = None,
+        rerank_timeout_seconds: float | None = None,
     ) -> None:
         settings = get_settings()
         self.dense = dense_retriever or DenseRetriever()
@@ -47,6 +52,11 @@ class HybridRetriever:
             prefetch_multiplier
             if prefetch_multiplier is not None
             else settings.HYBRID_PREFETCH_MULTIPLIER
+        )
+        self.rerank_timeout_seconds = (
+            rerank_timeout_seconds
+            if rerank_timeout_seconds is not None
+            else settings.RERANK_TIMEOUT_SECONDS
         )
         self.reranker = reranker or get_reranker()
 
@@ -183,8 +193,28 @@ class HybridRetriever:
                     evidence_list.append(item)
                     seen_chunk_ids.add(item.chunk_id)
 
-        # 5. Optional Cross-Encoder reranking over the combined candidate pool
+        # 5. Optional Cross-Encoder reranking over the combined candidate pool.
+        # A timeout must degrade to fused order, never fail the request.
         if rerank and evidence_list:
-            return self.reranker.rerank_evidence(query=query, candidates=evidence_list, top_k=top_k)
+            async def _rerank() -> list[Evidence]:
+                rerank_async = getattr(self.reranker, "rerank_evidence_async", None)
+                if rerank_async is not None:
+                    return await rerank_async(
+                        query=query, candidates=evidence_list, top_k=top_k
+                    )
+                return await asyncio.to_thread(
+                    self.reranker.rerank_evidence,
+                    query=query,
+                    candidates=evidence_list,
+                    top_k=top_k,
+                )
+
+            try:
+                return await asyncio.wait_for(
+                    _rerank(), timeout=self.rerank_timeout_seconds
+                )
+            except TimeoutError:
+                logger.warning("Reranking timed out; returning fused retrieval order")
+                return evidence_list[:top_k]
 
         return evidence_list[:top_k]

@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncGenerator
 from typing import Any, cast
 
@@ -154,6 +155,60 @@ class EvidenceHybridRetriever:
         return list(self.evidence)
 
 
+class _IrrelevantDenseRetriever:
+    """Dense branch returning one irrelevant chunk with a single-list RRF score."""
+
+    async def search(
+        self,
+        query: str,
+        top_k: int = 10,
+        filter_criteria: Any = None,
+    ) -> list[tuple[str, float, dict[str, Any]]]:
+        return [
+            (
+                "chunk_irrelevant",
+                1.0,
+                {
+                    "chunk_id": "chunk_irrelevant",
+                    "doc_id": "doc_irrelevant",
+                    "text": "Unrelated ISO 27001 control text.",
+                    "source_tier": 1,
+                    "acl_scope": {"owner_user_id": None, "shared_scope": None},
+                    "owner_user_id": None,
+                },
+            )
+        ]
+
+
+class _EmptySparseRetriever:
+    """Sparse branch with no hits, leaving a single-list fused score of 1/61."""
+
+    async def search(
+        self,
+        query: str,
+        top_k: int = 10,
+        filter_criteria: Any = None,
+    ) -> list[tuple[str, float, dict[str, Any]]]:
+        return []
+
+
+class _TimeoutReranker:
+    """Reranker that always exceeds the configured timeout."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def rerank_evidence_async(
+        self,
+        query: str,
+        candidates: list[Evidence],
+        top_k: int | None = None,
+    ) -> list[Evidence]:
+        self.calls += 1
+        await asyncio.sleep(0.5)
+        return []
+
+
 def build_orchestrator(
     *,
     hybrid: Any | None = None,
@@ -250,6 +305,47 @@ async def test_doc_question_with_grounded_plus_web_uses_docs_without_web_call(
     assert not state["is_abstention"]
     assert mock_graspreach.client.gather_calls == []
     assert [item.score for item in state["evidence"]] == [0.9]
+
+
+@pytest.mark.anyio
+async def test_rerank_timeout_with_only_irrelevant_chunks_triggers_web_search(
+    mock_graspreach: Any,
+) -> None:
+    """A timed-out rerank must fall back to fused scores and then to web."""
+    query = "What happened in the unusual incident timeline?"
+    url = "https://example.com/timeout-postmortem"
+    mock_graspreach.client.pages = [
+        WebPage(
+            url=url,
+            title="Timeout postmortem",
+            text="The web page explains the incident timeline in detail.",
+            fetched_at="2026-11-25T00:00:00Z",
+        )
+    ]
+
+    reranker = _TimeoutReranker()
+    hybrid = RealHybridRetriever(
+        dense_retriever=_IrrelevantDenseRetriever(),
+        bm25_retriever=_EmptySparseRetriever(),
+        reranker=reranker,
+        rerank_timeout_seconds=0.01,
+    )
+
+    state = await build_orchestrator(
+        hybrid=hybrid,
+        web_client=mock_graspreach.client,
+        web_ingestor=mock_graspreach.ingestor,
+    ).run(
+        query=query,
+        answer_policy="grounded_plus_web",
+        owner_user_id="usr_alice_01",
+    )
+
+    assert reranker.calls == 1
+    assert mock_graspreach.client.gather_calls == [query]
+    assert state["source_kind"] == "web"
+    assert state["web_sources"][0]["url"] == url
+    assert all(item.retrieval_method == "web" for item in state["evidence"])
 
 
 @pytest.mark.anyio
