@@ -150,12 +150,14 @@ async def test_fake_neo4j_indexer_recompute_and_delete() -> None:
     """Verify the fake indexer tightens ACLs on ingest and relaxes them on delete."""
     indexer = FakeNeo4jIndexer()
 
-    # 1. Public chunk and node.
-    await indexer.merge_chunk(
-        chunk_id="c_pub_1",
+    # 1. Public document and entity node.
+    await indexer.merge_document(
         doc_id="doc_pub",
-        text="Public text",
+        title="Public doc",
         acl_scope={},
+        source_kind="document",
+        url=None,
+        fetched_at=None,
     )
     await indexer.merge_node(
         entity_id="e_corp",
@@ -164,27 +166,40 @@ async def test_fake_neo4j_indexer_recompute_and_delete() -> None:
         acl_scope={},
         properties={"doc_id": "doc_pub"},
     )
-    await indexer.link_chunk_entity("c_pub_1", "e_corp")
+    await indexer.sync_document_graph(
+        doc_id="doc_pub",
+        acl_scope={},
+        entity_counts={"e_corp": 1},
+        cooccurrence_counts={},
+    )
 
     node = indexer._nodes["e_corp"]
     assert node["acl_is_public"] is True
     assert node["acl_owner_user_id"] == ""
 
-    # 2. Another user's private chunk mentioning the same entity tightens it.
-    await indexer.merge_chunk(
-        chunk_id="c_res_1",
+    # 2. Another user's private document mentioning the same entity tightens it.
+    private_scope = {"owner_user_id": "bob"}
+    await indexer.merge_document(
         doc_id="doc_res",
-        text="Restricted text",
-        acl_scope={"owner_user_id": "bob"},
+        title="Restricted doc",
+        acl_scope=private_scope,
+        source_kind="document",
+        url=None,
+        fetched_at=None,
     )
     await indexer.merge_node(
         entity_id="e_corp",
         name="AcmeCorp",
         entity_type="Company",
-        acl_scope={"owner_user_id": "bob"},
+        acl_scope=private_scope,
         properties={"doc_id": "doc_res"},
     )
-    await indexer.link_chunk_entity("c_res_1", "e_corp")
+    await indexer.sync_document_graph(
+        doc_id="doc_res",
+        acl_scope=private_scope,
+        entity_counts={"e_corp": 1},
+        cooccurrence_counts={},
+    )
 
     node = indexer._nodes["e_corp"]
     assert node["acl_is_public"] is False

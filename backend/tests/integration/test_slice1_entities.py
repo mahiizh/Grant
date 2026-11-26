@@ -149,8 +149,8 @@ async def test_slice1_entity_pipeline_six_checks() -> None:
                     WHERE toLower(e.name) = toLower($tool)
                        OR any(a IN coalesce(e.aliases, [])
                               WHERE toLower(a) = toLower($tool))
-                    OPTIONAL MATCH (c:Chunk)-[:MENTIONS]->(e)
-                    WITH e, collect(DISTINCT c.doc_id) AS docs
+                    OPTIONAL MATCH (d:Document)-[:MENTIONS]->(e)
+                    WITH e, collect(DISTINCT d.doc_id) AS docs
                     RETURN e.id AS id, docs
                     """,
                     tool=tool,
@@ -190,28 +190,28 @@ async def test_slice1_entity_pipeline_six_checks() -> None:
                 for row in version_rows
             )
 
-            # Check 3: every source has chunks/entities and mention edges are intact.
+            # Check 3: every source has a Document node and mention edges are intact.
             for doc_id in doc_ids:
                 res = await s.run(
                     """
-                    MATCH (c:Chunk {doc_id: $doc_id})
-                    OPTIONAL MATCH (c)-[:MENTIONS]->(e:Entity)
-                    RETURN count(DISTINCT c) AS chunks,
+                    MATCH (d:Document {doc_id: $doc_id})
+                    OPTIONAL MATCH (d)-[:MENTIONS]->(e:Entity)
+                    RETURN count(DISTINCT d) AS documents,
                            count(DISTINCT e) AS entities,
                            count(e) AS mentions
                     """,
                     doc_id=doc_id,
                 )
                 row = (await res.single()).data()
-                assert row["chunks"] > 0, f"No Neo4j chunks for {doc_id}"
+                assert row["documents"] > 0, f"No Neo4j Document node for {doc_id}"
                 assert row["entities"] > 0, f"No extracted entities for {doc_id}"
                 assert row["mentions"] >= row["entities"], f"Broken mention edges for {doc_id}"
             res = await s.run(
                 """
-                MATCH (c:Chunk)-[:MENTIONS]->(e:Entity)
-                WHERE c.doc_id IN $doc_ids
-                RETURN count(c) AS total,
-                       count(CASE WHEN c.chunk_id IS NULL OR e.id IS NULL THEN 1 END) AS broken
+                MATCH (d:Document)-[:MENTIONS]->(e:Entity)
+                WHERE d.doc_id IN $doc_ids
+                RETURN count(d) AS total,
+                       count(CASE WHEN d.doc_id IS NULL OR e.id IS NULL THEN 1 END) AS broken
                 """,
                 doc_ids=doc_ids,
             )
@@ -343,7 +343,12 @@ async def test_slice1_entity_pipeline_six_checks() -> None:
         assert not orphans, f"Orphan entities remain after delete: {orphans}"
         async with neo.driver.session(database=neo.database) as s:
             res = await s.run(
-                "MATCH (c:Chunk {doc_id: $doc_id}) RETURN count(c) AS c",
+                "MATCH (d:Document {doc_id: $doc_id}) RETURN count(d) AS c",
+                doc_id=brd_id,
+            )
+            assert (await res.single())["c"] == 0
+            res = await s.run(
+                "MATCH ()-[r:CO_OCCURS {doc_id: $doc_id}]->() RETURN count(r) AS c",
                 doc_id=brd_id,
             )
             assert (await res.single())["c"] == 0

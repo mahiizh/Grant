@@ -310,6 +310,9 @@ class EntityMentionRecord(Base):
     doc_id: Mapped[str | None] = mapped_column(
         String(128), ForeignKey("documents.doc_id", ondelete="CASCADE"), nullable=True, index=True
     )
+    chunk_id: Mapped[str | None] = mapped_column(
+        String(128), ForeignKey("chunks.chunk_id", ondelete="CASCADE"), nullable=True, index=True
+    )
     owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     surface_form: Mapped[str] = mapped_column(Text, nullable=False)
     mention_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -322,13 +325,19 @@ class EntityMentionRecord(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("entity_id", "source_id", name="uq_entity_mentions_entity_source"),
+        UniqueConstraint(
+            "entity_id",
+            "source_id",
+            "chunk_id",
+            name="uq_entity_mentions_entity_source_chunk",
+        ),
         CheckConstraint(
             "source_kind <> 'document' OR doc_id IS NOT NULL",
             name="ck_entity_mentions_doc_source_has_doc_id",
         ),
         Index("ix_entity_mentions_owner_entity", "owner_user_id", "entity_id"),
         Index("ix_entity_mentions_source_kind", "source_kind", "source_id"),
+        Index("ix_entity_mentions_entity_chunk", "entity_id", "chunk_id"),
     )
 
 

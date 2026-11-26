@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.cache.invalidation import CacheInvalidator
-from app.db.models import ChunkRecord, DocumentRecord
+from app.db.models import ChunkRecord, DocumentRecord, EntityMentionRecord
 from app.indexing.neo4j_indexer import Neo4jIndexer
 from app.indexing.qdrant_indexer import QdrantIndexer
 
@@ -30,18 +30,29 @@ async def _verify_postgres(session: AsyncSession, doc_id: str) -> StoreDeleteRes
     chunk_count = await session.scalar(
         select(func.count()).select_from(ChunkRecord).where(ChunkRecord.doc_id == doc_id)
     )
-    remaining = int(doc_count or 0) + int(chunk_count or 0)
+    mention_count = await session.scalar(
+        select(func.count()).select_from(EntityMentionRecord).where(EntityMentionRecord.doc_id == doc_id)
+    )
+    remaining = int(doc_count or 0) + int(chunk_count or 0) + int(mention_count or 0)
     return StoreDeleteResult(store="PostgreSQL", remaining=remaining, cleared=remaining == 0)
 
 
-async def _verify_chunk_store(
-    store: str,
-    indexer: QdrantIndexer | Neo4jIndexer,
+async def _verify_qdrant_chunks(
+    indexer: QdrantIndexer,
     expected_chunk_ids: set[str],
 ) -> StoreDeleteResult:
     present = await indexer.get_all_chunk_ids()
     remaining = len(expected_chunk_ids & present)
-    return StoreDeleteResult(store=store, remaining=remaining, cleared=remaining == 0)
+    return StoreDeleteResult(store="Qdrant", remaining=remaining, cleared=remaining == 0)
+
+
+async def _verify_neo4j_document(
+    indexer: Neo4jIndexer,
+    doc_id: str,
+) -> StoreDeleteResult:
+    """Neo4j holds no chunk ids; verify the Document node and its edges are gone."""
+    remaining = 1 if await indexer.document_graph_exists(doc_id) else 0
+    return StoreDeleteResult(store="Neo4j", remaining=remaining, cleared=remaining == 0)
 
 
 async def verify_document_deleted(
@@ -70,14 +81,21 @@ async def verify_document_deleted(
             StoreDeleteResult(store="PostgreSQL", remaining=-1, cleared=False, error=str(exc))
         )
 
-    for store, indexer in (("Qdrant", qdrant), ("Neo4j", neo4j)):
-        try:
-            results.append(await _verify_chunk_store(store, indexer, expected))
-        except Exception as exc:  # pragma: no cover - defensive store guard
-            logger.error("Failed verifying %s deletion for %s: %s", store, doc_id, exc)
-            results.append(
-                StoreDeleteResult(store=store, remaining=-1, cleared=False, error=str(exc))
-            )
+    try:
+        results.append(await _verify_qdrant_chunks(qdrant, expected))
+    except Exception as exc:  # pragma: no cover - defensive store guard
+        logger.error("Failed verifying Qdrant deletion for %s: %s", doc_id, exc)
+        results.append(
+            StoreDeleteResult(store="Qdrant", remaining=-1, cleared=False, error=str(exc))
+        )
+
+    try:
+        results.append(await _verify_neo4j_document(neo4j, doc_id))
+    except Exception as exc:  # pragma: no cover - defensive store guard
+        logger.error("Failed verifying Neo4j deletion for %s: %s", doc_id, exc)
+        results.append(
+            StoreDeleteResult(store="Neo4j", remaining=-1, cleared=False, error=str(exc))
+        )
 
     try:
         remaining_keys = invalidator.count_document_keys(doc_id)

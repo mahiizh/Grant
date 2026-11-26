@@ -1,5 +1,6 @@
 import json
 import logging
+from collections.abc import Iterable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -38,7 +39,11 @@ def _acl_props(acl_scope: dict[str, Any] | None) -> dict[str, Any]:
 
 
 class Neo4jIndexer:
-    """Production Neo4j indexer managing knowledge graph nodes, edges, and chunks."""
+    """Neo4j indexer for the connected Document/Entity/Query/Answer/Message graph.
+
+    Chunk text and chunk↔entity links are intentionally absent: chunk payloads
+    live in Qdrant and chunk links in Postgres ``entity_mentions``.
+    """
 
     def __init__(self, driver: AsyncDriver | None = None) -> None:
         settings = get_settings()
@@ -59,8 +64,8 @@ class Neo4jIndexer:
     ) -> None:
         """Create or update an Entity node without widening ACLs on later mentions.
 
-        Entity ACLs are recalculated from all linked chunks by
-        :meth:`refresh_entity_props` after mention edges are synced.
+        Entity ACLs are recalculated from linked Document nodes by
+        :meth:`refresh_entity_props` after document edges are synced.
         """
         cypher = """
         MERGE (n:Entity {id: $entity_id})
@@ -101,7 +106,6 @@ class Neo4jIndexer:
             n.url = CASE WHEN $url <> '' THEN $url ELSE coalesce(n.url, '') END
         """
         props = properties or {}
-        owner_user_id = str(props.get("owner_user_id", "") or "")
         source_id = str(props.get("source_id", props.get("doc_id", "")) or "")
         aliases = [str(a) for a in (props.get("aliases") or []) if str(a).strip()]
         source_kind = str(props.get("source_kind", "document") or "document")
@@ -116,7 +120,6 @@ class Neo4jIndexer:
                 ingested_at=_ingested_at(ingested_at),
                 doc_id=props.get("doc_id", ""),
                 source_id=source_id,
-                owner_user_id=owner_user_id,
                 aliases=aliases,
                 source_kind=source_kind,
                 url=url,
@@ -132,7 +135,7 @@ class Neo4jIndexer:
         ingested_at: str | None = None,
         properties: dict[str, Any] | None = None,
     ) -> str:
-        """Idempotently create or update a relationship edge between two entities carrying chunk ACL."""
+        """Idempotently create or update a relationship edge between two entities."""
         rel_type_clean = (
             "".join(c if c.isalnum() else "_" for c in relation_type).upper() or "RELATES_TO"
         )
@@ -169,7 +172,6 @@ class Neo4jIndexer:
                 source_ref=str(props.get("source_id", props.get("doc_id", "")) or ""),
                 thread_id=str(props.get("thread_id", "") or ""),
                 message_id=str(props.get("message_id", "") or ""),
-                owner_user_id=str(props.get("owner_user_id", "") or ""),
                 source_kind=str(props.get("source_kind", "document") or "document"),
                 **_acl_props(acl_scope),
             )
@@ -184,90 +186,165 @@ class Neo4jIndexer:
             )
             return ""
 
-    async def merge_chunk(
+    async def merge_document(
         self,
-        chunk_id: str,
+        *,
         doc_id: str,
-        text: str,
-        acl_scope: dict[str, Any] | None = None,
+        title: str,
+        acl_scope: dict[str, Any] | None,
+        source_kind: str,
+        url: str | None,
+        fetched_at: str | None,
+        content_hash: str | None = None,
         ingested_at: str | None = None,
-        owner_user_id: str | None = None,
-        properties: dict[str, Any] | None = None,
     ) -> None:
-        """Idempotently create or update a Chunk node in Neo4j."""
+        """Create or update the Document node that owns document entity links."""
         cypher = """
-        MERGE (c:Chunk {chunk_id: $chunk_id})
-        SET c.doc_id = $doc_id,
-            c.text = $text,
-            c.owner_user_id = $acl_owner,
-            c.shared_scope = $acl_shared,
-            c.is_public = $acl_public,
-            c.acl_scope = $acl_scope,
-            c.ingested_at = $ingested_at,
-            c.source_kind = $source_kind,
-            c.url = $url,
-            c.fetched_at = $fetched_at
+        MERGE (d:Document {doc_id: $doc_id})
+        SET d.title = $title,
+            d.owner_user_id = $acl_owner,
+            d.shared_scope = $acl_shared,
+            d.is_public = $acl_public,
+            d.acl_scope = $acl_scope,
+            d.source_kind = $source_kind,
+            d.url = $url,
+            d.fetched_at = $fetched_at,
+            d.content_hash = $content_hash,
+            d.ingested_at = $ingested_at
         """
-        props = properties or {}
         async with self.driver.session(database=self.database) as session:
             await session.run(
                 cypher,
-                chunk_id=chunk_id,
                 doc_id=doc_id,
-                text=text,
-                owner_user_id=owner_user_id or "",
+                title=title or doc_id,
                 acl_scope=json.dumps(acl_scope or {}),
+                source_kind=source_kind or "document",
+                url=url or "",
+                fetched_at=fetched_at,
+                content_hash=content_hash or "",
                 ingested_at=_ingested_at(ingested_at),
-                source_kind=str(props.get("source_kind", "document") or "document"),
-                url=str(props.get("url", "") or ""),
-                fetched_at=props.get("fetched_at"),
                 **_acl_props(acl_scope),
             )
 
-    async def refresh_entity_props(self, entity_ids: list[str]) -> None:
-        """Refresh source docs and deterministic ACLs for the given entities in one batch."""
+    async def sync_document_graph(
+        self,
+        *,
+        doc_id: str,
+        acl_scope: dict[str, Any] | None,
+        entity_counts: dict[str, int],
+        cooccurrence_counts: dict[tuple[str, str], int],
+        source_kind: str = "document",
+        ingested_at: str | None = None,
+    ) -> None:
+        """Replace a document's aggregated MENTIONS and CO_OCCURS edges."""
+        acl_json = json.dumps(acl_scope or {})
+        acl_props = _acl_props(acl_scope)
+        timestamp = _ingested_at(ingested_at)
+        async with self.driver.session(database=self.database) as session:
+            await session.run(
+                """
+                MATCH (d:Document {doc_id: $doc_id})-[r:MENTIONS]->(:Entity)
+                DELETE r
+                WITH d
+                OPTIONAL MATCH ()-[r:CO_OCCURS {doc_id: $doc_id}]->()
+                DELETE r
+                """,
+                doc_id=doc_id,
+            )
+            for entity_id, count in entity_counts.items():
+                await session.run(
+                    """
+                    MATCH (d:Document {doc_id: $doc_id})
+                    MERGE (e:Entity {id: $entity_id})
+                    ON CREATE SET
+                        e.name = $entity_id,
+                        e.entity_type = 'Concept',
+                        e.aliases = [],
+                        e.doc_ids = [],
+                        e.source_ids = [],
+                        e.source_kinds = []
+                    MERGE (d)-[r:MENTIONS]->(e)
+                    SET r.count = $count,
+                        r.acl_scope = $acl_scope,
+                        r.owner_user_id = $acl_owner,
+                        r.shared_scope = $acl_shared,
+                        r.is_public = $acl_public,
+                        r.ingested_at = $ingested_at,
+                        r.source_kind = $source_kind
+                    """,
+                    doc_id=doc_id,
+                    entity_id=entity_id,
+                    count=int(count),
+                    acl_scope=acl_json,
+                    ingested_at=timestamp,
+                    source_kind=source_kind or "document",
+                    **acl_props,
+                )
+            for (source_id, target_id), count in cooccurrence_counts.items():
+                await session.run(
+                    """
+                    MERGE (a:Entity {id: $source_id})
+                    ON CREATE SET
+                        a.name = $source_id,
+                        a.entity_type = 'Concept',
+                        a.aliases = [],
+                        a.doc_ids = [],
+                        a.source_ids = [],
+                        a.source_kinds = []
+                    MERGE (b:Entity {id: $target_id})
+                    ON CREATE SET
+                        b.name = $target_id,
+                        b.entity_type = 'Concept',
+                        b.aliases = [],
+                        b.doc_ids = [],
+                        b.source_ids = [],
+                        b.source_kinds = []
+                    MERGE (a)-[r:CO_OCCURS {doc_id: $doc_id}]->(b)
+                    SET r.count = $count,
+                        r.doc_id = $doc_id,
+                        r.acl_scope = $acl_scope,
+                        r.owner_user_id = $acl_owner,
+                        r.shared_scope = $acl_shared,
+                        r.is_public = $acl_public,
+                        r.ingested_at = $ingested_at,
+                        r.source_kind = $source_kind
+                    """,
+                    doc_id=doc_id,
+                    source_id=source_id,
+                    target_id=target_id,
+                    count=int(count),
+                    acl_scope=acl_json,
+                    ingested_at=timestamp,
+                    source_kind=source_kind or "document",
+                    **acl_props,
+                )
+
+    async def refresh_entity_props(self, entity_ids: Iterable[str]) -> None:
+        """Recompute source documents and ACLs from Document-MENTIONS edges."""
         ids = list(dict.fromkeys(entity_ids))
         if not ids:
             return
         cypher = """
         UNWIND $entity_ids AS entity_id
         MATCH (e:Entity {id: entity_id})
-        CALL (e) {
-            MATCH (c:Chunk)-[:MENTIONS]->(e)
-            WITH e, collect(DISTINCT coalesce(c.doc_id, '')) AS raw_doc_ids,
-                 collect(DISTINCT coalesce(c.owner_user_id, '')) AS raw_owners,
-                 collect(DISTINCT coalesce(c.shared_scope, '')) AS raw_shared,
-                 collect(coalesce(c.is_public, false)) AS publics,
-                 collect(DISTINCT coalesce(c.source_kind, 'document')) AS source_kinds
-            WITH e, [d IN raw_doc_ids WHERE d <> ''] AS doc_ids,
-                 [o IN raw_owners WHERE o <> ''] AS owners,
-                 [s IN raw_shared WHERE s <> ''] AS shared,
-                 all(pub IN publics WHERE pub) AS all_public,
-                 source_kinds
-            SET e.doc_ids = doc_ids,
-                e.owner_user_id = CASE WHEN size(owners) > 0 THEN head(owners) ELSE '' END,
-                e.shared_scope = CASE WHEN size(shared) > 0 THEN head(shared) ELSE '' END,
-                e.is_public = size(owners) = 0 AND size(shared) = 0 AND all_public,
-                e.source_kinds = source_kinds,
-                e.source_kind = CASE WHEN 'web' IN source_kinds THEN 'web'
-                                     ELSE coalesce(head(source_kinds), 'document') END
-            RETURN count(*) AS refreshed
-        }
+        OPTIONAL MATCH (d:Document)-[:MENTIONS]->(e)
+        WITH e,
+             [x IN collect(DISTINCT coalesce(d.doc_id, '')) WHERE x <> ''] AS doc_ids,
+             [x IN collect(DISTINCT coalesce(d.owner_user_id, '')) WHERE x <> ''] AS owners,
+             [x IN collect(DISTINCT coalesce(d.shared_scope, '')) WHERE x <> ''] AS shared,
+             collect(coalesce(d.is_public, false)) AS publics,
+             [x IN collect(DISTINCT coalesce(d.source_kind, 'document')) WHERE x <> ''] AS source_kinds
+        SET e.doc_ids = doc_ids,
+            e.owner_user_id = CASE WHEN size(owners) > 0 THEN head(owners) ELSE '' END,
+            e.shared_scope = CASE WHEN size(shared) > 0 THEN head(shared) ELSE '' END,
+            e.is_public = size(owners) = 0 AND size(shared) = 0 AND all(pub IN publics WHERE pub),
+            e.source_kinds = source_kinds,
+            e.source_kind = CASE WHEN 'web' IN source_kinds THEN 'web'
+                                 ELSE coalesce(head(source_kinds), 'document') END
         RETURN e.id AS id
         """
         async with self.driver.session(database=self.database) as session:
             result = await session.run(cypher, entity_ids=ids)
-            await result.consume()
-
-    async def link_chunk_entity(self, chunk_id: str, entity_id: str) -> None:
-        """Connect a chunk to an entity it mentions."""
-        cypher = """
-        MATCH (c:Chunk {chunk_id: $chunk_id})
-        MATCH (e:Entity {id: $entity_id})
-        MERGE (c)-[:MENTIONS]->(e)
-        """
-        async with self.driver.session(database=self.database) as session:
-            result = await session.run(cypher, chunk_id=chunk_id, entity_id=entity_id)
             await result.consume()
 
     async def merge_chat_mention(
@@ -337,9 +414,10 @@ class Neo4jIndexer:
         web_sources: list[dict[str, Any]],
     ) -> None:
         """Create Query/Answer nodes and their evidence and conversation edges."""
-        acl = acl_scope or {}
+        acl = dict(acl_scope or {})
+        if owner_user_id and not acl.get("owner_user_id"):
+            acl["owner_user_id"] = owner_user_id
         acl_json = json.dumps(acl)
-        owner = owner_user_id or ""
         thread = thread_id or ""
         query_cypher = """
         MERGE (q:Query {id: $query_id})
@@ -366,7 +444,7 @@ class Neo4jIndexer:
             a.is_public = $acl_public,
             a.acl_scope = $acl_scope,
             a.ingested_at = $ingested_at
-        MERGE (q)-[:ANSWERS]->(a)
+        MERGE (q)-[:ANSWERED_BY]->(a)
         """
         async with self.driver.session(database=self.database) as session:
             await session.run(
@@ -380,7 +458,6 @@ class Neo4jIndexer:
                 source_kind=source_kind,
                 is_abstention=bool(is_abstention),
                 thread_id=thread,
-                owner_user_id=owner,
                 acl_scope=acl_json,
                 ingested_at=_ingested_at(ingested_at),
                 web_sources=json.dumps(web_sources or [], default=str),
@@ -393,7 +470,7 @@ class Neo4jIndexer:
                     """
                     MATCH (q:Query {id: $node_id})
                     MATCH (e:Entity {id: $entity_id})
-                    MERGE (q)-[r:MENTIONS]->(e)
+                    MERGE (q)-[r:ABOUT]->(e)
                     SET r.source_id = $source_id,
                         r.source_kind = $relation_source_kind,
                         r.thread_id = $thread_id,
@@ -427,15 +504,20 @@ class Neo4jIndexer:
                         source_id=source_id,
                         relation_source_kind="query" if is_query else "answer",
                         thread_id=thread,
-                        owner_user_id=owner,
+                        owner_user_id=owner_user_id or "",
                     )
 
             cites_cypher = """
             MATCH (a:Answer {id: $answer_id})
-            MERGE (s:Source {id: $source_id})
-            SET s.source_kind = $source_kind,
-                s.url = $url
-            MERGE (a)-[r:CITES]->(s)
+            MERGE (d:Document {doc_id: $source_id})
+            ON CREATE SET
+                d.title = $source_id,
+                d.owner_user_id = $acl_owner,
+                d.shared_scope = $acl_shared,
+                d.is_public = $acl_public,
+                d.source_kind = $source_kind,
+                d.url = $url
+            MERGE (a)-[r:CITES]->(d)
             SET r.source_kind = $source_kind,
                 r.thread_id = $thread_id,
                 r.owner_user_id = $owner_user_id
@@ -454,7 +536,9 @@ class Neo4jIndexer:
                     source_kind=str(cite.get("source_kind", "document")),
                     url=url,
                     thread_id=thread,
-                    owner_user_id=owner,
+                    owner_user_id=owner_user_id or "",
+                    acl_scope=acl_json,
+                    **_acl_props(acl),
                 )
 
             if previous_query_id:
@@ -469,61 +553,74 @@ class Neo4jIndexer:
                 )
 
     async def delete_by_doc_id(self, doc_id: str) -> int:
-        """Remove chunks, edges, and recompute or delete orphaned entities for doc_id."""
+        """Remove a Document node, its aggregated edges, and orphaned entities."""
         async with self.driver.session(database=self.database) as session:
-            # 1. Find all entities mentioned by chunks of this doc
-            find_entities_cypher = """
-            MATCH (c:Chunk {doc_id: $doc_id})-[:MENTIONS]->(e:Entity)
-            RETURN DISTINCT e.id AS entity_id
-            """
-            res = await session.run(find_entities_cypher, doc_id=doc_id)
-            records = await res.data()
-            entity_ids = [record["entity_id"] for record in records]
-
-            # 2. Delete edges originating from doc_id
-            edge_cypher = """
-            MATCH ()-[r]->()
-            WHERE r.doc_id = $doc_id
-            DELETE r
-            """
-            res_edge = await session.run(edge_cypher, doc_id=doc_id)
-            sum_edge = await res_edge.consume()
-
-            # 3. Delete chunks of doc_id
-            chunk_cypher = """
-            MATCH (c:Chunk {doc_id: $doc_id})
-            DETACH DELETE c
-            """
-            res_c = await session.run(chunk_cypher, doc_id=doc_id)
-            sum_c = await res_c.consume()
-            deleted = sum_c.counters.nodes_deleted + sum_edge.counters.relationships_deleted
-
-            # 4. Recompute or delete affected entities
-            for eid in entity_ids:
-                recompute_cypher = """
-                MATCH (e:Entity {id: $entity_id})
-                OPTIONAL MATCH (chk:Chunk)-[:MENTIONS]->(e)
-                WITH e, collect(chk) AS remaining_chunks
-                WHERE size(remaining_chunks) = 0
-                DETACH DELETE e
+            res = await session.run(
                 """
-                await session.run(recompute_cypher, entity_id=eid)
+                MATCH (d:Document {doc_id: $doc_id})-[:MENTIONS]->(e:Entity)
+                RETURN DISTINCT e.id AS entity_id
+                """,
+                doc_id=doc_id,
+            )
+            records = await res.data()
+            entity_ids = [str(record["entity_id"]) for record in records if record.get("entity_id")]
 
-            # 5. Also delete entities solely created for doc_id that had no chunks
-            entity_cypher = """
-            MATCH (e:Entity {doc_id: $doc_id})
-            WHERE NOT (e)<-[:MENTIONS]-(:Chunk)
-            DETACH DELETE e
-            """
-            res_e = await session.run(entity_cypher, doc_id=doc_id)
-            sum_e = await res_e.consume()
-            total_deleted = deleted + sum_e.counters.nodes_deleted
+            # Separate statements: a document with no entities has no CO_OCCURS
+            # edges, and a chained MATCH would skip the Document deletion below.
+            cooccur_res = await session.run(
+                """
+                MATCH ()-[r:CO_OCCURS {doc_id: $doc_id}]->()
+                WITH collect(r) AS rels
+                FOREACH (rel IN rels | DELETE rel)
+                RETURN size(rels) AS cnt
+                """,
+                doc_id=doc_id,
+            )
+            cooccur_record = await cooccur_res.single()
+
+            mention_res = await session.run(
+                """
+                MATCH (:Document {doc_id: $doc_id})-[r:MENTIONS]->(:Entity)
+                WITH collect(r) AS rels
+                FOREACH (rel IN rels | DELETE rel)
+                RETURN size(rels) AS cnt
+                """,
+                doc_id=doc_id,
+            )
+            mention_record = await mention_res.single()
+
+            document_res = await session.run(
+                """
+                MATCH (d:Document {doc_id: $doc_id})
+                WITH collect(d) AS docs
+                FOREACH (doc IN docs | DETACH DELETE doc)
+                RETURN size(docs) AS cnt
+                """,
+                doc_id=doc_id,
+            )
+            document_record = await document_res.single()
+
+            deleted = (
+                int((cooccur_record or {}).get("cnt") or 0)
+                + int((mention_record or {}).get("cnt") or 0)
+                + int((document_record or {}).get("cnt") or 0)
+            )
+
+            for entity_id in entity_ids:
+                await session.run(
+                    """
+                    MATCH (e:Entity {id: $entity_id})
+                    WHERE NOT (e)--()
+                    DETACH DELETE e
+                    """,
+                    entity_id=entity_id,
+                )
 
         await self.refresh_entity_props(entity_ids)
-        return total_deleted
+        return deleted
 
     async def count_nodes(self) -> int:
-        cypher = "MATCH (n:Entity) RETURN count(n) AS cnt"
+        cypher = "MATCH (n) RETURN count(n) AS cnt"
         async with self.driver.session(database=self.database) as session:
             res = await session.run(cypher)
             rec = await res.single()
@@ -536,16 +633,58 @@ class Neo4jIndexer:
             rec = await res.single()
             return int(rec["cnt"]) if rec else 0
 
-    async def get_all_chunk_ids(self) -> set[str]:
-        cypher = "MATCH (c:Chunk) RETURN c.chunk_id AS chunk_id"
-        chunk_ids: set[str] = set()
+    async def get_all_document_ids(self) -> set[str]:
+        cypher = "MATCH (d:Document) RETURN d.doc_id AS doc_id"
+        doc_ids: set[str] = set()
         async with self.driver.session(database=self.database) as session:
             res = await session.run(cypher)
-            records = await res.values()
-            for row in records:
+            for row in await res.values():
                 if row and row[0]:
-                    chunk_ids.add(str(row[0]))
-        return chunk_ids
+                    doc_ids.add(str(row[0]))
+        return doc_ids
+
+    async def document_exists(self, doc_id: str) -> bool:
+        cypher = "MATCH (d:Document {doc_id: $doc_id}) RETURN count(d) AS cnt"
+        async with self.driver.session(database=self.database) as session:
+            res = await session.run(cypher, doc_id=doc_id)
+            rec = await res.single()
+            return bool(rec and int(rec["cnt"]) > 0)
+
+    async def document_graph_exists(self, doc_id: str) -> bool:
+        """True when a Document node or its CO_OCCURS edge payloads remain."""
+        if await self.document_exists(doc_id):
+            return True
+        async with self.driver.session(database=self.database) as session:
+            res = await session.run(
+                "MATCH ()-[r:CO_OCCURS {doc_id: $doc_id}]->() RETURN count(r) AS cnt",
+                doc_id=doc_id,
+            )
+            rec = await res.single()
+            return bool(rec and int(rec["cnt"]) > 0)
+
+    async def get_all_entity_ids(self) -> set[str]:
+        cypher = "MATCH (e:Entity) RETURN e.id AS id"
+        entity_ids: set[str] = set()
+        async with self.driver.session(database=self.database) as session:
+            res = await session.run(cypher)
+            for row in await res.values():
+                if row and row[0]:
+                    entity_ids.add(str(row[0]))
+        return entity_ids
+
+    async def delete_orphan_entities(self) -> int:
+        """Delete entities with no Postgres-equivalent graph edges left."""
+        async with self.driver.session(database=self.database) as session:
+            res = await session.run(
+                """
+                MATCH (e:Entity)
+                WHERE NOT (e)--()
+                DETACH DELETE e
+                RETURN count(e) AS deleted
+                """
+            )
+            rec = await res.single()
+            return int(rec["deleted"]) if rec else 0
 
     async def delete_chat_graph(
         self,
@@ -579,17 +718,16 @@ class Neo4jIndexer:
             rec = await res.single()
             entity_ids = [str(e) for e in (rec["ids"] if rec and rec["ids"] else []) if e]
 
-            # Remove source refs from entities; delete entity if no remaining sources/mentions/edges.
             for eid in set(entity_ids):
                 await session.run(
                     """
                     MATCH (e:Entity {id: $entity_id})
                     SET e.source_ids = [s IN coalesce(e.source_ids, []) WHERE s <> $source_id]
                     WITH e
-                    OPTIONAL MATCH (e)-[r]-()
-                    OPTIONAL MATCH (:Chunk)-[:MENTIONS]->(e)
-                    WITH e, count(r) AS rel_count, count(*) AS mention_rows
-                    WHERE rel_count = 0 AND mention_rows = 0 AND size(coalesce(e.source_ids, [])) = 0 AND size(coalesce(e.doc_ids, [])) = 0
+                    WHERE NOT (e)-[:MENTIONS]-(:Document)
+                      AND NOT (e)<-[:ABOUT]-(:Query)
+                      AND NOT (e)<-[:MENTIONS]-(:Answer)
+                      AND NOT (e)<-[:MENTIONS]-(:Message)
                     DETACH DELETE e
                     """,
                     entity_id=eid,

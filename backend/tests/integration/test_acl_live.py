@@ -286,7 +286,11 @@ async def test_retrieval_compare_endpoint_does_not_leak(acl_corpus: dict[str, st
 async def test_graph_endpoints_do_not_leak(acl_corpus: dict[str, str]) -> None:
     """`/graph` and `/graph/path` must not expose owner-private nodes to Bob."""
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        bob_resp = await client.get("/api/v1/graph", headers={"X-Dev-User": "bob"})
+        bob_resp = await client.get(
+            "/api/v1/graph",
+            params={"limit": 1000},
+            headers={"X-Dev-User": "bob"},
+        )
         assert bob_resp.status_code == 200
         bob_names: list[dict[str, Any]] = bob_resp.json()["nodes"]
         bob_names = {node["name"] for node in bob_names}
@@ -297,7 +301,7 @@ async def test_graph_endpoints_do_not_leak(acl_corpus: dict[str, str]) -> None:
 
         alice_resp = await client.get(
             "/api/v1/graph",
-            params={"scope": "shared-analytics"},
+            params={"scope": "shared-analytics", "limit": 1000},
             headers={"X-Dev-User": "alice"},
         )
         assert alice_resp.status_code == 200

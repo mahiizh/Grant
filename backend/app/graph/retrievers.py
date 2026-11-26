@@ -2,10 +2,11 @@ import logging
 from typing import Any
 
 from neo4j import AsyncDriver, AsyncGraphDatabase
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.store_guard import assert_writable_stores
-from app.domain import Evidence, Provenance, SourceTier
+from app.domain import Evidence
 from app.observability.stage_timing import timed_async_stage
 from app.retrieval.filters import RetrievalFilter
 
@@ -96,63 +97,118 @@ class GraphRetriever:
         path_tokens: list[str],
         top_k: int = 5,
         filter_criteria: RetrievalFilter | None = None,
+        session: AsyncSession | None = None,
     ) -> list[Evidence]:
-        """Fetch ACL-permitted source chunks linked to the entities in a reasoning path."""
-        # Extract entity names (even positions)
-        entity_names = [token for i, token in enumerate(path_tokens) if i % 2 == 0]
-        if not entity_names:
+        """Resolve path entities to chunks via Postgres mentions and Qdrant payloads.
+
+        Neo4j supplies only entity seeds and their ACL-permitted neighbours.
+        Chunk text is never stored there: chunk ids come from Postgres
+        ``entity_mentions`` and the payloads come from Qdrant by point id.
+        """
+        tokens = [str(token) for token in path_tokens if token]
+        if not tokens:
             return []
 
         criteria = self._criteria(filter_criteria)
-        chunk_pred, params = criteria.to_cypher_predicate("c")
+        entity_pred, params = criteria.to_cypher_predicate("e")
+        neighbour_pred, neighbour_params = criteria.to_cypher_predicate("n")
+        params.update(neighbour_params)
+        params.update({"tokens": tokens, "limit": max(top_k * 4, 20)})
 
-        cypher = f"""
-        MATCH (c:Chunk)-[:MENTIONS]->(e:Entity)
-        WHERE e.name IN $entity_names
-          AND {chunk_pred}
-        RETURN DISTINCT c.chunk_id AS chunk_id,
-                        c.doc_id AS doc_id,
-                        c.text AS text
-        LIMIT $limit
-        """
-        evidence_list: list[Evidence] = []
-        async with self.driver.session(database=get_settings().NEO4J_DATABASE) as session:
-            res = await session.run(
-                cypher,
-                entity_names=entity_names,
-                limit=top_k * 2,
+        entity_ids: list[str] = []
+        async with self.driver.session(database=get_settings().NEO4J_DATABASE) as driver_session:
+            seed_res = await driver_session.run(
+                f"""
+                MATCH (e:Entity)
+                WHERE (e.id IN $tokens OR e.name IN $tokens
+                       OR any(alias IN coalesce(e.aliases, []) WHERE alias IN $tokens))
+                  AND {entity_pred}
+                RETURN DISTINCT e.id AS entity_id
+                LIMIT $limit
+                """,
                 **params,
             )
-            records = await res.data()
+            for row in await seed_res.data():
+                if row.get("entity_id"):
+                    entity_ids.append(str(row["entity_id"]))
 
-            # Group candidates by doc_id to ensure multi-doc diversity along reasoning path
+            if entity_ids:
+                neighbour_res = await driver_session.run(
+                    f"""
+                    MATCH (e:Entity)-[r:CO_OCCURS|VERSION_OF]-(n:Entity)
+                    WHERE e.id IN $seed_ids
+                      AND type(r) IN ['CO_OCCURS', 'VERSION_OF']
+                      AND {neighbour_pred}
+                    RETURN DISTINCT n.id AS entity_id
+                    LIMIT $limit
+                    """,
+                    seed_ids=entity_ids,
+                    **params,
+                )
+                seen = set(entity_ids)
+                for row in await neighbour_res.data():
+                    entity_id = row.get("entity_id")
+                    if entity_id and str(entity_id) not in seen:
+                        seen.add(str(entity_id))
+                        entity_ids.append(str(entity_id))
+
+        if not entity_ids:
+            return []
+
+        from sqlalchemy import select
+
+        from app.db.models import EntityMentionRecord
+        from app.indexing.qdrant_indexer import QdrantIndexer
+        from app.retrieval.hybrid import HybridRetriever
+
+        owns_session = session is None
+        session_cm = None
+        if owns_session:
+            from app.db.postgres import get_session
+
+            session_cm = get_session()
+            session = await session_cm.__aenter__()
+        assert session is not None
+
+        qdrant = QdrantIndexer()
+        try:
+            chunk_rows = list(
+                (
+                    await session.execute(
+                        select(EntityMentionRecord.chunk_id)
+                        .where(
+                            EntityMentionRecord.entity_id.in_(entity_ids),
+                            EntityMentionRecord.chunk_id.is_not(None),
+                        )
+                        .distinct()
+                        .limit(max(top_k * 8, 40))
+                    )
+                ).scalars().all()
+            )
+            payloads = await qdrant.get_chunks([str(chunk_id) for chunk_id in chunk_rows])
+
             by_doc: dict[str, list[Evidence]] = {}
-            for r in records:
-                prov = Provenance(
-                    tier=SourceTier.TIER_1_DOCUMENT,
-                    source_uri=r.get("doc_id", ""),
-                    confidence=1.0,
-                    verified=True,
+            for chunk_id, payload in payloads.items():
+                ev = HybridRetriever._to_evidence(
+                    chunk_id, 0.95, payload, "graph", filter_criteria
                 )
-                ev = Evidence(
-                    chunk_id=r["chunk_id"],
-                    doc_id=r["doc_id"],
-                    text=r["text"],
-                    score=0.95,
-                    retrieval_method="graph",
-                    provenance=prov,
-                )
+                if ev is None:
+                    continue
+                ev = ev.model_copy(update={"path": list(path_tokens)})
                 by_doc.setdefault(ev.doc_id, []).append(ev)
 
-            # Round-robin across documents to guarantee multi-document representation in top-k
+            evidence_list: list[Evidence] = []
             while len(evidence_list) < top_k and any(by_doc.values()):
                 for doc_id in list(by_doc.keys()):
                     if by_doc[doc_id]:
                         evidence_list.append(by_doc[doc_id].pop(0))
                         if len(evidence_list) >= top_k:
                             break
-
-        return evidence_list
+            return evidence_list
+        finally:
+            await qdrant.close()
+            if session_cm is not None:
+                await session_cm.__aexit__(None, None, None)
 
     @timed_async_stage("neo4j")
     async def search_entities(

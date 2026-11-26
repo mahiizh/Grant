@@ -91,7 +91,7 @@ async def test_verified_delete_clears_every_store(test_session: AsyncSession) ->
 
     await _seed_indexes(test_session, qdrant, neo4j)
     assert qdrant.count() == 2
-    assert neo4j.get_chunk_ids() == {"chk_del_0", "chk_del_1"}
+    assert await neo4j.get_all_document_ids() == {"doc_del"}
 
     redis.seed(
         "exact:stale",

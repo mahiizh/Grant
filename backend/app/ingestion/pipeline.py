@@ -215,6 +215,7 @@ class IngestionPipeline:
                             owner_user_id=owner_user_id,
                             doc_id=parsed.doc_id,
                             source_id=parsed.doc_id,
+                            chunk_id=chunk.chunk_id,
                         )
                         canonical_ent = ent.model_copy(
                             update={

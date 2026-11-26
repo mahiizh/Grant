@@ -1,335 +1,368 @@
 import argparse
 import asyncio
 import logging
+from collections import defaultdict
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
-from app.db.models import ChunkRecord
-from app.db.outbox import OutboxService
-from app.db.postgres import announce_database_identity, get_session, verify_schema
+from app.db.models import DocumentRecord, EntityMentionRecord, EntityRecord
+from app.db.outbox import OutboxEventType, OutboxService
+from app.db.postgres import (
+    DocumentRepository,
+    announce_database_identity,
+    get_session,
+    verify_schema,
+)
 from app.indexing.neo4j_indexer import Neo4jIndexer
 from app.indexing.outbox_worker import OutboxWorker
-from app.indexing.qdrant_indexer import QdrantIndexer
+from app.indexing.qdrant_indexer import EntityVectorIndex, QdrantIndexer
 
 logger = logging.getLogger(__name__)
 
 
-def _acl_scope_payload(record: ChunkRecord) -> dict[str, Any]:
-    """Build the owner/shared ACL payload stored in Qdrant and Neo4j."""
-    return {
-        "owner_user_id": record.owner_user_id,
-        "shared_scope": record.shared_scope,
+def _print_counts(label: str, counts: dict[str, int]) -> None:
+    print(
+        f"{label}: "
+        + ", ".join(f"{name}={value}" for name, value in sorted(counts.items()))
+    )
+
+
+async def _fetch_postgres() -> tuple[
+    dict[str, dict[str, Any]],
+    dict[str, set[str]],
+    set[str],
+]:
+    """Return per-document snapshots, doc→entity sets, and all entity ids."""
+    async with get_session() as session:
+        records = list(
+            (
+                await session.execute(
+                    select(DocumentRecord).options(selectinload(DocumentRecord.chunks))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        entity_ids = set(
+            (await session.execute(select(EntityRecord.entity_id))).scalars().all()
+        )
+        mentions = list((await session.execute(select(EntityMentionRecord))).scalars().all())
+
+    documents: dict[str, dict[str, Any]] = {}
+    for record in records:
+        document = DocumentRepository._record_to_domain_doc(record)
+        documents[record.doc_id] = {
+            "document": document,
+            "checksum": DocumentRepository._effective_content_hash(document),
+            "chunk_ids": {chunk.chunk_id for chunk in document.chunks},
+        }
+
+    doc_entities: dict[str, set[str]] = defaultdict(set)
+    for mention in mentions:
+        if mention.source_kind == "document" and mention.doc_id:
+            doc_entities[str(mention.doc_id)].add(str(mention.entity_id))
+
+    return documents, dict(doc_entities), entity_ids
+
+
+async def _fetch_qdrant(
+    indexer: QdrantIndexer,
+) -> tuple[set[str], dict[str, dict[str, dict[str, Any]]]]:
+    chunk_ids = await indexer.get_all_chunk_ids()
+    payloads = await indexer.get_chunks(sorted(chunk_ids))
+    by_doc: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    for chunk_id, payload in payloads.items():
+        doc_id = payload.get("doc_id")
+        if doc_id:
+            by_doc[str(doc_id)][chunk_id] = payload
+    return chunk_ids, dict(by_doc)
+
+
+async def _fetch_neo4j(
+    indexer: Neo4jIndexer,
+) -> tuple[set[str], dict[str, set[str]], set[str], dict[str, int]]:
+    document_ids = await indexer.get_all_document_ids()
+    entity_ids = await indexer.get_all_entity_ids()
+    async with indexer.driver.session(database=indexer.database) as session:
+        res = await session.run(
+            """
+            MATCH (d:Document)-[:MENTIONS]->(e:Entity)
+            RETURN d.doc_id AS doc_id, collect(e.id) AS entity_ids
+            """
+        )
+        doc_entities = {
+            str(row["doc_id"]): {str(entity_id) for entity_id in row["entity_ids"] or []}
+            for row in await res.data()
+            if row.get("doc_id")
+        }
+        node_res = await session.run("MATCH (n) RETURN count(n) AS cnt")
+        node_rec = await node_res.single()
+        edge_res = await session.run("MATCH ()-[r]->() RETURN count(r) AS cnt")
+        edge_rec = await edge_res.single()
+
+    counts = {
+        "nodes": int(node_rec["cnt"]) if node_rec else 0,
+        "edges": int(edge_rec["cnt"]) if edge_rec else 0,
     }
+    return document_ids, doc_entities, entity_ids, counts
 
 
-def _chunk_ingested_at(record: ChunkRecord) -> str | None:
-    """Read a chunk's ingestion timestamp from its JSON metadata."""
-    value = (record.metadata_json or {}).get("ingested_at")
-    return str(value) if value else None
+async def run_reconciliation(repair: bool = False, dry_run: bool = False) -> int:
+    """Compare Neo4j/Qdrant state with Postgres and optionally re-queue repairs.
 
-
-async def run_reconciliation(repair: bool = False) -> int:
-    """Compare chunk IDs across Postgres, Qdrant, and Neo4j, and optionally repair drift."""
+    ``--dry-run`` is strictly read-only: it skips outbox compaction, pending-event
+    draining, and all repair writes.
+    """
     print("=" * 60)
     print("GraphRAG Multi-Store Storage Reconciler")
     print("=" * 60)
+    if dry_run:
+        print("Mode: DRY RUN (no writes)")
 
     await announce_database_identity()
     await verify_schema()
 
-    # 0. Keep the outbox bounded and free of duplicate pending work.
-    async with get_session() as session:
-        outbox_stats = await OutboxService.reconcile(session=session)
-        await session.commit()
-    print(
-        "Outbox reconciliation:        "
-        f"pruned {outbox_stats['processed_pruned']} processed, "
-        f"compacted {outbox_stats['pending_compacted']} pending duplicates, "
-        f"{outbox_stats['pending_remaining']} pending remain"
+    if not dry_run:
+        # Keep the outbox bounded and free of duplicate pending work.
+        async with get_session() as session:
+            outbox_stats = await OutboxService.reconcile(session=session)
+        print(
+            "Outbox reconciliation:        "
+            f"pruned {outbox_stats['processed_pruned']} processed, "
+            f"compacted {outbox_stats['pending_compacted']} pending duplicates, "
+            f"{outbox_stats['pending_remaining']} pending remain"
+        )
+
+    documents, pg_doc_entities, pg_entity_ids = await _fetch_postgres()
+    _print_counts(
+        "PostgreSQL (source of truth)",
+        {
+            "documents": len(documents),
+            "chunks": sum(len(doc["chunk_ids"]) for doc in documents.values()),
+            "entities": len(pg_entity_ids),
+            "doc_entities": sum(len(values) for values in pg_doc_entities.values()),
+        },
     )
 
-    # 1. Fetch from PostgreSQL
-    from app.db.models import EntityMentionRecord, EntityRecord
-
-    async with get_session() as session:
-        chunk_rows = list((await session.execute(select(ChunkRecord))).scalars().all())
-        entity_rows = list((await session.execute(select(EntityRecord))).scalars().all())
-        mention_rows = list((await session.execute(select(EntityMentionRecord))).scalars().all())
-
-    pg_chunks: dict[str, ChunkRecord] = {r.chunk_id: r for r in chunk_rows}
-    pg_ids = set(pg_chunks.keys())
-    pg_entities: dict[str, EntityRecord] = {r.entity_id: r for r in entity_rows}
-    pg_entity_ids = set(pg_entities.keys())
-    pg_mentions = {
-        (r.entity_id, r.source_id, r.source_kind): r
-        for r in mention_rows
-    }
-    print(f"PostgreSQL (Source of Truth): {len(pg_ids)} chunks, {len(pg_entity_ids)} entities, {len(pg_mentions)} mentions")
-
     qdrant = QdrantIndexer()
+    entity_index = EntityVectorIndex()
     neo4j = Neo4jIndexer()
-
     try:
-        # 1b. Apply pending outbox mutations before comparing downstream stores.
-        # History writes are visible in Postgres immediately while Neo4j and
-        # Qdrant are updated asynchronously, so a raw comparison would report
-        # false drift for queries answered moments earlier.
-        worker = OutboxWorker(qdrant_indexer=qdrant, neo4j_indexer=neo4j)
-        drained = await worker.drain()
-        print(f"Outbox sync:                 drained {drained} pending events")
-
-        # 2. Fetch from Qdrant
-        qdrant_ids = await qdrant.get_all_chunk_ids()
-        print(f"Qdrant Vector Store:         {len(qdrant_ids)} chunks")
-
-        # 3. Fetch from Neo4j
-        neo4j_ids = await neo4j.get_all_chunk_ids()
-        async with neo4j.driver.session(database=neo4j.database) as s:
-            ent_res = await s.run("MATCH (e:Entity) RETURN e.id AS id")
-            neo4j_entity_ids = {str(r["id"]) for r in await ent_res.data() if r.get("id")}
-            ment_res = await s.run(
-                """
-                MATCH (c:Chunk)-[:MENTIONS]->(e:Entity)
-                RETURN e.id AS entity_id, c.doc_id AS source_id, 'document' AS source_kind
-                UNION
-                MATCH (m:Message)-[:MENTIONS]->(e:Entity)
-                RETURN e.id AS entity_id,
-                       coalesce(m.source_id, m.id, m.message_id) AS source_id,
-                       'chat' AS source_kind
-                UNION
-                MATCH (q:Query)-[r:MENTIONS]->(e:Entity)
-                RETURN e.id AS entity_id,
-                       coalesce(r.source_id, 'chat:query:' + q.id) AS source_id,
-                       'chat' AS source_kind
-                UNION
-                MATCH (a:Answer)-[r:MENTIONS]->(e:Entity)
-                RETURN e.id AS entity_id,
-                       coalesce(r.source_id, 'chat:answer:' + a.id) AS source_id,
-                       'chat' AS source_kind
-                """
+        if not dry_run:
+            # History writes are visible in Postgres immediately while downstream
+            # stores are updated asynchronously. Drain before comparing so recent
+            # answers do not appear as false drift.
+            worker = OutboxWorker(
+                qdrant_indexer=qdrant,
+                neo4j_indexer=neo4j,
+                entity_indexer=entity_index,
             )
-            neo4j_mentions = {
-                (str(r["entity_id"]), str(r["source_id"]), str(r.get("source_kind", "document")))
-                for r in await ment_res.data()
-                if r.get("entity_id") and r.get("source_id")
+            drained = await worker.drain()
+            print(f"Outbox sync:                 drained {drained} pending events")
+
+        qdrant_chunk_ids, qdrant_by_doc = await _fetch_qdrant(qdrant)
+        qdrant_entity_ids = await entity_index.get_all_entity_ids()
+        (
+            neo4j_document_ids,
+            neo4j_doc_entities,
+            neo4j_entity_ids,
+            neo4j_counts,
+        ) = await _fetch_neo4j(neo4j)
+
+        _print_counts(
+            "Qdrant",
+            {
+                "chunks": len(qdrant_chunk_ids),
+                "entities": len(qdrant_entity_ids),
+            },
+        )
+        _print_counts(
+            "Neo4j",
+            {
+                **neo4j_counts,
+                "documents": len(neo4j_document_ids),
+                "entities": len(neo4j_entity_ids),
+                "doc_entities": sum(len(values) for values in neo4j_doc_entities.values()),
+            },
+        )
+
+        drifted_docs: set[str] = set()
+        missing_chunks: set[str] = set()
+        ghost_chunks: set[str] = set()
+        stale_checksum_chunks: set[str] = set()
+        missing_doc_entities: set[str] = set()
+        ghost_doc_entities: set[str] = set()
+
+        for doc_id, snapshot in documents.items():
+            q_chunks = qdrant_by_doc.get(doc_id, {})
+            expected_chunks = set(snapshot["chunk_ids"])
+            doc_missing_chunks = expected_chunks - set(q_chunks)
+            doc_ghost_chunks = set(q_chunks) - expected_chunks
+            doc_stale_chunks = {
+                chunk_id
+                for chunk_id in expected_chunks & set(q_chunks)
+                if str(q_chunks[chunk_id].get("doc_checksum", "")) != snapshot["checksum"]
             }
-        print(f"Neo4j Knowledge Graph:       {len(neo4j_ids)} chunks, {len(neo4j_entity_ids)} entities, {len(neo4j_mentions)} mention-edges")
+            expected_entities = pg_doc_entities.get(doc_id, set())
+            actual_entities = neo4j_doc_entities.get(doc_id, set())
+            doc_missing_entities = expected_entities - actual_entities
+            doc_ghost_entities = actual_entities - expected_entities
 
-        # 4. Compute Drift
-        missing_qdrant = pg_ids - qdrant_ids
-        missing_neo4j = pg_ids - neo4j_ids
-        ghost_qdrant = qdrant_ids - pg_ids
-        ghost_neo4j = neo4j_ids - pg_ids
+            if any(
+                (
+                    doc_missing_chunks,
+                    doc_ghost_chunks,
+                    doc_stale_chunks,
+                    doc_missing_entities,
+                    doc_ghost_entities,
+                )
+            ):
+                drifted_docs.add(doc_id)
+                missing_chunks.update(doc_missing_chunks)
+                ghost_chunks.update(doc_ghost_chunks)
+                stale_checksum_chunks.update(doc_stale_chunks)
+                missing_doc_entities.update(doc_missing_entities)
+                ghost_doc_entities.update(doc_ghost_entities)
 
+        ghost_qdrant_doc_ids = set(qdrant_by_doc) - set(documents)
+        ghost_neo4j_doc_ids = neo4j_document_ids - set(documents)
+        indexed_chunk_ids = {
+            chunk_id
+            for doc_chunks in qdrant_by_doc.values()
+            for chunk_id in doc_chunks
+        }
+        qdrant_chunk_ids_without_doc = qdrant_chunk_ids - indexed_chunk_ids
         missing_neo4j_entities = pg_entity_ids - neo4j_entity_ids
         ghost_neo4j_entities = neo4j_entity_ids - pg_entity_ids
-        missing_neo4j_mentions = set(pg_mentions.keys()) - neo4j_mentions
-        ghost_neo4j_mentions = neo4j_mentions - set(pg_mentions.keys())
-
-        has_drift = bool(
-            missing_qdrant or missing_neo4j or ghost_qdrant or ghost_neo4j
-            or missing_neo4j_entities or ghost_neo4j_entities
-            or missing_neo4j_mentions or ghost_neo4j_mentions
-        )
+        missing_qdrant_entities = pg_entity_ids - qdrant_entity_ids
+        ghost_qdrant_entities = qdrant_entity_ids - pg_entity_ids
 
         print("-" * 60)
         print("Drift Analysis:")
-        print(f"  Missing in Qdrant:         {len(missing_qdrant)}")
-        print(f"  Missing in Neo4j:          {len(missing_neo4j)}")
-        print(f"  Ghost in Qdrant:           {len(ghost_qdrant)}")
-        print(f"  Ghost in Neo4j:            {len(ghost_neo4j)}")
-        print(f"  Missing Neo4j entities:    {len(missing_neo4j_entities)}")
-        print(f"  Ghost Neo4j entities:      {len(ghost_neo4j_entities)}")
-        print(f"  Missing Neo4j mentions:    {len(missing_neo4j_mentions)}")
-        print(f"  Ghost Neo4j mentions:      {len(ghost_neo4j_mentions)}")
+        print(f"  Drifted documents:          {len(drifted_docs)}")
+        print(f"  Missing Qdrant chunks:      {len(missing_chunks)}")
+        print(f"  Ghost Qdrant chunks:        {len(ghost_chunks | qdrant_chunk_ids_without_doc)}")
+        print(f"  Stale Qdrant checksums:     {len(stale_checksum_chunks)}")
+        print(f"  Missing Neo4j doc entities: {len(missing_doc_entities)}")
+        print(f"  Ghost Neo4j doc entities:   {len(ghost_doc_entities)}")
+        print(f"  Ghost Qdrant documents:     {len(ghost_qdrant_doc_ids)}")
+        print(f"  Ghost Neo4j documents:      {len(ghost_neo4j_doc_ids)}")
+        print(f"  Missing Neo4j entities:     {len(missing_neo4j_entities)}")
+        print(f"  Ghost Neo4j entities:       {len(ghost_neo4j_entities)}")
+        print(f"  Missing Qdrant entities:    {len(missing_qdrant_entities)}")
+        print(f"  Ghost Qdrant entities:      {len(ghost_qdrant_entities)}")
         print("-" * 60)
 
+        has_drift = bool(
+            drifted_docs
+            or ghost_qdrant_doc_ids
+            or ghost_neo4j_doc_ids
+            or qdrant_chunk_ids_without_doc
+            or missing_neo4j_entities
+            or ghost_neo4j_entities
+            or missing_qdrant_entities
+            or ghost_qdrant_entities
+        )
+
         if not has_drift:
-            print("[SUCCESS] All stores are in 100% synchronization. Zero drift detected.")
+            print("[SUCCESS] Zero drift detected across all stores.")
             return 0
 
+        if dry_run:
+            print("[DRY RUN] Drift detected; no writes were performed.")
+            return 1
         if not repair:
             print(
-                "[WARNING] Drift detected! Run with `--repair` (or `make reconcile REPAIR=1`) to synchronize."
+                "[WARNING] Drift detected! Run with `--repair` "
+                "(or `make reconcile REPAIR=1`) to re-queue index jobs."
             )
             return 1
 
-        # 5. Execute Repair
-        print("[REPAIR] Repairing drift across stores...")
+        print("[REPAIR] Re-queuing index jobs for drifted documents...")
 
-        for cid in missing_qdrant:
-            rec = pg_chunks[cid]
-            payload: dict[str, Any] = {
-                "chunk_id": rec.chunk_id,
-                "doc_id": rec.doc_id,
-                "text": rec.text,
-                "acl_scope": _acl_scope_payload(rec),
-                "owner_user_id": rec.owner_user_id,
-                "ingested_at": _chunk_ingested_at(rec),
-                "source_tier": rec.source_tier,
-            }
-            await qdrant.upsert_chunk(
-                chunk_id=rec.chunk_id,
-                doc_id=rec.doc_id,
-                text=rec.text,
-                payload=payload,
-            )
-            print(f"  Synced missing chunk {cid} to Qdrant.")
+        for chunk_id in sorted(ghost_chunks | qdrant_chunk_ids_without_doc):
+            await qdrant.delete_chunk(chunk_id)
+            print(f"  Deleted ghost Qdrant chunk {chunk_id}.")
 
-        for cid in missing_neo4j:
-            rec = pg_chunks[cid]
-            await neo4j.merge_chunk(
-                chunk_id=rec.chunk_id,
-                doc_id=rec.doc_id,
-                text=rec.text,
-                acl_scope=_acl_scope_payload(rec),
-                owner_user_id=rec.owner_user_id,
-                ingested_at=_chunk_ingested_at(rec),
-            )
-            print(f"  Synced missing chunk {cid} to Neo4j.")
-
-        for gid in ghost_qdrant:
-            await qdrant.delete_chunk(gid)
-            print(f"  Deleted ghost chunk {gid} from Qdrant.")
-
-        for gid in ghost_neo4j:
-            async with neo4j.driver.session(database=neo4j.database) as s:
-                await s.run("MATCH (c:Chunk {chunk_id: $cid}) DETACH DELETE c", cid=gid)
-            print(f"  Deleted ghost chunk {gid} from Neo4j.")
-
-        for eid in missing_neo4j_entities:
-            rec = pg_entities[eid]
-            await neo4j.merge_node(
-                entity_id=rec.entity_id,
-                name=rec.canonical_name,
-                entity_type=rec.entity_type,
-                acl_scope={
-                    "owner_user_id": rec.owner_user_id,
-                    "shared_scope": None,
-                },
-                properties={"owner_user_id": rec.owner_user_id or ""},
-            )
-            print(f"  Synced missing entity {eid} to Neo4j.")
-
-        for eid in ghost_neo4j_entities:
-            async with neo4j.driver.session(database=neo4j.database) as s:
-                await s.run("MATCH (e:Entity {id: $eid}) DETACH DELETE e", eid=eid)
-            print(f"  Deleted ghost entity {eid} from Neo4j.")
-
-        for entity_id, source_id, source_kind in missing_neo4j_mentions:
-            if source_kind == "document":
-                async with neo4j.driver.session(database=neo4j.database) as s:
-                    await s.run(
-                        """
-                        MATCH (e:Entity {id: $entity_id})
-                        MATCH (c:Chunk {doc_id: $source_id})
-                        MERGE (c)-[:MENTIONS]->(e)
-                        """,
-                        entity_id=entity_id,
-                        source_id=source_id,
+        ghost_doc_ids = ghost_qdrant_doc_ids | ghost_neo4j_doc_ids
+        async with get_session() as session:
+            for doc_id in sorted(drifted_docs):
+                document = documents[doc_id]["document"]
+                OutboxService.stage_event(
+                    session=session,
+                    event_type=OutboxEventType.DOCUMENT_INGESTED,
+                    aggregate_type="document",
+                    aggregate_id=doc_id,
+                    payload=DocumentRepository._document_event_payload(
+                        document, chunk_count=len(document.chunks)
+                    ),
+                )
+                for chunk in document.chunks:
+                    OutboxService.stage_event(
+                        session=session,
+                        event_type=OutboxEventType.CHUNK_UPSERTED,
+                        aggregate_type="chunk",
+                        aggregate_id=chunk.chunk_id,
+                        payload=DocumentRepository._chunk_event_payload(chunk, document),
                     )
-            elif source_id.startswith("chat:query:"):
-                async with neo4j.driver.session(database=neo4j.database) as s:
-                    await s.run(
-                        """
-                        MATCH (e:Entity {id: $entity_id})
-                        MATCH (q:Query {id: $node_id})
-                        MERGE (q)-[r:MENTIONS]->(e)
-                        SET r.source_id = $source_id, r.source_kind = 'query'
-                        """,
-                        entity_id=entity_id,
-                        node_id=source_id.removeprefix("chat:query:"),
-                        source_id=source_id,
-                    )
-            elif source_id.startswith("chat:answer:"):
-                async with neo4j.driver.session(database=neo4j.database) as s:
-                    await s.run(
-                        """
-                        MATCH (e:Entity {id: $entity_id})
-                        MATCH (a:Answer {id: $node_id})
-                        MERGE (a)-[r:MENTIONS]->(e)
-                        SET r.source_id = $source_id, r.source_kind = 'answer'
-                        """,
-                        entity_id=entity_id,
-                        node_id=source_id.removeprefix("chat:answer:"),
-                        source_id=source_id,
-                    )
-            else:
-                async with neo4j.driver.session(database=neo4j.database) as s:
-                    await s.run(
-                        """
-                        MATCH (e:Entity {id: $entity_id})
-                        MATCH (m:Message)
-                        WHERE coalesce(m.source_id, m.id, m.message_id) = $source_id
-                        MERGE (m)-[:MENTIONS]->(e)
-                        """,
-                        entity_id=entity_id,
-                        source_id=source_id,
-                    )
-            print(f"  Synced missing mention {entity_id}<-{source_id} ({source_kind}) to Neo4j.")
+                OutboxService.stage_event(
+                    session=session,
+                    event_type=OutboxEventType.CACHE_INVALIDATED,
+                    aggregate_type="cache",
+                    aggregate_id=doc_id,
+                    payload={
+                        "doc_id": doc_id,
+                        "reason": "reconciler_repair",
+                        "owner_user_id": document.owner_user_id,
+                        "shared_scope": document.acl_scope.shared_scope,
+                    },
+                )
+                print(f"  Re-queued index jobs for {doc_id}.")
 
-        for entity_id, source_id, source_kind in ghost_neo4j_mentions:
-            if source_kind == "document":
-                async with neo4j.driver.session(database=neo4j.database) as s:
-                    await s.run(
-                        """
-                        MATCH (c:Chunk {doc_id: $source_id})-[r:MENTIONS]->(e:Entity {id: $entity_id})
-                        DELETE r
-                        """,
-                        entity_id=entity_id,
-                        source_id=source_id,
-                    )
-            elif source_id.startswith("chat:query:"):
-                async with neo4j.driver.session(database=neo4j.database) as s:
-                    await s.run(
-                        """
-                        MATCH (q:Query {id: $node_id})-[r:MENTIONS]->(e:Entity {id: $entity_id})
-                        DELETE r
-                        """,
-                        entity_id=entity_id,
-                        node_id=source_id.removeprefix("chat:query:"),
-                    )
-            elif source_id.startswith("chat:answer:"):
-                async with neo4j.driver.session(database=neo4j.database) as s:
-                    await s.run(
-                        """
-                        MATCH (a:Answer {id: $node_id})-[r:MENTIONS]->(e:Entity {id: $entity_id})
-                        DELETE r
-                        """,
-                        entity_id=entity_id,
-                        node_id=source_id.removeprefix("chat:answer:"),
-                    )
-            else:
-                async with neo4j.driver.session(database=neo4j.database) as s:
-                    await s.run(
-                        """
-                        MATCH (m:Message)-[r:MENTIONS]->(e:Entity {id: $entity_id})
-                        WHERE coalesce(m.source_id, m.id, m.message_id) = $source_id
-                        DELETE r
-                        """,
-                        entity_id=entity_id,
-                        source_id=source_id,
-                    )
-            print(f"  Deleted ghost mention {entity_id}<-{source_id} ({source_kind}) from Neo4j.")
+            for doc_id in sorted(ghost_doc_ids):
+                q_payloads = qdrant_by_doc.get(doc_id, {})
+                owner = next(
+                    (
+                        payload.get("owner_user_id")
+                        for payload in q_payloads.values()
+                        if payload.get("owner_user_id")
+                    ),
+                    None,
+                )
+                OutboxService.stage_event(
+                    session=session,
+                    event_type=OutboxEventType.DOCUMENT_DELETED,
+                    aggregate_type="document",
+                    aggregate_id=doc_id,
+                    payload={"doc_id": doc_id, "owner_user_id": owner},
+                )
+                print(f"  Re-queued deletion for ghost document {doc_id}.")
 
-        print("[SUCCESS] All drift successfully repaired. Stores are now synchronized.")
+        print("[SUCCESS] Repair jobs re-queued. Run the worker to apply them.")
         return 0
-
     finally:
         await qdrant.close()
+        await entity_index.close()
         await neo4j.close()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Multi-store data consistency reconciler.")
-    parser.add_argument(
-        "--repair", action="store_true", help="Automatically repair any detected drift."
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--repair", action="store_true", help="Re-queue index jobs for drifted documents."
+    )
+    mode.add_argument(
+        "--dry-run", action="store_true", help="Compare stores without writing anything."
     )
     args = parser.parse_args()
 
-    exit_code = asyncio.run(run_reconciliation(repair=args.repair))
-    exit(exit_code)
+    exit_code = asyncio.run(
+        run_reconciliation(repair=args.repair, dry_run=args.dry_run)
+    )
+    raise SystemExit(exit_code)
 
 
 if __name__ == "__main__":

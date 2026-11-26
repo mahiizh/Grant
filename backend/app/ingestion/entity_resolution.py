@@ -257,7 +257,7 @@ class IngestionEntityResolver:
         self._session = session
         self._local_cache: dict[tuple[str, str, str], ResolvedMention] = {}
         self._registry: dict[str, dict[str, Any]] = {}
-        self._pending_mentions: dict[tuple[str, str], dict[str, Any]] = {}
+        self._pending_mentions: dict[tuple[str, str, str | None], dict[str, Any]] = {}
 
     @property
     def entity_index(self) -> Any:
@@ -347,11 +347,12 @@ class IngestionEntityResolver:
         source_id: str | None,
         doc_id: str | None,
         surface_form: str,
+        chunk_id: str | None = None,
     ) -> None:
         if not source_id:
             return
         source_kind = "chat" if source_id.startswith("chat:") else "document"
-        key = (entity_id, source_id)
+        key = (entity_id, source_id, chunk_id)
         existing = self._pending_mentions.get(key)
         if existing is None:
             self._pending_mentions[key] = {
@@ -359,6 +360,7 @@ class IngestionEntityResolver:
                 "source_id": source_id,
                 "source_kind": source_kind,
                 "doc_id": doc_id if source_kind == "document" else None,
+                "chunk_id": chunk_id,
                 "owner_user_id": owner_user_id,
                 "surface_form": surface_form,
                 "mention_count": 1,
@@ -388,6 +390,10 @@ class IngestionEntityResolver:
                 EntityMentionRecord.entity_id == mention["entity_id"],
                 EntityMentionRecord.source_id == mention["source_id"],
             )
+            if mention.get("chunk_id"):
+                stmt = stmt.where(EntityMentionRecord.chunk_id == mention["chunk_id"])
+            else:
+                stmt = stmt.where(EntityMentionRecord.chunk_id.is_(None))
             existing = (await db.execute(stmt)).scalar_one_or_none()
             if existing is None:
                 db.add(EntityMentionRecord(**mention))
@@ -411,6 +417,7 @@ class IngestionEntityResolver:
         owner_user_id: str | None,
         doc_id: str | None = None,
         source_id: str | None = None,
+        chunk_id: str | None = None,
     ) -> tuple[ResolvedMention, list[dict[str, str]]]:
         """Resolve a mention to canonical entity. Returns (mention, extra_relations)."""
         from app.domain.ids import generate_entity_id
@@ -426,6 +433,7 @@ class IngestionEntityResolver:
                 source_id=source_id,
                 doc_id=doc_id,
                 surface_form=name,
+                chunk_id=chunk_id,
             )
             return cached, []
 
@@ -523,6 +531,7 @@ class IngestionEntityResolver:
             source_id=source_id,
             doc_id=doc_id,
             surface_form=name,
+            chunk_id=chunk_id,
         )
 
         # VERSION_OF link for versioned names, restricted to Software/Standard/Document
@@ -537,6 +546,7 @@ class IngestionEntityResolver:
                     owner_user_id=owner_user_id,
                     doc_id=doc_id,
                     source_id=source_id,
+                    chunk_id=chunk_id,
                 )
                 if base_resolved.entity_id != resolved.entity_id:
                     # Show versioned name as alias on base node for discoverability.
@@ -574,6 +584,7 @@ class IngestionEntityResolver:
         owner_user_id: str | None,
         doc_id: str | None,
         source_id: str | None,
+        chunk_id: str | None = None,
     ) -> tuple[ResolvedMention, list[dict[str, str]]]:
         from app.domain.ids import generate_entity_id
 
@@ -588,6 +599,7 @@ class IngestionEntityResolver:
                 source_id=source_id,
                 doc_id=doc_id,
                 surface_form=base_name,
+                chunk_id=chunk_id,
             )
             return cached, []
 
@@ -667,6 +679,7 @@ class IngestionEntityResolver:
             source_id=source_id,
             doc_id=doc_id,
             surface_form=base_name,
+            chunk_id=chunk_id,
         )
         self._local_cache[cache_key] = resolved
         return resolved, []

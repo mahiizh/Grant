@@ -313,6 +313,80 @@ class DocumentRepository:
         return hashlib.sha256(document.content.encode("utf-8")).hexdigest()
 
     @staticmethod
+    def _acl_scope_payload(
+        owner_user_id: str | None,
+        shared_scope: str | None,
+    ) -> dict[str, Any]:
+        """Build the serialized owner/shared ACL stored in downstream payloads."""
+        return {
+            "owner_user_id": owner_user_id or None,
+            "shared_scope": shared_scope or None,
+        }
+
+    @classmethod
+    def _document_event_payload(
+        cls,
+        document: Document,
+        *,
+        chunk_count: int,
+    ) -> dict[str, Any]:
+        """Shared payload for ``DOCUMENT_INGESTED`` and repair re-queues."""
+        source_kind = str(document.metadata.get("source_kind", "document") or "document")
+        url = document.metadata.get("url") or (
+            document.provenance.source_uri if source_kind == "web" else None
+        )
+        fetched_at = cls._parse_optional_datetime(document.metadata.get("fetched_at"))
+        owner = document.owner_user_id or document.acl_scope.owner_user_id
+        return {
+            "doc_id": document.doc_id,
+            "title": document.title,
+            "version": document.version,
+            "chunk_count": chunk_count,
+            "owner_user_id": owner,
+            "shared_scope": document.acl_scope.shared_scope,
+            "acl_scope": cls._acl_scope_payload(owner, document.acl_scope.shared_scope),
+            "source_uri": document.provenance.source_uri,
+            "source_kind": source_kind,
+            "url": str(url) if url else None,
+            "fetched_at": fetched_at.isoformat() if fetched_at else None,
+            "content_hash": cls._effective_content_hash(document),
+        }
+
+    @classmethod
+    def _chunk_event_payload(cls, chunk: Chunk, document: Document) -> dict[str, Any]:
+        """Shared payload for ``CHUNK_UPSERTED`` and repair re-queues.
+
+        Qdrant stores everything graph retrieval needs: chunk text plus document
+        identity, owner ACL, source kind, title, and URL. The document checksum
+        lets the reconciler detect stale points without a second Postgres lookup.
+        """
+        owner = (
+            chunk.owner_user_id
+            or document.owner_user_id
+            or chunk.acl_scope.owner_user_id
+        )
+        source_kind = str(chunk.metadata.get("source_kind", "document") or "document")
+        return {
+            "chunk_id": chunk.chunk_id,
+            "doc_id": chunk.doc_id,
+            "index": chunk.index,
+            "text": chunk.text,
+            "tokens": chunk.tokens,
+            "owner_user_id": owner,
+            "acl_scope": chunk.acl_scope.model_dump(mode="json"),
+            "ingested_at": chunk.ingested_at.isoformat(),
+            "source_tier": int(chunk.provenance.tier),
+            "source_kind": source_kind,
+            "source_uri": chunk.provenance.source_uri,
+            "title": document.title,
+            "url": chunk.metadata.get("url"),
+            "fetched_at": chunk.metadata.get("fetched_at"),
+            "doc_checksum": cls._effective_content_hash(document),
+            "entities": chunk.metadata.get("entities", []),
+            "relations": chunk.metadata.get("relations", []),
+        }
+
+    @staticmethod
     def _index_fingerprint(document: Document) -> tuple[Any, ...]:
         """Fields that change downstream index state when they change.
 
@@ -430,18 +504,7 @@ class DocumentRepository:
             session.add(chunk_rec)
 
         # Stage DOCUMENT_INGESTED outbox event
-        doc_payload: dict[str, Any] = {
-            "doc_id": document.doc_id,
-            "title": document.title,
-            "version": document.version,
-            "chunk_count": len(document.chunks),
-            "owner_user_id": document.owner_user_id or document.acl_scope.owner_user_id,
-            "shared_scope": document.acl_scope.shared_scope,
-            "source_uri": document.provenance.source_uri,
-            "source_kind": source_kind,
-            "url": str(url) if url else None,
-            "fetched_at": fetched_at.isoformat() if fetched_at else None,
-        }
+        doc_payload = cls._document_event_payload(document, chunk_count=len(document.chunks))
         OutboxService.stage_event(
             session=session,
             event_type=OutboxEventType.DOCUMENT_INGESTED,
@@ -452,26 +515,7 @@ class DocumentRepository:
 
         # Stage CHUNK_UPSERTED outbox events for downstream Qdrant / Neo4j indexers
         for chunk in document.chunks:
-            chunk_payload: dict[str, Any] = {
-                "chunk_id": chunk.chunk_id,
-                "doc_id": chunk.doc_id,
-                "index": chunk.index,
-                "text": chunk.text,
-                "tokens": chunk.tokens,
-                "owner_user_id": (
-                    chunk.owner_user_id
-                    or document.owner_user_id
-                    or chunk.acl_scope.owner_user_id
-                ),
-                "acl_scope": chunk.acl_scope.model_dump(mode="json"),
-                "ingested_at": chunk.ingested_at.isoformat(),
-                "source_tier": int(chunk.provenance.tier),
-                "source_kind": str(chunk.metadata.get("source_kind", "document") or "document"),
-                "url": chunk.metadata.get("url"),
-                "fetched_at": chunk.metadata.get("fetched_at"),
-                "entities": chunk.metadata.get("entities", []),
-                "relations": chunk.metadata.get("relations", []),
-            }
+            chunk_payload = cls._chunk_event_payload(chunk, document)
             OutboxService.stage_event(
                 session=session,
                 event_type=OutboxEventType.CHUNK_UPSERTED,

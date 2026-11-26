@@ -114,6 +114,62 @@ class QdrantIndexer:
             return pts[0].payload
         return None
 
+    async def get_chunks(self, chunk_ids: list[str]) -> dict[str, dict[str, Any]]:
+        """Fetch Qdrant payloads by chunk id for graph-path retrieval."""
+        ids = list(dict.fromkeys(str(chunk_id) for chunk_id in chunk_ids if chunk_id))
+        if not ids:
+            return {}
+        points = await self.client.retrieve(
+            collection_name=self.collection_name,
+            ids=[chunk_id_to_point_id(chunk_id) for chunk_id in ids],
+            with_payload=True,
+            with_vectors=False,
+        )
+        by_chunk: dict[str, dict[str, Any]] = {}
+        for point in points:
+            payload = dict(getattr(point, "payload", None) or {})
+            chunk_id = payload.get("chunk_id")
+            if not chunk_id and point.id:
+                # Older payloads may omit chunk_id; map back by deterministic id.
+                for candidate in ids:
+                    if chunk_id_to_point_id(candidate) == str(point.id):
+                        chunk_id = candidate
+                        break
+            if chunk_id:
+                by_chunk[str(chunk_id)] = payload
+        return by_chunk
+
+    async def get_chunks_by_doc_id(self, doc_id: str) -> dict[str, dict[str, Any]]:
+        """Fetch every chunk payload for one document, used by the reconciler."""
+        flt = models.Filter(
+            must=[
+                models.FieldCondition(
+                    key="doc_id",
+                    match=models.MatchValue(value=doc_id),
+                )
+            ]
+        )
+        by_chunk: dict[str, dict[str, Any]] = {}
+        offset = None
+        while True:
+            records, next_offset = await self.client.scroll(
+                collection_name=self.collection_name,
+                limit=1000,
+                offset=offset,
+                scroll_filter=flt,
+                with_payload=True,
+                with_vectors=False,
+            )
+            for rec in records:
+                payload = dict(rec.payload or {})
+                chunk_id = payload.get("chunk_id")
+                if chunk_id:
+                    by_chunk[str(chunk_id)] = payload
+            if next_offset is None or not records:
+                break
+            offset = next_offset
+        return by_chunk
+
     async def get_all_chunk_ids(self) -> set[str]:
         """Scroll all points to retrieve all chunk_ids present in Qdrant."""
         chunk_ids: set[str] = set()
@@ -225,6 +281,27 @@ class EntityVectorIndex:
             payload["_score"] = score
             out.append(payload)
         return out
+
+    async def get_all_entity_ids(self) -> set[str]:
+        """Scroll the entity collection for reconciler comparison."""
+        entity_ids: set[str] = set()
+        offset = None
+        while True:
+            records, next_offset = await self.client.scroll(
+                collection_name=self.collection_name,
+                limit=1000,
+                offset=offset,
+                with_payload=["entity_id"],
+                with_vectors=False,
+            )
+            for rec in records:
+                entity_id = (rec.payload or {}).get("entity_id")
+                if entity_id:
+                    entity_ids.add(str(entity_id))
+            if next_offset is None or not records:
+                break
+            offset = next_offset
+        return entity_ids
 
     async def delete_by_owner(self, owner_user_id: str) -> None:
         flt = models.Filter(

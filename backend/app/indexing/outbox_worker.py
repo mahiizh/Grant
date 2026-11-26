@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from itertools import combinations
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +13,11 @@ from app.indexing.neo4j_indexer import Neo4jIndexer
 from app.indexing.qdrant_indexer import EntityVectorIndex, QdrantIndexer
 
 logger = logging.getLogger(__name__)
+
+# Step 4 keeps only the edge types listed in the revamp plan. Extracted
+# predicate edges (OWNED_BY, LED_BY, etc.) were replaced by Document-MENTIONS
+# and CO_OCCURS aggregations; VERSION_OF remains the one extracted edge.
+GRAPH_RELATION_TYPES = {"VERSION_OF"}
 
 
 class OutboxWorker:
@@ -56,22 +62,9 @@ class OutboxWorker:
                     payload=payload,
                 )
 
-                # 2. Sync Chunk to Neo4j
-                await self.neo4j.merge_chunk(
-                    chunk_id=chunk_id,
-                    doc_id=doc_id,
-                    text=text,
-                    acl_scope=acl_scope,
-                    ingested_at=ingested_at,
-                    owner_user_id=owner_user_id,
-                    properties={
-                        "source_kind": payload.get("source_kind", "document"),
-                        "url": payload.get("url"),
-                        "fetched_at": payload.get("fetched_at"),
-                    },
-                )
-
-                # 3. If extracted entities/relations are bundled with chunk
+                # 2. Entity nodes are synced to Neo4j; Chunk nodes and
+                # chunk->entity edges are not. Those links live in Postgres
+                # and are aggregated into Document edges on DOCUMENT_INGESTED.
                 entity_ids: list[str] = []
                 for ent in payload.get("entities", []):
                     entity_id = ent.get("entity_id", ent.get("name"))
@@ -92,17 +85,19 @@ class OutboxWorker:
                             "url": payload.get("url"),
                         },
                     )
-                    await self.neo4j.link_chunk_entity(
-                        chunk_id=chunk_id,
-                        entity_id=entity_id,
-                    )
-                await self.neo4j.refresh_entity_props(entity_ids)
+                if entity_ids:
+                    await self.neo4j.refresh_entity_props(entity_ids)
 
                 for rel in payload.get("relations", []):
+                    relation_type = str(rel.get("relation_type") or "").upper()
+                    if relation_type not in GRAPH_RELATION_TYPES:
+                        # CO_OCCURS comes from Postgres mentions; other predicates
+                        # are no longer part of the slim graph.
+                        continue
                     await self.neo4j.merge_edge(
                         source_id=rel.get("source_entity_id"),
                         target_id=rel.get("target_entity_id"),
-                        relation_type=rel.get("relation_type", "RELATED_TO"),
+                        relation_type=relation_type,
                         acl_scope=acl_scope,
                         ingested_at=ingested_at,
                         properties={"doc_id": doc_id, "chunk_id": chunk_id},
@@ -113,6 +108,7 @@ class OutboxWorker:
                 await self.qdrant.delete_by_doc_id(doc_id)
                 await self.neo4j.delete_by_doc_id(doc_id)
                 await self._cleanup_orphan_entities(session)
+                await self.neo4j.delete_orphan_entities()
 
             elif event_type == OutboxEventType.CHAT_GRAPH_UPSERTED.value:
                 owner_user_id = payload.get("owner_user_id")
@@ -150,10 +146,14 @@ class OutboxWorker:
                         owner_user_id=owner_user_id,
                     )
                 for rel in payload.get("relations", []):
+                    relation_type = str(rel.get("relation_type") or "").upper()
+                    if relation_type not in GRAPH_RELATION_TYPES:
+                        # Chat predicates are not part of the slim graph edge list.
+                        continue
                     await self.neo4j.merge_edge(
                         source_id=rel.get("source_entity_id"),
                         target_id=rel.get("target_entity_id"),
-                        relation_type=rel.get("relation_type", "RELATED_TO"),
+                        relation_type=relation_type,
                         acl_scope=acl_scope,
                         ingested_at=ingested_at,
                         properties={
@@ -256,7 +256,7 @@ class OutboxWorker:
                 logger.info("Cache invalidation for doc %s: %s", payload.get("doc_id"), summary)
 
             elif event_type == OutboxEventType.DOCUMENT_INGESTED.value:
-                logger.info("Processed DOCUMENT_INGESTED milestone for doc: %s", event.aggregate_id)
+                await self._sync_document_graph(session=session, payload=payload)
 
             # Mark processed on success
             await OutboxService.mark_processed(session=session, event_id=event.event_id)
@@ -286,6 +286,108 @@ class OutboxWorker:
                 processed_count += 1
 
         return processed_count
+
+    async def _sync_document_graph(
+        self,
+        *,
+        session: AsyncSession,
+        payload: dict[str, Any],
+    ) -> None:
+        """Sync one Document node and its aggregated entity graph from Postgres mentions."""
+        from sqlalchemy import select
+
+        from app.db.models import EntityMentionRecord, EntityRecord
+
+        doc_id = str(payload.get("doc_id") or "")
+        if not doc_id:
+            return
+        acl_scope = payload.get("acl_scope") or {
+            "owner_user_id": payload.get("owner_user_id"),
+            "shared_scope": payload.get("shared_scope"),
+        }
+        source_kind = str(payload.get("source_kind", "document") or "document")
+
+        await self.neo4j.merge_document(
+            doc_id=doc_id,
+            title=str(payload.get("title") or doc_id),
+            acl_scope=acl_scope,
+            source_kind=source_kind,
+            url=payload.get("url"),
+            fetched_at=payload.get("fetched_at"),
+            content_hash=payload.get("content_hash"),
+            ingested_at=payload.get("ingested_at"),
+        )
+
+        rows = list(
+            (
+                await session.execute(
+                    select(
+                        EntityMentionRecord.entity_id,
+                        EntityMentionRecord.chunk_id,
+                        EntityMentionRecord.mention_count,
+                    ).where(
+                        EntityMentionRecord.doc_id == doc_id,
+                        EntityMentionRecord.source_kind == "document",
+                        EntityMentionRecord.chunk_id.is_not(None),
+                    )
+                )
+            ).all()
+        )
+        entity_counts: dict[str, int] = {}
+        by_chunk: dict[str, set[str]] = {}
+        for entity_id, chunk_id, mention_count in rows:
+            entity_counts[entity_id] = entity_counts.get(entity_id, 0) + int(mention_count or 1)
+            by_chunk.setdefault(str(chunk_id), set()).add(str(entity_id))
+
+        cooccurrence_counts: dict[tuple[str, str], int] = {}
+        for entity_ids in by_chunk.values():
+            ordered = sorted(entity_ids)
+            for source, target in combinations(ordered, 2):
+                pair = (source, target)
+                cooccurrence_counts[pair] = cooccurrence_counts.get(pair, 0) + 1
+
+        if entity_counts:
+            records = list(
+                (
+                    await session.execute(
+                        select(EntityRecord).where(EntityRecord.entity_id.in_(entity_counts))
+                    )
+                ).scalars().all()
+            )
+            by_id = {record.entity_id: record for record in records}
+            for entity_id in entity_counts:
+                record = by_id.get(entity_id)
+                await self.neo4j.merge_node(
+                    entity_id=entity_id,
+                    name=(record.canonical_name if record else entity_id),
+                    entity_type=(record.entity_type if record else "Concept"),
+                    acl_scope=acl_scope,
+                    ingested_at=payload.get("ingested_at"),
+                    properties={
+                        "doc_id": doc_id,
+                        "source_id": doc_id,
+                        "owner_user_id": str(payload.get("owner_user_id") or ""),
+                        "aliases": list(record.aliases or []) if record else [],
+                        "source_kind": source_kind,
+                        "url": payload.get("url"),
+                    },
+                )
+
+        await self.neo4j.sync_document_graph(
+            doc_id=doc_id,
+            acl_scope=acl_scope,
+            entity_counts=entity_counts,
+            cooccurrence_counts=cooccurrence_counts,
+            source_kind=source_kind,
+            ingested_at=payload.get("ingested_at"),
+        )
+        await self.neo4j.refresh_entity_props(entity_counts.keys())
+        logger.info(
+            "Synced DOCUMENT_INGESTED graph for %s (%d entities, %d co-occurrence pairs)",
+            doc_id,
+            len(entity_counts),
+            len(cooccurrence_counts),
+        )
 
     async def _cleanup_orphan_entities(self, session: AsyncSession) -> list[str]:
         """Delete entities with no remaining mentions from Postgres and Qdrant."""

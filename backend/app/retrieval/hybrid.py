@@ -63,8 +63,8 @@ class HybridRetriever:
         )
         self.reranker = reranker or get_reranker()
 
+    @staticmethod
     def _to_evidence(
-        self,
         chunk_id: str,
         score: float,
         payload: dict[str, Any],

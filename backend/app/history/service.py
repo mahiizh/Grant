@@ -169,7 +169,9 @@ class QueryHistoryService:
 
         cites = [
             {
-                "source_id": ev.chunk_id,
+                # Answer citations point at Document nodes, never chunk ids:
+                # CITES targets :Document in the slimmed graph.
+                "source_id": ev.doc_id,
                 "source_kind": "web" if ev.retrieval_method == "web" else "document",
                 "url": ev.provenance.source_uri
                 if ev.retrieval_method == "web"
