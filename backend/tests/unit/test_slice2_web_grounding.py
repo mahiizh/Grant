@@ -16,7 +16,7 @@ from app.evaluation.runner import EvaluationRunner
 from app.graph.retrievers import GraphRetriever as RealGraphRetriever
 from app.history.service import HistoryHit, QueryHistory
 from app.indexing import Neo4jIndexer, OutboxWorker, QdrantIndexer
-from app.orchestration.workflow import RAGOrchestrator
+from app.orchestration.workflow import NOT_FOUND_MARKER, RAGOrchestrator
 from app.retrieval.filters import RetrievalFilter
 from app.retrieval.hybrid import HybridRetriever as RealHybridRetriever
 from app.web_grounding.web import WebPage
@@ -109,6 +109,20 @@ class FakeHistory:
     async def record(self, **kwargs: Any) -> tuple[str, str]:
         self.record_calls.append(kwargs)
         return "qry-history", "ans-history"
+
+
+class NotFoundGateway(FakeModelGateway):
+    """Return NOT_FOUND for the grounded prompt, normal synthesis for web prompts."""
+
+    async def complete(self, prompt: str, *args: Any, **kwargs: Any) -> Any:
+        grounded = "<source_chunk" in prompt and "Fetched web sources:" not in prompt
+        default_mock = kwargs.pop("mock_response", None)
+        return await super().complete(
+            prompt,
+            *args,
+            mock_response=NOT_FOUND_MARKER if grounded else default_mock,
+            **kwargs,
+        )
 
 
 class EvidenceHybridRetriever:
@@ -220,11 +234,12 @@ def build_orchestrator(
     web_client: Any = None,
     web_ingestor: Any = None,
     history: Any = None,
+    gateway: Any | None = None,
 ) -> RAGOrchestrator:
     return RAGOrchestrator(
         hybrid_retriever=cast(RealHybridRetriever, hybrid or EmptyHybridRetriever()),
         graph_retriever=cast(RealGraphRetriever, EmptyGraphRetriever()),
-        model_gateway=FakeModelGateway(),
+        model_gateway=gateway or FakeModelGateway(),
         cache_enabled=False,
         web_client=web_client,
         web_ingestor=web_ingestor,
@@ -386,6 +401,117 @@ async def test_dense_cosine_gate_is_configurable_on_rerank_timeout(
     assert mock_graspreach.client.gather_calls == []
     assert state["source_kind"] == "docs"
     assert [item.score for item in state["evidence"]] == [0.01, 0.01]
+
+
+@pytest.mark.anyio
+async def test_off_topic_question_goes_to_web_under_default_gate(
+    mock_graspreach: Any,
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(get_settings(), "EVIDENCE_MIN_DENSE_COSINE", 0.55)
+    mock_graspreach.client.pages = [
+        WebPage(
+            url="https://example.com/tokyo-population",
+            title="Tokyo population",
+            text="Tokyo has a large population.",
+        )
+    ]
+    hybrid = RealHybridRetriever(
+        dense_retriever=_IrrelevantDenseRetriever(),
+        bm25_retriever=_IrrelevantSparseRetriever(),
+        reranker=_TimeoutReranker(),
+        rerank_timeout_seconds=0.01,
+    )
+
+    state = await build_orchestrator(
+        hybrid=hybrid,
+        web_client=mock_graspreach.client,
+        web_ingestor=mock_graspreach.ingestor,
+    ).run(
+        query="What is the current population of Tokyo?",
+        answer_policy="grounded_plus_web",
+        owner_user_id="usr_alice_01",
+    )
+
+    assert state["source_kind"] == "web"
+    assert mock_graspreach.client.gather_calls == [
+        "What is the current population of Tokyo?"
+    ]
+    assert state["web_sources"][0]["url"] == "https://example.com/tokyo-population"
+
+
+@pytest.mark.anyio
+async def test_baseline_doc_questions_stay_on_docs(
+    mock_graspreach: Any,
+    monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(get_settings(), "EVIDENCE_MIN_DENSE_COSINE", 0.55)
+    mock_graspreach.client.error = "baseline doc questions must not use the web"
+    orchestrator = build_orchestrator(
+        hybrid=EvidenceHybridRetriever(),
+        web_client=mock_graspreach.client,
+        web_ingestor=mock_graspreach.ingestor,
+    )
+    questions = (
+        "Which security controls are covered by the baseline document?",
+        "How does the risk register record threats and residual risk?",
+        "What happens during incident response and post-incident review?",
+    )
+
+    for question in questions:
+        state = await orchestrator.run(
+            query=question,
+            answer_policy="grounded_only",
+            owner_user_id="usr_alice_01",
+        )
+        assert state["source_kind"] == "docs"
+        assert not state["is_abstention"]
+        assert state["evidence"] and all(
+            item.retrieval_method == "hybrid" for item in state["evidence"]
+        )
+
+    assert mock_graspreach.client.gather_calls == []
+
+
+@pytest.mark.anyio
+async def test_not_found_routes_to_web_or_abstains_by_policy(
+    mock_graspreach: Any,
+) -> None:
+    mock_graspreach.client.pages = [
+        WebPage(
+            url="https://example.com/not-found-fallback",
+            title="Fallback",
+            text="The answer is in this web page.",
+        )
+    ]
+
+    plus_web = await build_orchestrator(
+        hybrid=EvidenceHybridRetriever(),
+        web_client=mock_graspreach.client,
+        web_ingestor=mock_graspreach.ingestor,
+        gateway=NotFoundGateway(),
+    ).run(
+        query="Which security controls are covered by the baseline document?",
+        answer_policy="grounded_plus_web",
+        owner_user_id="usr_alice_01",
+    )
+    assert plus_web["source_kind"] == "web"
+    assert plus_web["web_sources"][0]["url"] == "https://example.com/not-found-fallback"
+    assert len(mock_graspreach.client.gather_calls) == 1
+
+    grounded_only = await build_orchestrator(
+        hybrid=EvidenceHybridRetriever(),
+        web_client=mock_graspreach.client,
+        web_ingestor=mock_graspreach.ingestor,
+        gateway=NotFoundGateway(),
+    ).run(
+        query="Which security controls are covered by the baseline document?",
+        answer_policy="grounded_only",
+        owner_user_id="usr_alice_01",
+    )
+    assert grounded_only["is_abstention"] is True
+    assert NOT_FOUND_MARKER not in grounded_only["answer"]
+    assert len(mock_graspreach.client.gather_calls) == 1
 
 
 @pytest.mark.anyio

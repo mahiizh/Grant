@@ -100,7 +100,7 @@ class Settings(BaseSettings):
     # relevance score, so hybrid evidence carries the chunk's Qdrant dense
     # cosine score for the gate (including when reranking times out).
     EVIDENCE_MIN_RERANK_SCORE: float = 0.0
-    EVIDENCE_MIN_DENSE_COSINE: float = 0.35
+    EVIDENCE_MIN_DENSE_COSINE: float = 0.55
     ACQUISITION_ENABLED: bool = False
     MAX_ACQUISITION_CALLS: int = 3
     MIN_TRUST_TO_CITE: float = 0.7

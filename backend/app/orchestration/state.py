@@ -46,6 +46,7 @@ class RAGState(TypedDict, total=False):
     web_pages: list[dict[str, Any]]
     web_sources: list[dict[str, Any]]
     web_error: str | None
+    web_fallback_reason: str | None
     query_id: str | None
     answer_id: str | None
     path: list[str] | None
