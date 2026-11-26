@@ -73,6 +73,9 @@ class Settings(BaseSettings):
     RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
     RRF_K: int = 60
     HYBRID_PREFETCH_MULTIPLIER: int = 5
+    # Retrieved evidence below this score is treated as no document evidence at
+    # all: it is excluded from generation and cannot satisfy grounded_only.
+    EVIDENCE_MIN_SCORE: float = 0.0
     ACQUISITION_ENABLED: bool = False
     MAX_ACQUISITION_CALLS: int = 3
     MIN_TRUST_TO_CITE: float = 0.7

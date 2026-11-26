@@ -353,6 +353,13 @@ class RAGOrchestrator:
 
             def done(payload: dict[str, Any]) -> dict[str, Any]:
                 """Attach retrieval-only time, excluding LLM and provider backoff."""
+                min_score = get_settings().EVIDENCE_MIN_SCORE
+                if "evidence" in payload:
+                    payload["evidence"] = [
+                        item
+                        for item in payload["evidence"]
+                        if item.score >= min_score
+                    ]
                 payload["retrieval_latency_ms"] = round(
                     (time.perf_counter() - retrieval_start) * 1000.0, 2
                 )

@@ -219,6 +219,40 @@ async def test_web_fallback_is_used_only_when_retrieval_has_no_evidence(
 
 
 @pytest.mark.anyio
+async def test_doc_question_with_grounded_plus_web_uses_docs_without_web_call(
+    mock_graspreach: Any,
+) -> None:
+    """A score-above-threshold document answer must never fall through to web."""
+    mock_graspreach.client.error = "graspreach must not be called for document evidence"
+    hybrid = EvidenceHybridRetriever()
+    hybrid.evidence.append(
+        Evidence(
+            chunk_id="chunk_isomd_low_score",
+            doc_id="doc_isomd",
+            text="Unrelated ISO 27001 control text.",
+            score=-10.12329,
+            retrieval_method="rerank",
+            provenance=Provenance.from_document("corpus/isomd.md"),
+        )
+    )
+
+    state = await build_orchestrator(
+        hybrid=hybrid,
+        web_client=mock_graspreach.client,
+        web_ingestor=mock_graspreach.ingestor,
+    ).run(
+        query="Which database is the authoritative document store?",
+        answer_policy="grounded_plus_web",
+        owner_user_id="usr_alice_01",
+    )
+
+    assert state["source_kind"] == "docs"
+    assert not state["is_abstention"]
+    assert mock_graspreach.client.gather_calls == []
+    assert [item.score for item in state["evidence"]] == [0.9]
+
+
+@pytest.mark.anyio
 async def test_web_evidence_write_back_is_owner_scoped(mock_graspreach: Any) -> None:
     url = "https://example.com/owner-only"
     mock_graspreach.client.pages = [
