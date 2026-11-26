@@ -48,26 +48,32 @@ from app.ingestion.pipeline import IngestionPipeline  # noqa: E402
 from app.orchestration.state import RETRIEVAL_CONFIGS, RetrievalConfig  # noqa: E402
 
 BACKEND_DIR = Path(__file__).resolve().parents[2]
-REPO_ROOT = Path(__file__).resolve().parents[3]
-CORPUS_DIR = REPO_ROOT / "corpus"
-MANIFEST_PATH = CORPUS_DIR / "synthetic" / "manifest.json"
 
 
-def _expected_corpus_counts() -> tuple[int, int]:
-    """Return the committed corpus counts.
+def _resolve_data_dir(value: str | None, setting: str, label: str) -> Path:
+    """Resolve a required user-supplied eval directory."""
+    if not value:
+        raise RuntimeError(f"No {label} directory supplied. Pass --{label}-dir or set {setting}.")
+    path = Path(value).expanduser().resolve()
+    if not path.is_dir():
+        raise FileNotFoundError(f"{label.capitalize()} directory not found at: {path}")
+    return path
 
-    The generator writes ``corpus/synthetic/manifest.json`` and
-    ``generate_eval_assets --check`` proves the manifest matches the corpus. The
-    eval harness refuses to guess: a missing manifest means the synthetic corpus
-    was never generated, and an exact ingest check would be meaningless.
-    """
-    if not MANIFEST_PATH.exists():
-        raise RuntimeError(
-            f"Corpus manifest not found at {MANIFEST_PATH}. "
-            "Run `uv run --directory backend python -m app.tools.generate_eval_assets`."
-        )
-    payload = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    return int(payload["total_documents"]), int(payload["total_chunks"])
+
+def _corpus_dir(value: str | None = None) -> Path:
+    return _resolve_data_dir(
+        value or get_settings().EVAL_CORPUS_DIR,
+        "EVAL_CORPUS_DIR",
+        "corpus",
+    )
+
+
+def _golden_dir(value: str | None = None) -> Path:
+    return _resolve_data_dir(
+        value or get_settings().EVAL_GOLDEN_DIR,
+        "EVAL_GOLDEN_DIR",
+        "golden",
+    )
 
 
 def _validate_identifier(name: str) -> str:
@@ -157,14 +163,11 @@ async def _reset_qdrant_collection() -> None:
     )
 
 
-async def _ingest_corpus() -> None:
-    if not CORPUS_DIR.exists():
-        raise FileNotFoundError(f"Corpus directory not found at: {CORPUS_DIR}")
-
+async def _ingest_corpus(corpus_dir: Path) -> None:
     await announce_database_identity()
     await verify_schema()
 
-    files = list(iter_corpus_files(CORPUS_DIR))
+    files = list(iter_corpus_files(corpus_dir))
 
     ingested = 0
     for path in files:
@@ -193,24 +196,16 @@ async def _verify_ingest() -> set[str]:
     print(f"PostgreSQL chunks:    {chunks}")
     print(f"Qdrant vectors:       {vectors}")
 
-    expected_documents, expected_chunks = _expected_corpus_counts()
-    if documents != expected_documents:
-        raise RuntimeError(f"Expected {expected_documents} documents, found {documents}")
-    if chunks != expected_chunks:
-        raise RuntimeError(f"Expected {expected_chunks} chunks, found {chunks}")
+    if documents == 0 or chunks == 0:
+        raise RuntimeError("The supplied corpus produced no documents or chunks.")
     if vectors != chunks:
         raise RuntimeError(f"Qdrant has {vectors} vectors but PostgreSQL has {chunks} chunks")
 
     return chunk_ids
 
 
-def _golden_dir() -> Path:
-    configured = get_settings().EVAL_GOLDEN_DIR
-    return Path(configured) if configured else REPO_ROOT / "evals" / "golden"
-
-
-def _load_dataset(existing_chunk_ids: set[str]) -> GoldenDataset:
-    dataset = GoldenDataset.load_from_dir(_golden_dir())
+def _load_dataset(existing_chunk_ids: set[str], golden_dir: Path) -> GoldenDataset:
+    dataset = GoldenDataset.load_from_dir(golden_dir)
     missing = dataset.missing_chunk_ids(existing_chunk_ids)
     if missing:
         detail = ", ".join(f"{question}:{chunk}" for question, chunk in missing)
@@ -331,19 +326,26 @@ def configure_llm_cache(config: RetrievalConfig, fresh: bool = False) -> Path:
     return cache_dir
 
 
-async def prepare_eval() -> GoldenDataset:
-    """Recreate and ingest the isolated eval stores, then load the golden rows."""
+async def prepare_eval(
+    corpus_dir: str | Path | None = None,
+    golden_dir: str | Path | None = None,
+) -> GoldenDataset:
+    """Recreate and ingest the isolated eval stores, then load user-supplied golden rows."""
     _check_isolation()
+    corpus_path = _corpus_dir(str(corpus_dir) if corpus_dir is not None else None)
+    golden_path = _golden_dir(str(golden_dir) if golden_dir is not None else None)
 
     print(f"Eval PostgreSQL database: {get_settings().POSTGRES_DB}")
     print(f"Eval Qdrant collection:   {get_settings().QDRANT_COLLECTION}")
+    print(f"Eval corpus directory:    {corpus_path}")
+    print(f"Eval golden directory:    {golden_path}")
 
     await _recreate_eval_database()
     _run_alembic_upgrade()
     await _reset_qdrant_collection()
-    await _ingest_corpus()
+    await _ingest_corpus(corpus_path)
     existing_chunk_ids = await _verify_ingest()
-    return _load_dataset(existing_chunk_ids)
+    return _load_dataset(existing_chunk_ids, golden_path)
 
 
 async def run_config(
@@ -362,10 +364,9 @@ async def run_config(
     orchestrator = EvaluationRunner.build_production_orchestrator(cache_enabled=cache_enabled)
     if cache_enabled:
         orchestrator.exact_cache.clear()
-        orchestrator.semantic_cache.clear()
-        print(f"Cleared exact and semantic caches for config={config!r}.")
+        print(f"Cleared exact cache for config={config!r}.")
     else:
-        print(f"Exact and semantic caches disabled for config={config!r}.")
+        print(f"Exact cache disabled for config={config!r}.")
 
     judge: AnswerJudge | None = None
     if judge_enabled:
@@ -399,7 +400,10 @@ async def _run(args: argparse.Namespace) -> int:
     cache_dir = configure_llm_cache(args.config, fresh=args.fresh_llm_cache)
     print(f"LLM cache directory:      {cache_dir}")
 
-    dataset = await prepare_eval()
+    dataset = await prepare_eval(
+        corpus_dir=getattr(args, "corpus_dir", None),
+        golden_dir=getattr(args, "golden_dir", None),
+    )
     split: SplitType | None = None if args.split == "all" else args.split
 
     report = await run_config(
@@ -424,6 +428,16 @@ async def _run(args: argparse.Namespace) -> int:
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the isolated golden evaluation.")
+    parser.add_argument(
+        "--corpus-dir",
+        default=_BOOTSTRAP.EVAL_CORPUS_DIR,
+        help="Corpus directory to ingest. Defaults to EVAL_CORPUS_DIR.",
+    )
+    parser.add_argument(
+        "--golden-dir",
+        default=_BOOTSTRAP.EVAL_GOLDEN_DIR,
+        help="Directory containing golden *.jsonl files. Defaults to EVAL_GOLDEN_DIR.",
+    )
     parser.add_argument(
         "--split",
         choices=["dev", "test", "all"],

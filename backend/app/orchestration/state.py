@@ -1,4 +1,3 @@
-from datetime import datetime
 from typing import Any, Literal, TypedDict
 
 from app.core.acl import ACLScope
@@ -33,7 +32,7 @@ class RAGState(TypedDict, total=False):
     trace_id: str
     acl_scope: ACLScope
     owner_user_id: str | None
-    as_of_time: datetime | None
+    is_admin: bool
     prompt_version: str
     retrieval_config: RetrievalConfig
     answer_policy: AnswerPolicy

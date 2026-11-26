@@ -49,7 +49,6 @@ KNOWN_ENTITIES: dict[str, str] = {
     "#core-banking": "SLACK_CHANNEL",
     "#payments-dev": "SLACK_CHANNEL",
     "INC-2026-04": "INCIDENT",
-    "Bi-temporal Graph": "CONCEPT",
     "DLQ Monitoring": "REMEDIATION",
     "Outbox": "MECHANISM",
 }
@@ -200,18 +199,6 @@ class EntityRelationExtractor:
                 )
             )
 
-        # RFC knowledge graph hosting
-        if "bi-temporal" in text.lower() and ("neo4j" in text.lower() or "neo4j 5" in text.lower()):
-            found_entities["Bi-temporal Graph"] = "CONCEPT"
-            found_entities["Neo4j"] = "DATABASE"
-            relations.append(
-                ExtractedRelation(
-                    source="Bi-temporal Graph",
-                    predicate="HOSTED_ON",
-                    target="Neo4j",
-                )
-            )
-
         # Incident impacted Service / commanded by / root cause / remediation
         if "INC-2026-04" in found_entities or "INC-2026-04" in text:
             found_entities["INC-2026-04"] = "INCIDENT"
@@ -295,7 +282,7 @@ class EntityRelationExtractor:
                 description=ent.description,
                 source_chunk_ids=[chunk.chunk_id],
                 acl_scope=chunk.acl_scope,
-                temporal=chunk.temporal,
+                ingested_at=chunk.ingested_at,
                 provenance=chunk.provenance,
             )
 
@@ -316,7 +303,7 @@ class EntityRelationExtractor:
                     entity_type="CONCEPT",
                     source_chunk_ids=[chunk.chunk_id],
                     acl_scope=chunk.acl_scope,
-                    temporal=chunk.temporal,
+                    ingested_at=chunk.ingested_at,
                     provenance=chunk.provenance,
                 )
                 domain_entities[src_norm] = src_entity
@@ -329,7 +316,7 @@ class EntityRelationExtractor:
                     entity_type="CONCEPT",
                     source_chunk_ids=[chunk.chunk_id],
                     acl_scope=chunk.acl_scope,
-                    temporal=chunk.temporal,
+                    ingested_at=chunk.ingested_at,
                     provenance=chunk.provenance,
                 )
                 domain_entities[tgt_norm] = tgt_entity
@@ -349,7 +336,7 @@ class EntityRelationExtractor:
                     weight=rel.weight,
                     source_chunk_ids=[chunk.chunk_id],
                     acl_scope=chunk.acl_scope,
-                    temporal=chunk.temporal,
+                    ingested_at=chunk.ingested_at,
                     provenance=chunk.provenance,
                 )
             )

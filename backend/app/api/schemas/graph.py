@@ -6,15 +6,7 @@ class GraphNode(BaseModel):
     name: str
     type: str
     aliases: list[str] = Field(default_factory=list)
-    # Analytics that Neo4j does not currently store or compute are ``None``.
-    # Clients may compute them from the returned topology.
-    pagerank: float | None = None
-    community: int | None = None
-    cluster: str | None = None
-    valid_from: str | None = None
-    valid_to: str | None = None
-    tx_time: str | None = None
-    chunk_hash: str | None = None
+    ingested_at: str | None = None
     degree: int = 0
     source_kind: str | None = None
     source_kinds: list[str] = Field(default_factory=list)
@@ -25,10 +17,7 @@ class GraphLink(BaseModel):
     target: str
     label: str = "RELATES_TO"
     tier: int | None = None
-    valid_from: str | None = None
-    valid_to: str | None = None
-    tx_time: str | None = None
-    chunk_hash: str | None = None
+    ingested_at: str | None = None
 
 
 class GraphResponse(BaseModel):

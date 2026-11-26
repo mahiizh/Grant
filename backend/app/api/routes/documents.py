@@ -58,7 +58,6 @@ async def list_documents(
                 tier=d.source_tier,
                 ingested_at=d.ingested_at.isoformat() if d.ingested_at else "",
                 target_node_id=d.doc_id,
-                valid_from=d.valid_from.isoformat() if d.valid_from else "",
                 tokens=meta.get("tokens", 0),
                 cost_usd=float(meta.get("cost_usd", 0.0)),
                 extraction_engine=str(meta.get("extraction_engine", "unknown")),

@@ -1,5 +1,4 @@
 import re
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,8 +24,6 @@ class ParsedDocument(BaseModel):
     raw_content: str
     sections: list[ParsedSection] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
-    valid_from: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    valid_to: datetime | None = None
 
 
 def parse_markdown(content: str, source_path: str | Path | None = None) -> ParsedDocument:
@@ -35,8 +32,6 @@ def parse_markdown(content: str, source_path: str | Path | None = None) -> Parse
     title = "Untitled Document"
     doc_id = ""
     metadata: dict[str, Any] = {}
-    valid_from: datetime = datetime.now(UTC)
-    valid_to: datetime | None = None
 
     # 0. Check for YAML front matter (--- ... ---)
     frontmatter_lines: list[str] = []
@@ -64,20 +59,6 @@ def parse_markdown(content: str, source_path: str | Path | None = None) -> Parse
                 title = val_clean
             elif key_clean in ("doc_id", "id"):
                 doc_id = val_clean
-            elif key_clean in ("valid_from", "date"):
-                try:
-                    valid_from = datetime.fromisoformat(val_clean.replace("Z", "+00:00"))
-                    if valid_from.tzinfo is None:
-                        valid_from = valid_from.replace(tzinfo=UTC)
-                except Exception:
-                    pass
-            elif key_clean in ("valid_to",):
-                try:
-                    valid_to = datetime.fromisoformat(val_clean.replace("Z", "+00:00"))
-                    if valid_to.tzinfo is None:
-                        valid_to = valid_to.replace(tzinfo=UTC)
-                except Exception:
-                    pass
 
     # 1. Extract Title (# Title) from body if not set in frontmatter
     if title == "Untitled Document":
@@ -104,18 +85,6 @@ def parse_markdown(content: str, source_path: str | Path | None = None) -> Parse
         key_clean = k.strip().lower().replace(" ", "_")
         val_clean = v.strip()
         metadata[key_clean] = val_clean
-
-        # Parse date if available
-        if "date" in key_clean or "updated" in key_clean:
-            date_match = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", val_clean)
-            if date_match:
-                try:
-                    parsed_dt = datetime.strptime(date_match.group(1), "%Y-%m-%d").replace(
-                        tzinfo=UTC
-                    )
-                    valid_from = parsed_dt
-                except ValueError:
-                    pass
 
     # 4. Extract Sections based on Markdown Headings (## or ###)
     sections: list[ParsedSection] = []
@@ -165,6 +134,4 @@ def parse_markdown(content: str, source_path: str | Path | None = None) -> Parse
         raw_content=content,
         sections=sections,
         metadata=metadata,
-        valid_from=valid_from,
-        valid_to=valid_to,
     )

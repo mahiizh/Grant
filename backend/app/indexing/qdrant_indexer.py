@@ -204,23 +204,14 @@ class EntityVectorIndex:
                 models.FieldCondition(key="owner_user_id", match=models.MatchValue(value=owner_user_id))
             )
         flt = models.Filter(must=must)
-        try:
-            res = await self.client.query_points(
-                collection_name=self.collection_name,
-                query=query_vec,
-                query_filter=flt,
-                limit=limit,
-                with_payload=True,
-            )
-            points = res.points
-        except Exception:
-            points = await self.client.search(
-                collection_name=self.collection_name,
-                query_vector=query_vec,
-                query_filter=flt,
-                limit=limit,
-                with_payload=True,
-            )
+        res = await self.client.query_points(
+            collection_name=self.collection_name,
+            query=query_vec,
+            query_filter=flt,
+            limit=limit,
+            with_payload=True,
+        )
+        points = res.points
         out: list[dict[str, Any]] = []
         for p in points:
             score = float(getattr(p, "score", 0.0) or 0.0)

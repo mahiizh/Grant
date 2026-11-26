@@ -1,26 +1,38 @@
 import json
 import logging
+from datetime import UTC, datetime
 from typing import Any
 
 from neo4j import AsyncDriver, AsyncGraphDatabase
 
-from app.core.auth import DEFAULT_SCOPE_PRIORITY
 from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
 
-def _acl_props(acl_scope: dict[str, Any] | None) -> dict[str, Any]:
-    """Flatten an ACL scope into scalar Neo4j properties for Cypher predicates.
+def _ingested_at(value: str | None) -> str:
+    """Return a caller-supplied ingestion timestamp or a fresh UTC timestamp."""
+    return value or datetime.now(UTC).isoformat()
 
-    Missing scopes default to deny (``is_public=False``) rather than public.
+
+def _acl_props(acl_scope: dict[str, Any] | None) -> dict[str, Any]:
+    """Flatten an owner/shared ACL into scalar properties for Cypher predicates.
+
+    Missing or legacy restricted scopes default to deny. Only legacy payloads
+    explicitly marked public map to the modern public ACL.
     """
     scope = acl_scope or {}
+    owner = str(scope.get("owner_user_id") or "")
+    shared = str(scope.get("shared_scope") or "")
+    legacy_restricted = any(
+        scope.get(key) for key in ("tenant_id", "allowed_roles", "allowed_groups")
+    )
     return {
-        "acl_tenant_id": scope.get("tenant_id", "default"),
-        "acl_is_public": bool(scope.get("is_public", False)),
-        "acl_allowed_roles": list(scope.get("allowed_roles", []) or []),
-        "acl_allowed_groups": list(scope.get("allowed_groups", []) or []),
+        "acl_owner": owner,
+        "acl_shared": shared,
+        "acl_public": not owner
+        and not shared
+        and (scope.get("is_public") is True or not legacy_restricted),
     }
 
 
@@ -40,7 +52,7 @@ class Neo4jIndexer:
         name: str,
         entity_type: str,
         acl_scope: dict[str, Any] | None = None,
-        temporal: dict[str, Any] | None = None,
+        ingested_at: str | None = None,
         properties: dict[str, Any] | None = None,
     ) -> None:
         """Create or update an Entity node without widening ACLs on later mentions.
@@ -54,15 +66,12 @@ class Neo4jIndexer:
             n.name = $name,
             n.entity_type = $entity_type,
             n.acl_scope = $acl_scope,
-            n.acl_tenant_id = $acl_tenant_id,
-            n.acl_is_public = $acl_is_public,
-            n.acl_allowed_roles = $acl_allowed_roles,
-            n.acl_allowed_groups = $acl_allowed_groups,
+            n.owner_user_id = $acl_owner,
+            n.shared_scope = $acl_shared,
+            n.is_public = $acl_public,
             n.doc_ids = CASE WHEN $doc_id <> '' THEN [$doc_id] ELSE [] END,
             n.source_ids = CASE WHEN $source_id <> '' THEN [$source_id] ELSE [] END,
-            n.owner_user_ids = CASE WHEN $owner_user_id <> '' THEN [$owner_user_id] ELSE [] END,
-            n.valid_from = $valid_from,
-            n.valid_to = $valid_to,
+            n.ingested_at = $ingested_at,
             n.doc_id = $doc_id,
             n.aliases = $aliases,
             n.source_kind = $source_kind,
@@ -81,11 +90,6 @@ class Neo4jIndexer:
                 THEN coalesce(n.source_ids, []) + [$source_id]
                 ELSE coalesce(n.source_ids, [])
             END,
-            n.owner_user_ids = CASE
-                WHEN $owner_user_id <> '' AND NOT $owner_user_id IN coalesce(n.owner_user_ids, [])
-                THEN coalesce(n.owner_user_ids, []) + [$owner_user_id]
-                ELSE coalesce(n.owner_user_ids, [])
-            END,
             n.aliases = REDUCE(acc = coalesce(n.aliases, []), a IN $aliases | CASE WHEN a IN acc OR a = '' THEN acc ELSE acc + [a] END),
             n.source_kinds = CASE
                 WHEN $source_kind IN coalesce(n.source_kinds, [coalesce(n.source_kind, 'document')])
@@ -95,7 +99,6 @@ class Neo4jIndexer:
             n.url = CASE WHEN $url <> '' THEN $url ELSE coalesce(n.url, '') END
         """
         props = properties or {}
-        temp = temporal or {}
         owner_user_id = str(props.get("owner_user_id", "") or "")
         source_id = str(props.get("source_id", props.get("doc_id", "")) or "")
         aliases = [str(a) for a in (props.get("aliases") or []) if str(a).strip()]
@@ -108,8 +111,7 @@ class Neo4jIndexer:
                 name=name,
                 entity_type=entity_type,
                 acl_scope=json.dumps(acl_scope or {}),
-                valid_from=temp.get("valid_from", "1970-01-01T00:00:00Z"),
-                valid_to=temp.get("valid_to"),
+                ingested_at=_ingested_at(ingested_at),
                 doc_id=props.get("doc_id", ""),
                 source_id=source_id,
                 owner_user_id=owner_user_id,
@@ -125,7 +127,7 @@ class Neo4jIndexer:
         target_id: str,
         relation_type: str,
         acl_scope: dict[str, Any] | None = None,
-        temporal: dict[str, Any] | None = None,
+        ingested_at: str | None = None,
         properties: dict[str, Any] | None = None,
     ) -> str:
         """Idempotently create or update a relationship edge between two entities carrying chunk ACL."""
@@ -140,22 +142,18 @@ class Neo4jIndexer:
         MERGE (a)-[r:{rel_type_clean} {{chunk_id: $chunk_id}}]->(b)
         SET r.relation_type = $relation_type,
             r.acl_scope = $acl_scope,
-            r.acl_tenant_id = $acl_tenant_id,
-            r.acl_is_public = $acl_is_public,
-            r.acl_allowed_roles = $acl_allowed_roles,
-            r.acl_allowed_groups = $acl_allowed_groups,
-            r.valid_from = $valid_from,
-            r.valid_to = $valid_to,
+            r.owner_user_id = $acl_owner,
+            r.shared_scope = $acl_shared,
+            r.is_public = $acl_public,
+            r.ingested_at = $ingested_at,
             r.doc_id = $doc_id,
             r.chunk_id = $chunk_id,
             r.source_id = $source_ref,
             r.thread_id = $thread_id,
             r.message_id = $message_id,
-            r.owner_user_id = $owner_user_id,
             r.source_kind = $source_kind
         RETURN elementId(r) AS rel_id
         """
-        temp = temporal or {}
         async with self.driver.session(database=self.database) as session:
             res = await session.run(
                 cypher,
@@ -163,8 +161,7 @@ class Neo4jIndexer:
                 target_id=target_id,
                 relation_type=relation_type,
                 acl_scope=json.dumps(acl_scope or {}),
-                valid_from=temp.get("valid_from", "1970-01-01T00:00:00Z"),
-                valid_to=temp.get("valid_to"),
+                ingested_at=_ingested_at(ingested_at),
                 doc_id=props.get("doc_id", ""),
                 chunk_id=chunk_id,
                 source_ref=str(props.get("source_id", props.get("doc_id", "")) or ""),
@@ -191,7 +188,7 @@ class Neo4jIndexer:
         doc_id: str,
         text: str,
         acl_scope: dict[str, Any] | None = None,
-        temporal: dict[str, Any] | None = None,
+        ingested_at: str | None = None,
         owner_user_id: str | None = None,
         properties: dict[str, Any] | None = None,
     ) -> None:
@@ -200,20 +197,16 @@ class Neo4jIndexer:
         MERGE (c:Chunk {chunk_id: $chunk_id})
         SET c.doc_id = $doc_id,
             c.text = $text,
-            c.owner_user_id = $owner_user_id,
+            c.owner_user_id = $acl_owner,
+            c.shared_scope = $acl_shared,
+            c.is_public = $acl_public,
             c.acl_scope = $acl_scope,
-            c.acl_tenant_id = $acl_tenant_id,
-            c.acl_is_public = $acl_is_public,
-            c.acl_allowed_roles = $acl_allowed_roles,
-            c.acl_allowed_groups = $acl_allowed_groups,
-            c.valid_from = $valid_from,
-            c.valid_to = $valid_to,
+            c.ingested_at = $ingested_at,
             c.source_kind = $source_kind,
             c.url = $url,
             c.fetched_at = $fetched_at
         """
         props = properties or {}
-        temp = temporal or {}
         async with self.driver.session(database=self.database) as session:
             await session.run(
                 cypher,
@@ -222,8 +215,7 @@ class Neo4jIndexer:
                 text=text,
                 owner_user_id=owner_user_id or "",
                 acl_scope=json.dumps(acl_scope or {}),
-                valid_from=temp.get("valid_from", "1970-01-01T00:00:00Z"),
-                valid_to=temp.get("valid_to"),
+                ingested_at=_ingested_at(ingested_at),
                 source_kind=str(props.get("source_kind", "document") or "document"),
                 url=str(props.get("url", "") or ""),
                 fetched_at=props.get("fetched_at"),
@@ -241,34 +233,19 @@ class Neo4jIndexer:
         CALL (e) {
             MATCH (c:Chunk)-[:MENTIONS]->(e)
             WITH e, collect(DISTINCT coalesce(c.doc_id, '')) AS raw_doc_ids,
-                 collect(coalesce(c.acl_tenant_id, 'default')) AS tenants,
-                 collect(coalesce(c.acl_is_public, false)) AS publics,
-                 collect(coalesce(c.acl_allowed_roles, [])) AS role_lists,
-                 collect(coalesce(c.acl_allowed_groups, [])) AS group_lists,
-                  collect(DISTINCT coalesce(c.source_kind, 'document')) AS source_kinds
+                 collect(DISTINCT coalesce(c.owner_user_id, '')) AS raw_owners,
+                 collect(DISTINCT coalesce(c.shared_scope, '')) AS raw_shared,
+                 collect(coalesce(c.is_public, false)) AS publics,
+                 collect(DISTINCT coalesce(c.source_kind, 'document')) AS source_kinds
             WITH e, [d IN raw_doc_ids WHERE d <> ''] AS doc_ids,
-                 coalesce(head(tenants), 'default') AS tenant,
+                 [o IN raw_owners WHERE o <> ''] AS owners,
+                 [s IN raw_shared WHERE s <> ''] AS shared,
                  all(pub IN publics WHERE pub) AS all_public,
-                 REDUCE(acc = [], roles IN role_lists |
-                     acc + [role IN roles WHERE NOT role IN acc]) AS all_roles,
-                 REDUCE(acc = [], groups IN group_lists |
-                     acc + [grp IN groups WHERE NOT grp IN acc]) AS all_groups,
-                 source_kinds,
-                  $priority AS priority
-            WITH e, doc_ids, tenant, all_public, all_roles, all_groups, source_kinds,
-                 [scope IN priority WHERE scope IN all_roles OR scope IN all_groups] AS primary
-            WITH e, doc_ids, tenant,
-                 CASE WHEN size(primary) > 0 THEN head(primary) ELSE '' END AS chosen,
-                 all_public, all_roles, all_groups, source_kinds
+                 source_kinds
             SET e.doc_ids = doc_ids,
-                e.acl_tenant_id = tenant,
-                e.acl_is_public = all_public AND size(all_roles) = 0 AND size(all_groups) = 0,
-                e.acl_allowed_roles = CASE
-                    WHEN chosen <> '' AND chosen IN all_roles THEN [chosen]
-                    ELSE all_roles END,
-                e.acl_allowed_groups = CASE
-                    WHEN chosen <> '' AND chosen IN all_groups THEN [chosen]
-                    ELSE all_groups END,
+                e.owner_user_id = CASE WHEN size(owners) > 0 THEN head(owners) ELSE '' END,
+                e.shared_scope = CASE WHEN size(shared) > 0 THEN head(shared) ELSE '' END,
+                e.is_public = size(owners) = 0 AND size(shared) = 0 AND all_public,
                 e.source_kinds = source_kinds,
                 e.source_kind = CASE WHEN 'web' IN source_kinds THEN 'web'
                                      ELSE coalesce(head(source_kinds), 'document') END
@@ -277,11 +254,7 @@ class Neo4jIndexer:
         RETURN e.id AS id
         """
         async with self.driver.session(database=self.database) as session:
-            result = await session.run(
-                cypher,
-                entity_ids=ids,
-                priority=list(DEFAULT_SCOPE_PRIORITY),
-            )
+            result = await session.run(cypher, entity_ids=ids)
             await result.consume()
 
     async def link_chunk_entity(self, chunk_id: str, entity_id: str) -> None:
@@ -303,35 +276,29 @@ class Neo4jIndexer:
         thread_id: str,
         entity_id: str,
         acl_scope: dict[str, Any] | None,
-        temporal: dict[str, Any] | None,
+        ingested_at: str | None,
         owner_user_id: str | None,
     ) -> None:
         """Persist the Message node and MENTIONS edge backing a chat entity mention."""
-        temp = temporal or {}
         cypher = """
         MERGE (m:Message {message_id: $message_id})
         SET m.id = $source_id,
             m.source_id = $source_id,
             m.thread_id = $thread_id,
-            m.owner_user_id = $owner_user_id,
+            m.owner_user_id = $acl_owner,
+            m.shared_scope = $acl_shared,
+            m.is_public = $acl_public,
             m.acl_scope = $acl_scope,
-            m.acl_tenant_id = $acl_tenant_id,
-            m.acl_is_public = $acl_is_public,
-            m.acl_allowed_roles = $acl_allowed_roles,
-            m.acl_allowed_groups = $acl_allowed_groups,
-            m.valid_from = $valid_from,
-            m.valid_to = $valid_to
+            m.ingested_at = $ingested_at
         WITH m
         MATCH (e:Entity {id: $entity_id})
         MERGE (m)-[r:MENTIONS]->(e)
         SET r.source_id = $source_id,
             r.source_kind = 'chat',
             r.thread_id = $thread_id,
-            r.owner_user_id = $owner_user_id,
-            r.acl_tenant_id = $acl_tenant_id,
-            r.acl_is_public = $acl_is_public,
-            r.acl_allowed_roles = $acl_allowed_roles,
-            r.acl_allowed_groups = $acl_allowed_groups
+            r.owner_user_id = $acl_owner,
+            r.shared_scope = $acl_shared,
+            r.is_public = $acl_public
         """
         async with self.driver.session(database=self.database) as session:
             await session.run(
@@ -342,8 +309,7 @@ class Neo4jIndexer:
                 entity_id=entity_id,
                 owner_user_id=owner_user_id or "",
                 acl_scope=json.dumps(acl_scope or {}),
-                valid_from=temp.get("valid_from", "1970-01-01T00:00:00Z"),
-                valid_to=temp.get("valid_to"),
+                ingested_at=_ingested_at(ingested_at),
                 **_acl_props(acl_scope),
             )
 
@@ -362,7 +328,7 @@ class Neo4jIndexer:
         source_kind: str,
         is_abstention: bool,
         acl_scope: dict[str, Any] | None,
-        temporal: dict[str, Any] | None,
+        ingested_at: str | None,
         query_entities: list[dict[str, Any]],
         answer_entities: list[dict[str, Any]],
         cites: list[dict[str, Any]],
@@ -370,7 +336,6 @@ class Neo4jIndexer:
     ) -> None:
         """Create Query/Answer nodes and their evidence and conversation edges."""
         acl = acl_scope or {}
-        temp = temporal or {}
         acl_json = json.dumps(acl)
         owner = owner_user_id or ""
         thread = thread_id or ""
@@ -381,10 +346,11 @@ class Neo4jIndexer:
             q.rewritten_query = $rewritten_query,
             q.answer_policy = $answer_policy,
             q.thread_id = $thread_id,
-            q.owner_user_id = $owner_user_id,
+            q.owner_user_id = $acl_owner,
+            q.shared_scope = $acl_shared,
+            q.is_public = $acl_public,
             q.acl_scope = $acl_scope,
-            q.valid_from = $valid_from,
-            q.valid_to = $valid_to
+            q.ingested_at = $ingested_at
         MERGE (a:Answer {id: $answer_id})
         SET a.answer_id = $answer_id,
             a.content = $answer,
@@ -393,10 +359,11 @@ class Neo4jIndexer:
             a.web_sources = $web_sources,
             a.query_id = $query_id,
             a.thread_id = $thread_id,
-            a.owner_user_id = $owner_user_id,
+            a.owner_user_id = $acl_owner,
+            a.shared_scope = $acl_shared,
+            a.is_public = $acl_public,
             a.acl_scope = $acl_scope,
-            a.valid_from = $valid_from,
-            a.valid_to = $valid_to
+            a.ingested_at = $ingested_at
         MERGE (q)-[:ANSWERS]->(a)
         """
         async with self.driver.session(database=self.database) as session:
@@ -413,8 +380,7 @@ class Neo4jIndexer:
                 thread_id=thread,
                 owner_user_id=owner,
                 acl_scope=acl_json,
-                valid_from=temp.get("valid_from", "1970-01-01T00:00:00Z"),
-                valid_to=temp.get("valid_to"),
+                ingested_at=_ingested_at(ingested_at),
                 web_sources=json.dumps(web_sources or [], default=str),
                 **_acl_props(acl),
             )

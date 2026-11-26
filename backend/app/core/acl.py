@@ -1,69 +1,67 @@
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 
 
 class ACLScope(BaseModel):
-    """Access Control List (ACL) scope attached to documents, chunks, and graph elements."""
+    """Resource access boundary: owner-private, shared, or public.
+
+    ``owner_user_id`` and ``shared_scope`` are the only authorization dimensions.
+    A scope with neither value is public. A scope with both values grants either
+    the named owner or members of the named shared scope (used only when unioning
+    equivalent entities during indexing).
+    """
 
     model_config = ConfigDict(frozen=True)
 
-    tenant_id: str = "default"
-    allowed_roles: frozenset[str] = Field(default_factory=frozenset)
-    allowed_groups: frozenset[str] = Field(default_factory=frozenset)
-    is_public: bool = True
+    owner_user_id: str | None = None
+    shared_scope: str | None = None
 
     @classmethod
-    def public(cls, tenant_id: str = "default") -> "ACLScope":
-        """Factory for unrestricted public scope within a tenant."""
-        return cls(tenant_id=tenant_id, is_public=True)
+    def public(cls) -> "ACLScope":
+        """Factory for unrestricted data visible to every caller."""
+        return cls()
 
     @classmethod
-    def restricted(
-        cls,
-        allowed_roles: set[str] | frozenset[str],
-        allowed_groups: set[str] | frozenset[str] | None = None,
-        tenant_id: str = "default",
-    ) -> "ACLScope":
-        """Factory for restricted ACL scope requiring specific roles or groups."""
-        return cls(
-            tenant_id=tenant_id,
-            allowed_roles=frozenset(allowed_roles),
-            allowed_groups=frozenset(allowed_groups or set()),
-            is_public=False,
-        )
+    def owner(cls, owner_user_id: str) -> "ACLScope":
+        """Factory for data visible only to one user."""
+        return cls(owner_user_id=owner_user_id)
+
+    @classmethod
+    def shared(cls, shared_scope: str) -> "ACLScope":
+        """Factory for data visible to members of a named shared scope."""
+        return cls(shared_scope=shared_scope)
 
     def permits(
         self,
-        user_roles: set[str] | frozenset[str],
-        user_groups: set[str] | frozenset[str] | None = None,
-        tenant_id: str = "default",
+        *,
+        owner_user_id: str | None = None,
+        shared_scope: str | None = None,
+        shared_scopes: frozenset[str] | set[str] | None = None,
         is_admin: bool = False,
     ) -> bool:
-        """Evaluate if a caller's credentials satisfy this ACL policy."""
-        if self.tenant_id != tenant_id:
-            return False
-
-        if is_admin or self.is_public:
+        """Return whether a caller may access data carrying this scope."""
+        if is_admin:
             return True
 
-        caller_roles = frozenset(user_roles)
-        if bool(self.allowed_roles & caller_roles):
+        if self.owner_user_id is not None and owner_user_id == self.owner_user_id:
             return True
 
-        if user_groups:
-            caller_groups = frozenset(user_groups)
-            if bool(self.allowed_groups & caller_groups):
+        if self.shared_scope is not None:
+            allowed = set(shared_scopes or ())
+            if shared_scope is not None:
+                allowed.add(shared_scope)
+            if self.shared_scope in allowed:
                 return True
 
-        return False
+        return self.owner_user_id is None and self.shared_scope is None
 
     def union(self, other: "ACLScope") -> "ACLScope":
-        """Compute the union of two ACL scopes.
+        """Combine two scopes without widening access.
 
-        An entity visible in either scope is visible in the union.
+        Only one owner and one shared scope can be represented, so conflicting
+        owners/scopes keep the first value and deny the second rather than
+        falling back to public.
         """
         return ACLScope(
-            tenant_id=self.tenant_id if self.tenant_id == other.tenant_id else "default",
-            allowed_roles=self.allowed_roles | other.allowed_roles,
-            allowed_groups=self.allowed_groups | other.allowed_groups,
-            is_public=self.is_public or other.is_public,
+            owner_user_id=self.owner_user_id or other.owner_user_id,
+            shared_scope=self.shared_scope or other.shared_scope,
         )

@@ -1,6 +1,7 @@
 import hashlib
 import json
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -10,9 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.acl import ACLScope
 from app.core.config import get_settings
 from app.db.postgres import DocumentRepository
-from app.domain import Document, Entity, Provenance, Relation, TemporalBounds
+from app.domain import Document, Entity, Provenance, Relation
 from app.ingestion.chunking import chunk_parsed_document
-from app.ingestion.conflicts import close_superseded_document_versions
 from app.ingestion.extraction import EntityRelationExtractor
 from app.ingestion.gliner_extraction import get_gliner_extractor
 from app.ingestion.parse import parse_markdown
@@ -70,18 +70,12 @@ class IngestionPipeline:
         """Ingest raw markdown text content into PostgreSQL and stage outbox index events."""
         parsed = parse_markdown(content, source_path=source_uri)
 
-        # Respect scope from frontmatter if present and not explicitly overridden
-        fm_scope = parsed.metadata.get("acl_scope")
+        # Respect a named shared scope from frontmatter if present and not explicitly overridden.
+        fm_scope = parsed.metadata.get("shared_scope") or parsed.metadata.get("acl_scope")
         if acl_scope is not None:
             scope = acl_scope
-        elif fm_scope:
-            if fm_scope.lower() == "public":
-                scope = ACLScope.public()
-            else:
-                scope = ACLScope.restricted(
-                    allowed_roles=frozenset([fm_scope]),
-                    allowed_groups=frozenset([fm_scope]),
-                )
+        elif fm_scope and str(fm_scope).lower() != "public":
+            scope = ACLScope.shared(str(fm_scope))
         else:
             scope = ACLScope.public()
 
@@ -109,28 +103,18 @@ class IngestionPipeline:
             )
             existing = (await session.execute(existing_stmt)).scalar_one_or_none()
             if existing is not None:
-                # Do not include parsed.valid_from/valid_to here: parse_markdown()
-                # synthesizes valid_from=now() for documents without an explicit
-                # date, which would make otherwise unchanged re-ingests look new.
-                # Explicit temporal changes are part of the content hash already.
                 existing_fp = (
                     existing.content_hash
                     or hashlib.sha256(existing.content.encode("utf-8")).hexdigest(),
                     existing.owner_user_id,
-                    existing.acl_tenant_id,
-                    tuple(sorted(existing.acl_allowed_roles or [])),
-                    tuple(sorted(existing.acl_allowed_groups or [])),
-                    existing.acl_is_public,
+                    getattr(existing, "shared_scope", None),
                     (existing.metadata_json or {}).get("extractor_version", ""),
                 )
                 extractor_version = _extractor_version()
                 new_fp = (
                     content_hash,
                     owner_user_id,
-                    scope.tenant_id,
-                    tuple(sorted(scope.allowed_roles)),
-                    tuple(sorted(scope.allowed_groups)),
-                    scope.is_public,
+                    scope.shared_scope,
                     extractor_version,
                 )
                 if existing_fp == new_fp:
@@ -250,7 +234,7 @@ class IngestionPipeline:
                                             "owner_user_id": owner_user_id or "",
                                         },
                                         acl_scope=chunk.acl_scope,
-                                        temporal=chunk.temporal,
+                                        ingested_at=chunk.ingested_at,
                                         provenance=chunk.provenance,
                                     )
                                 )
@@ -264,7 +248,7 @@ class IngestionPipeline:
                                     weight=1.0,
                                     source_chunk_ids=[chunk.chunk_id],
                                     acl_scope=chunk.acl_scope,
-                                    temporal=chunk.temporal,
+                                    ingested_at=chunk.ingested_at,
                                     provenance=chunk.provenance,
                                 )
                             )
@@ -321,10 +305,7 @@ class IngestionPipeline:
                     existing.source_chunk_ids.append(chunk.chunk_id)
             all_relations.extend(rels)
 
-        temporal = TemporalBounds(
-            valid_from=parsed.valid_from,
-            valid_to=parsed.valid_to,
-        )
+        ingested_at = datetime.now(UTC)
         source_tier = int(parsed.metadata.get("source_tier", 1))
         prov = Provenance.from_document(
             source_uri=source_uri,
@@ -350,9 +331,10 @@ class IngestionPipeline:
             chunks=chunks,
             owner_user_id=owner_user_id,
             acl_scope=scope,
-            temporal=temporal,
+            ingested_at=ingested_at,
             provenance=prov,
             version=1,
+            source_version=1,
             metadata=doc_meta,
         )
 
@@ -373,9 +355,6 @@ class IngestionPipeline:
 
         if resolver is not None and hasattr(resolver, "persist_mentions"):
             await resolver.persist_mentions(session)
-
-        # Invalidate / close validity on superseded prior versions (e.g. v1 when v2 arrives)
-        await close_superseded_document_versions(session=session, new_doc=doc)
 
         return IngestionSummary(
             doc_id=doc.doc_id,

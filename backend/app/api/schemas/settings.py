@@ -8,13 +8,10 @@ class StoreStatus(BaseModel):
 
 
 class SettingsResponse(BaseModel):
-    acl_scopes: list[str] = Field(default_factory=list)
-    default_scope: str = "data-platform"
-    default_as_of_date: str = "2026-04-12"
+    shared_scopes: list[str] = Field(default_factory=list)
     canvas_theme: str = "dark"
     stores: dict[str, StoreStatus] = Field(default_factory=dict)
 
 
 class UpdateSettingsRequest(BaseModel):
-    default_as_of_date: str | None = None
     canvas_theme: str | None = None

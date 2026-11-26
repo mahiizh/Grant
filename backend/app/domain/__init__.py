@@ -16,7 +16,6 @@ from app.domain.models import (
     RetrievalMethodType,
 )
 from app.domain.provenance import Provenance, SourceTier
-from app.domain.temporal import TemporalBounds
 
 __all__ = [
     "Answer",
@@ -29,7 +28,6 @@ __all__ = [
     "Relation",
     "RetrievalMethodType",
     "SourceTier",
-    "TemporalBounds",
     "generate_chunk_id",
     "generate_doc_id",
     "generate_entity_id",

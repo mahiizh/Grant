@@ -45,7 +45,7 @@ async def query_pipeline(
     state = await orchestrator.run(
         query=request.query,
         acl_scope=acl_scope,
-        as_of_time=request.as_of,
+        is_admin=current_user.is_admin,
         thread_id=request.thread_id,
         owner_user_id=current_user.user_id,
         answer_policy=request.answer_policy,

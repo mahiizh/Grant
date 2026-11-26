@@ -261,7 +261,7 @@ class QueryHistoryService:
                 "source_kind": source_kind,
                 "is_abstention": is_abstention,
                 "acl_scope": acl_scope.model_dump(mode="json"),
-                "temporal": {"valid_from": now.isoformat(), "valid_to": None},
+                "ingested_at": now.isoformat(),
                 "query_entities": query_entities,
                 "answer_entities": answer_entities,
                 "cites": cites,

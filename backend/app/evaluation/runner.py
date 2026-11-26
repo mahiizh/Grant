@@ -5,7 +5,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.cache.exact import ExactCache
-from app.cache.semantic import SemanticCache
 from app.core.acl import ACLScope
 from app.core.config import get_settings
 from app.evaluation.answer_metrics import answer_accuracy
@@ -19,7 +18,6 @@ from app.evaluation.retrieval_metrics import (
     recall_at_k,
     reciprocal_rank,
 )
-from app.evaluation.router_regret import evaluate_router_decisions
 from app.graph.retrievers import GraphRetriever
 from app.llm.gateway import BudgetExceededError, ModelGateway
 from app.orchestration.state import RAGState, RetrievalConfig
@@ -129,7 +127,6 @@ class EvaluationRunner:
             hybrid_retriever=HybridRetriever(),
             graph_retriever=GraphRetriever(),
             exact_cache=ExactCache(),
-            semantic_cache=SemanticCache(similarity_threshold=0.75),
             model_gateway=ModelGateway(max_budget_per_run=get_settings().LLM_MAX_BUDGET_PER_RUN),
             cache_enabled=cache_enabled,
         )
@@ -262,23 +259,7 @@ class EvaluationRunner:
         gateway.max_run_budget = self.budget_usd
         gateway.reset_usage()
 
-        admin_scope = ACLScope.restricted(
-            allowed_roles={
-                "admin",
-                "data-platform",
-                "payments",
-                "core-banking",
-                "sre",
-                "executive-audit",
-                "security",
-                "ml-platform",
-                "customer-support",
-                "treasury",
-                "risk",
-                "compliance",
-            },
-            allowed_groups={"platform-admins"},
-        )
+        admin_scope = ACLScope.public()
 
         router_predictions: list[tuple[str, str]] = []
         per_question: list[dict[str, Any]] = []
@@ -295,6 +276,7 @@ class EvaluationRunner:
                     query=question.query,
                     thread_history=question.thread_turns,
                     acl_scope=admin_scope,
+                    is_admin=True,
                     retrieval_config=self.retrieval_config,
                     retrieval_only=self.retrieval_only,
                     answer_policy="grounded_only",
@@ -400,7 +382,15 @@ class EvaluationRunner:
             for name in interval_metrics
         }
 
-        router_report = evaluate_router_decisions(router_predictions)
+        correct_routes = sum(
+            1 for predicted, expected in router_predictions if predicted == expected
+        )
+        router_accuracy = (
+            round(correct_routes / len(router_predictions), 4) if router_predictions else 0.0
+        )
+        strategy_distribution: dict[str, int] = {}
+        for predicted, _expected in router_predictions:
+            strategy_distribution[predicted] = strategy_distribution.get(predicted, 0) + 1
         total = len(per_question)
         cache_hits = sum(row["operational"]["is_cached"] for row in per_question)
         cache_hit_rate = round(cache_hits / total, 4) if total else 0.0
@@ -432,7 +422,7 @@ class EvaluationRunner:
 
         return BenchmarkReport(
             total_questions=total,
-            overall_router_accuracy=router_report.accuracy,
+            overall_router_accuracy=router_accuracy,
             split=split or "all",
             retrieval_config=self.retrieval_config,
             retrieval_only=self.retrieval_only,
@@ -455,8 +445,8 @@ class EvaluationRunner:
                 "git_sha": git_sha,
                 "split": split or "all",
                 "retrieval_config": self.retrieval_config,
-                "router_accuracy": router_report.accuracy,
-                "strategy_distribution": router_report.strategy_distribution,
+                "router_accuracy": router_accuracy,
+                "strategy_distribution": strategy_distribution,
                 "category_scores": category_scores,
                 "category_operational": category_operational,
                 "category_intervals": category_intervals,

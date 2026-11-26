@@ -20,7 +20,7 @@ router = APIRouter(prefix="/cache", tags=["cache"])
 async def get_cache_stats(
     window: str = Query("24h"),
 ) -> CacheStatsResponse:
-    """Retrieve telemetry time series for exact and semantic cache performance.
+    """Retrieve telemetry time series for exact answer cache performance.
 
     Cache hits/misses are counted in process memory only and are never exported,
     so a cross-process time series cannot be reconstructed. Returning 501 is
@@ -37,7 +37,7 @@ async def get_cache_stats(
 
 @router.get("/invalidations", response_model=CacheInvalidationsResponse)
 async def get_cache_invalidations() -> CacheInvalidationsResponse:
-    """Audit log of semantic cache invalidations triggered by mutations in outbox."""
+    """Audit log of exact cache invalidations triggered by mutations in outbox."""
     async with get_session() as session:
         stmt = (
             select(OutboxEventRecord)
@@ -58,7 +58,11 @@ async def get_cache_invalidations() -> CacheInvalidationsResponse:
                 trigger_event=ev.event_type,
                 affected_keys_count=1,
                 reason=payload.get("reason", "document_mutation"),
-                acl_scope="data-platform",
+                acl_scope=str(
+                    payload.get("shared_scope")
+                    or payload.get("owner_user_id")
+                    or "public"
+                ),
             )
         )
 

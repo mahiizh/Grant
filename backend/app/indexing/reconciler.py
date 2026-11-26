@@ -15,6 +15,20 @@ from app.indexing.qdrant_indexer import QdrantIndexer
 logger = logging.getLogger(__name__)
 
 
+def _acl_scope_payload(record: ChunkRecord) -> dict[str, Any]:
+    """Build the owner/shared ACL payload stored in Qdrant and Neo4j."""
+    return {
+        "owner_user_id": record.owner_user_id,
+        "shared_scope": record.shared_scope,
+    }
+
+
+def _chunk_ingested_at(record: ChunkRecord) -> str | None:
+    """Read a chunk's ingestion timestamp from its JSON metadata."""
+    value = (record.metadata_json or {}).get("ingested_at")
+    return str(value) if value else None
+
+
 async def run_reconciliation(repair: bool = False) -> int:
     """Compare chunk IDs across Postgres, Qdrant, and Neo4j, and optionally repair drift."""
     print("=" * 60)
@@ -150,16 +164,9 @@ async def run_reconciliation(repair: bool = False) -> int:
                 "chunk_id": rec.chunk_id,
                 "doc_id": rec.doc_id,
                 "text": rec.text,
-                "acl_scope": {
-                    "tenant_id": rec.acl_tenant_id,
-                    "allowed_roles": rec.acl_allowed_roles,
-                    "allowed_groups": rec.acl_allowed_groups,
-                    "is_public": rec.acl_is_public,
-                },
-                "temporal": {
-                    "valid_from": rec.valid_from.isoformat() if rec.valid_from else None,
-                    "valid_to": rec.valid_to.isoformat() if rec.valid_to else None,
-                },
+                "acl_scope": _acl_scope_payload(rec),
+                "owner_user_id": rec.owner_user_id,
+                "ingested_at": _chunk_ingested_at(rec),
                 "source_tier": rec.source_tier,
             }
             await qdrant.upsert_chunk(
@@ -176,11 +183,9 @@ async def run_reconciliation(repair: bool = False) -> int:
                 chunk_id=rec.chunk_id,
                 doc_id=rec.doc_id,
                 text=rec.text,
-                acl_scope={"tenant_id": rec.acl_tenant_id, "is_public": rec.acl_is_public},
-                temporal={
-                    "valid_from": rec.valid_from.isoformat() if rec.valid_from else None,
-                    "valid_to": rec.valid_to.isoformat() if rec.valid_to else None,
-                },
+                acl_scope=_acl_scope_payload(rec),
+                owner_user_id=rec.owner_user_id,
+                ingested_at=_chunk_ingested_at(rec),
             )
             print(f"  Synced missing chunk {cid} to Neo4j.")
 
@@ -199,7 +204,10 @@ async def run_reconciliation(repair: bool = False) -> int:
                 entity_id=rec.entity_id,
                 name=rec.canonical_name,
                 entity_type=rec.entity_type,
-                acl_scope={"tenant_id": "default", "is_public": False},
+                acl_scope={
+                    "owner_user_id": rec.owner_user_id,
+                    "shared_scope": None,
+                },
                 properties={"owner_user_id": rec.owner_user_id or ""},
             )
             print(f"  Synced missing entity {eid} to Neo4j.")

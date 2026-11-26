@@ -12,7 +12,6 @@ class DocumentRecord(BaseModel):
     tier: int = 1
     ingested_at: str
     target_node_id: str
-    valid_from: str
     tokens: int = 0
     cost_usd: float = 0.0
     extraction_engine: str = "unknown"

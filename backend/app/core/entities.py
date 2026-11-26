@@ -1,8 +1,8 @@
-"""Extraction of CamelCase entity names shared by grounding and cache guards.
+"""Extraction of CamelCase entity names shared by grounding checks.
 
-Corpus service names are CamelCase (EventStream, BeaconAPI). Both the
-pre-generation grounding check and the semantic-cache guard need to recognise
-them without maintaining a hand-written list that drifts from the corpus.
+Corpus service names are CamelCase (EventStream, BeaconAPI). The pre-generation
+grounding check needs to recognise them without maintaining a hand-written list
+that drifts from the corpus.
 """
 
 from __future__ import annotations

@@ -1,5 +1,4 @@
 import time
-from datetime import UTC, datetime
 from typing import Any
 
 import redis.asyncio as aioredis
@@ -14,10 +13,7 @@ from app.db.postgres import get_engine
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
-_settings_state: dict[str, Any] = {
-    "default_as_of_date": datetime.now(UTC).date().isoformat(),
-    "canvas_theme": "dark",
-}
+_settings_state: dict[str, Any] = {"canvas_theme": "dark"}
 
 
 @router.get("", response_model=SettingsResponse)
@@ -25,17 +21,10 @@ async def get_system_settings() -> SettingsResponse:
     """Retrieve system settings, ACL scopes, store health, and defaults."""
     settings = get_settings()
 
-    # Collect distinct scopes from DEV_USERS
-    all_scopes: set[str] = {
-        "public",
-        "data-platform",
-        "sre",
-        "payments",
-        "core-banking",
-        "executive-audit",
-    }
+    # Shared scopes are the only requestable non-owner boundaries.
+    all_scopes: set[str] = set()
     for user_info in settings.DEV_USERS.values():
-        all_scopes.update(user_info.get("allowed_scopes", []))
+        all_scopes.update(user_info.get("shared_scopes", []))
 
     stores: dict[str, StoreStatus] = {}
 
@@ -97,10 +86,8 @@ async def get_system_settings() -> SettingsResponse:
         stores["redis"] = StoreStatus(status="unhealthy", latency_ms=0.0, configured=True)
 
     return SettingsResponse(
-        acl_scopes=sorted(all_scopes),
-        default_scope="data-platform",
-        default_as_of_date=_settings_state["default_as_of_date"],
-        canvas_theme=_settings_state["canvas_theme"],
+        shared_scopes=sorted(all_scopes),
+        canvas_theme=str(_settings_state["canvas_theme"]),
         stores=stores,
     )
 
@@ -109,9 +96,7 @@ async def get_system_settings() -> SettingsResponse:
 async def update_system_settings(
     request: UpdateSettingsRequest,
 ) -> SettingsResponse:
-    """Update defaults (date, canvas theme). Note: active scope cannot be changed via settings."""
-    if request.default_as_of_date is not None:
-        _settings_state["default_as_of_date"] = request.default_as_of_date
+    """Update UI defaults. Shared scopes are credentials, not editable settings."""
     if request.canvas_theme is not None:
         _settings_state["canvas_theme"] = request.canvas_theme
 

@@ -1,15 +1,13 @@
-from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 
 class QueryRequest(BaseModel):
-    """User query payload with optional scope, temporal filter, and answer policy."""
+    """User query payload with an optional shared scope and answer policy."""
 
     query: str
     scope: str | None = None
-    as_of: datetime | None = None
     thread_id: str | None = None
     answer_policy: Literal["grounded_only", "grounded_plus_web"] = "grounded_plus_web"
 

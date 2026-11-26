@@ -1,9 +1,8 @@
-from app.orchestration.router import QueryRouter
 from app.orchestration.state import RAGState
-from app.orchestration.workflow import RAGOrchestrator
+from app.orchestration.workflow import RAGOrchestrator, classify_route
 
 __all__ = [
-    "QueryRouter",
     "RAGOrchestrator",
     "RAGState",
+    "classify_route",
 ]

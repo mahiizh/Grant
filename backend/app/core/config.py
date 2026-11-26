@@ -153,8 +153,10 @@ class Settings(BaseSettings):
     LLM_CACHE_DIR: str = ".llm_cache"
     LLM_MAX_BUDGET_PER_RUN: float = 0.50
 
-    # Evaluation data paths. Override these in tests so runs never write into
-    # tracked files under evals/.
+    # User-supplied corpus and evaluation data paths. There are no bundled
+    # demo assets: ingestion and eval harnesses require explicit directories.
+    CORPUS_DIR: str | None = None
+    EVAL_CORPUS_DIR: str | None = None
     EVAL_GOLDEN_DIR: str | None = None
     EVAL_CANDIDATES_DIR: str | None = None
     # Isolated stores for `make eval`: a dedicated database and Qdrant
@@ -181,51 +183,33 @@ class Settings(BaseSettings):
             "alice": {
                 "user_id": "usr_alice_01",
                 "name": "Alice Chen",
-                "allowed_scopes": ["data-platform", "public"],
-                "roles": ["engineer", "data-lead"],
-                "groups": ["data-platform"],
+                "shared_scopes": ["shared-analytics"],
             },
             "bob": {
                 "user_id": "usr_bob_02",
                 "name": "Bob Kumar",
-                "allowed_scopes": ["sre", "public"],
-                "roles": ["incident-commander", "sre-lead"],
-                "groups": ["sre"],
+                "shared_scopes": ["shared-operations"],
             },
             "elena": {
                 "user_id": "usr_elena_03",
                 "name": "Elena Rostova",
-                "allowed_scopes": ["payments", "public"],
-                "roles": ["payments-lead"],
-                "groups": ["payments"],
+                "shared_scopes": ["shared-finance"],
             },
             "dave": {
                 "user_id": "usr_dave_04",
                 "name": "Dave Miller",
-                "allowed_scopes": ["core-banking", "public"],
-                "roles": ["banking-lead"],
-                "groups": ["core-banking"],
+                "shared_scopes": ["shared-banking"],
             },
             "auditor": {
                 "user_id": "usr_auditor_05",
                 "name": "Executive Auditor",
-                "allowed_scopes": ["executive-audit", "public"],
-                "roles": ["auditor", "executive"],
-                "groups": ["audit-council"],
+                "shared_scopes": ["shared-audit"],
             },
             "admin": {
                 "user_id": "usr_admin_00",
                 "name": "Platform Admin",
-                "allowed_scopes": [
-                    "data-platform",
-                    "payments",
-                    "core-banking",
-                    "sre",
-                    "executive-audit",
-                    "public",
-                ],
-                "roles": ["admin"],
-                "groups": ["platform-admins"],
+                "shared_scopes": [],
+                "is_admin": True,
             },
         }
     )

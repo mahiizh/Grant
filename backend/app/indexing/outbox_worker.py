@@ -44,7 +44,7 @@ class OutboxWorker:
                 doc_id = payload.get("doc_id", "")
                 text = payload.get("text", "")
                 acl_scope = payload.get("acl_scope", {})
-                temporal = payload.get("temporal", {})
+                ingested_at = payload.get("ingested_at")
 
                 owner_user_id = payload.get("owner_user_id")
 
@@ -62,7 +62,7 @@ class OutboxWorker:
                     doc_id=doc_id,
                     text=text,
                     acl_scope=acl_scope,
-                    temporal=temporal,
+                    ingested_at=ingested_at,
                     owner_user_id=owner_user_id,
                     properties={
                         "source_kind": payload.get("source_kind", "document"),
@@ -81,7 +81,7 @@ class OutboxWorker:
                         name=ent.get("name", ""),
                         entity_type=ent.get("entity_type", "Concept"),
                         acl_scope=acl_scope,
-                        temporal=temporal,
+                        ingested_at=ingested_at,
                         properties={
                             "doc_id": doc_id,
                             "chunk_id": chunk_id,
@@ -104,7 +104,7 @@ class OutboxWorker:
                         target_id=rel.get("target_entity_id"),
                         relation_type=rel.get("relation_type", "RELATED_TO"),
                         acl_scope=acl_scope,
-                        temporal=temporal,
+                        ingested_at=ingested_at,
                         properties={"doc_id": doc_id, "chunk_id": chunk_id},
                     )
 
@@ -120,7 +120,7 @@ class OutboxWorker:
                 message_id = payload.get("message_id", event.aggregate_id)
                 source_id = payload.get("source_id", f"chat:{message_id}")
                 acl_scope = payload.get("acl_scope", {})
-                temporal = payload.get("temporal", {})
+                ingested_at = payload.get("ingested_at")
                 for ent in payload.get("entities", []):
                     entity_id = ent.get("entity_id", ent.get("name"))
                     await self.neo4j.merge_node(
@@ -128,7 +128,7 @@ class OutboxWorker:
                         name=ent.get("name", ""),
                         entity_type=ent.get("entity_type", "Concept"),
                         acl_scope=acl_scope,
-                        temporal=temporal,
+                        ingested_at=ingested_at,
                         properties={
                             "doc_id": "",
                             "chunk_id": "",
@@ -146,7 +146,7 @@ class OutboxWorker:
                         thread_id=thread_id,
                         entity_id=entity_id,
                         acl_scope=acl_scope,
-                        temporal=temporal,
+                        ingested_at=ingested_at,
                         owner_user_id=owner_user_id,
                     )
                 for rel in payload.get("relations", []):
@@ -155,7 +155,7 @@ class OutboxWorker:
                         target_id=rel.get("target_entity_id"),
                         relation_type=rel.get("relation_type", "RELATED_TO"),
                         acl_scope=acl_scope,
-                        temporal=temporal,
+                        ingested_at=ingested_at,
                         properties={
                             "doc_id": source_id,
                             "chunk_id": source_id,
@@ -183,7 +183,7 @@ class OutboxWorker:
                 source_kind = payload.get("source_kind", "docs")
                 owner_user_id = payload.get("owner_user_id")
                 acl_scope = payload.get("acl_scope", {})
-                temporal = payload.get("temporal", {})
+                ingested_at = payload.get("ingested_at")
                 query_entities = payload.get("query_entities", [])
                 # Unverified answers never contribute extracted facts.
                 answer_entities = (
@@ -209,7 +209,7 @@ class OutboxWorker:
                             name=ent.get("name") or entity_id,
                             entity_type=ent.get("entity_type") or "Concept",
                             acl_scope=acl_scope,
-                            temporal=temporal,
+                            ingested_at=ingested_at,
                             properties={
                                 "source_id": source_id,
                                 "owner_user_id": owner_user_id or "",
@@ -231,7 +231,7 @@ class OutboxWorker:
                     source_kind=source_kind,
                     is_abstention=bool(payload.get("is_abstention", False)),
                     acl_scope=acl_scope,
-                    temporal=temporal,
+                    ingested_at=ingested_at,
                     query_entities=query_entities,
                     answer_entities=answer_entities,
                     cites=payload.get("cites", []),

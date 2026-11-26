@@ -9,9 +9,10 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.api.routes.query import get_orchestrator
 from app.api.schemas.threads import (
@@ -124,13 +125,31 @@ def _to_message_item(record: MessageRecord) -> MessageItem:
     )
 
 
+def _thread_acl_scope(thread: ThreadRecord) -> ACLScope:
+    """Return the combined owner/shared boundary for a thread."""
+    return ACLScope(
+        owner_user_id=thread.owner_user_id,
+        shared_scope=thread.shared_scope,
+    )
+
+
+def _can_access_thread(thread: ThreadRecord, current_user: AuthenticatedUser) -> bool:
+    if current_user.is_admin or thread.owner_user_id == current_user.user_id:
+        return True
+    return bool(thread.shared_scope and thread.shared_scope in current_user.shared_scopes)
+
+
+def _ensure_thread_access(thread: ThreadRecord, current_user: AuthenticatedUser) -> None:
+    if not _can_access_thread(thread, current_user):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Thread not found")
+
+
 def _to_thread_detail(thread: ThreadRecord) -> ThreadDetail:
     messages = [_to_message_item(m) for m in (thread.messages or [])]
     return ThreadDetail(
         thread_id=thread.thread_id,
         title=thread.title,
-        acl_scope=thread.acl_scope,
-        as_of_date=thread.as_of_date,
+        shared_scope=thread.shared_scope,
         created_at=thread.created_at,
         updated_at=thread.updated_at,
         messages=messages,
@@ -142,7 +161,7 @@ async def _stage_chat_graph(
     session: AsyncSession,
     text: str,
     thread_id: str,
-    acl_scope: str,
+    shared_scope: str | None,
     message_id: str,
     owner_user_id: str,
     role: str,
@@ -155,10 +174,8 @@ async def _stage_chat_graph(
     if not extraction.entities:
         return
     chat_acl = {
-        "tenant_id": "default",
-        "allowed_roles": [acl_scope] if acl_scope and acl_scope != "public" else [],
-        "allowed_groups": [acl_scope] if acl_scope and acl_scope != "public" else [],
-        "is_public": acl_scope == "public",
+        "owner_user_id": owner_user_id,
+        "shared_scope": shared_scope,
     }
     entities_payload = []
     relations_payload = [r.model_dump() for r in extraction.relations]
@@ -213,7 +230,7 @@ async def _stage_chat_graph(
             "owner_user_id": owner_user_id,
             "role": role,
             "acl_scope": chat_acl,
-            "temporal": {"valid_from": datetime.now(UTC).isoformat(), "valid_to": None},
+            "ingested_at": datetime.now(UTC).isoformat(),
             "entities": entities_payload,
             "relations": relations_payload,
         },
@@ -226,8 +243,9 @@ async def create_thread(
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> ThreadDetail:
-    """Create a new conversation thread with optional title, ACL scope, and as-of time."""
-    current_user.check_scope(req.acl_scope)
+    """Create a new owner-private thread, optionally shared to an authorized scope."""
+    if req.shared_scope:
+        current_user.check_scope(req.shared_scope)
     thread_id = f"th-{uuid.uuid4().hex[:8]}"
     title = req.title or "New Investigation"
     now = datetime.now(UTC)
@@ -236,22 +254,14 @@ async def create_thread(
         thread_id=thread_id,
         title=title,
         owner_user_id=current_user.user_id,
-        acl_scope=req.acl_scope,
-        as_of_date=req.as_of_date,
+        shared_scope=req.shared_scope,
         created_at=now,
         updated_at=now,
     )
     session.add(thread)
     await session.flush()
-    return ThreadDetail(
-        thread_id=thread.thread_id,
-        title=thread.title,
-        acl_scope=thread.acl_scope,
-        as_of_date=thread.as_of_date,
-        created_at=thread.created_at,
-        updated_at=thread.updated_at,
-        messages=[],
-    )
+    set_committed_value(thread, "messages", [])
+    return _to_thread_detail(thread)
 
 
 @router.get("", response_model=list[ThreadSummary])
@@ -259,13 +269,20 @@ async def list_threads(
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> list[ThreadSummary]:
-    """List threads owned by the current user, ordered by updated_at descending."""
+    """List threads visible to the current user, ordered by updated_at descending."""
     stmt = (
         select(ThreadRecord)
         .options(selectinload(ThreadRecord.messages))
-        .where(ThreadRecord.owner_user_id == current_user.user_id)
         .order_by(ThreadRecord.updated_at.desc())
     )
+    if not current_user.is_admin:
+        visibility = ThreadRecord.owner_user_id == current_user.user_id
+        if current_user.shared_scopes:
+            visibility = or_(
+                visibility,
+                ThreadRecord.shared_scope.in_(sorted(current_user.shared_scopes)),
+            )
+        stmt = stmt.where(visibility)
     result = await session.execute(stmt)
     threads = result.scalars().all()
 
@@ -277,8 +294,7 @@ async def list_threads(
             ThreadSummary(
                 thread_id=th.thread_id,
                 title=th.title,
-                acl_scope=th.acl_scope,
-                as_of_date=th.as_of_date,
+                shared_scope=th.shared_scope,
                 created_at=th.created_at,
                 updated_at=th.updated_at,
                 message_count=msg_count,
@@ -297,19 +313,14 @@ async def get_thread(
     """Retrieve thread details and full message history."""
     stmt = (
         select(ThreadRecord)
-        .where(
-            ThreadRecord.thread_id == thread_id,
-            ThreadRecord.owner_user_id == current_user.user_id,
-        )
+        .where(ThreadRecord.thread_id == thread_id)
         .options(selectinload(ThreadRecord.messages))
     )
     result = await session.execute(stmt)
     thread = result.scalar_one_or_none()
     if not thread:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Thread '{thread_id}' not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Thread '{thread_id}' not found")
+    _ensure_thread_access(thread, current_user)
     return _to_thread_detail(thread)
 
 
@@ -320,30 +331,23 @@ async def update_thread(
     session: AsyncSession = Depends(get_db_session),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> ThreadDetail:
-    """Update thread title, ACL scope, or as-of date."""
+    """Update thread title or shared scope."""
     stmt = (
         select(ThreadRecord)
-        .where(
-            ThreadRecord.thread_id == thread_id,
-            ThreadRecord.owner_user_id == current_user.user_id,
-        )
+        .where(ThreadRecord.thread_id == thread_id)
         .options(selectinload(ThreadRecord.messages))
     )
     result = await session.execute(stmt)
     thread = result.scalar_one_or_none()
     if not thread:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Thread '{thread_id}' not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Thread '{thread_id}' not found")
+    _ensure_thread_access(thread, current_user)
 
     if req.title is not None:
         thread.title = req.title
-    if req.acl_scope is not None:
-        current_user.check_scope(req.acl_scope)
-        thread.acl_scope = req.acl_scope
-    if req.as_of_date is not None:
-        thread.as_of_date = req.as_of_date
+    if req.shared_scope is not None:
+        current_user.check_scope(req.shared_scope)
+        thread.shared_scope = req.shared_scope or None
     thread.updated_at = datetime.now(UTC)
 
     await session.flush()
@@ -357,17 +361,12 @@ async def delete_thread(
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> dict[str, Any]:
     """Delete thread, cascade messages, and stage chat-graph cleanup."""
-    stmt = select(ThreadRecord).where(
-        ThreadRecord.thread_id == thread_id,
-        ThreadRecord.owner_user_id == current_user.user_id,
-    )
+    stmt = select(ThreadRecord).where(ThreadRecord.thread_id == thread_id)
     result = await session.execute(stmt)
     thread = result.scalar_one_or_none()
     if not thread:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Thread '{thread_id}' not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Thread '{thread_id}' not found")
+    _ensure_thread_access(thread, current_user)
 
     OutboxService.stage_event(
         session=session,
@@ -402,34 +401,27 @@ async def send_message(
     """Execute glass-box turn within conversation thread, supporting SSE streaming."""
     stmt = (
         select(ThreadRecord)
-        .where(
-            ThreadRecord.thread_id == thread_id,
-            ThreadRecord.owner_user_id == current_user.user_id,
-        )
+        .where(ThreadRecord.thread_id == thread_id)
         .options(selectinload(ThreadRecord.messages))
     )
     result = await session.execute(stmt)
     thread = result.scalar_one_or_none()
     if not thread:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Thread '{thread_id}' not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Thread '{thread_id}' not found")
+    _ensure_thread_access(thread, current_user)
 
-    # Validate that current user is authorized for the thread's scope
-    current_user.check_scope(thread.acl_scope)
-    if req.acl_scope:
-        current_user.check_scope(req.acl_scope)
+    if req.shared_scope:
+        current_user.check_scope(req.shared_scope)
 
     # Auto-generate title from first question if it was "New Investigation"
     if thread.title == "New Investigation" and len(thread.messages) == 0:
         thread.title = req.content[:45] + ("..." if len(req.content) > 45 else "")
 
-    # Check for mid-thread scope or date update
-    if req.acl_scope and req.acl_scope != thread.acl_scope:
-        thread.acl_scope = req.acl_scope
-    if req.as_of_date and req.as_of_date != thread.as_of_date:
-        thread.as_of_date = req.as_of_date
+    # Mid-thread sharing changes are allowed for owners and admins only.
+    if req.shared_scope and req.shared_scope != thread.shared_scope:
+        if thread.owner_user_id != current_user.user_id and not current_user.is_admin:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the thread owner may change sharing")
+        thread.shared_scope = req.shared_scope
 
     now = datetime.now(UTC)
     thread.updated_at = now
@@ -454,7 +446,7 @@ async def send_message(
         session=session,
         text=req.content,
         thread_id=thread_id,
-        acl_scope=thread.acl_scope,
+        shared_scope=thread.shared_scope,
         message_id=user_msg_id,
         owner_user_id=current_user.user_id,
         role="user",
@@ -468,11 +460,7 @@ async def send_message(
     ]
 
     orchestrator = get_orchestrator()
-    scope = (
-        ACLScope.restricted(allowed_roles={thread.acl_scope}, allowed_groups={thread.acl_scope})
-        if thread.acl_scope and thread.acl_scope != "public"
-        else ACLScope.public()
-    )
+    scope = _thread_acl_scope(thread)
 
     # If client requests SSE stream
     wants_sse = (
@@ -493,6 +481,7 @@ async def send_message(
                 thread_id=thread_id,
                 thread_history=history,
                 owner_user_id=current_user.user_id,
+                is_admin=current_user.is_admin,
                 answer_policy=req.answer_policy,
             )
 
@@ -607,7 +596,7 @@ async def send_message(
                     session=persist_session,
                     text=answer,
                     thread_id=thread_id,
-                    acl_scope=thread.acl_scope,
+                    shared_scope=thread.shared_scope,
                     message_id=asst_msg_id,
                     owner_user_id=current_user.user_id,
                     role="assistant",
@@ -648,6 +637,7 @@ async def send_message(
         thread_id=thread_id,
         thread_history=history,
         owner_user_id=current_user.user_id,
+        is_admin=current_user.is_admin,
         answer_policy=req.answer_policy,
     )
 
@@ -750,7 +740,7 @@ async def send_message(
         session=session,
         text=answer,
         thread_id=thread_id,
-        acl_scope=thread.acl_scope,
+        shared_scope=thread.shared_scope,
         message_id=asst_msg_id,
         owner_user_id=current_user.user_id,
         role="assistant",
@@ -860,13 +850,15 @@ async def add_to_golden_dataset(
         "created_at": datetime.now(UTC).isoformat(),
     }
 
-    # Append to candidate eval dataset file. Tests override this directory so
-    # runs never mutate the tracked file under evals/.
+    # Append only to a user-supplied candidate eval directory. There is no
+    # bundled candidate dataset to mutate.
     configured_dir = get_settings().EVAL_CANDIDATES_DIR
-    if configured_dir:
-        evals_dir = Path(configured_dir)
-    else:
-        evals_dir = Path(__file__).resolve().parents[4] / "evals" / "candidates"
+    if not configured_dir:
+        raise HTTPException(
+            status_code=400,
+            detail="EVAL_CANDIDATES_DIR must be configured to export candidates.",
+        )
+    evals_dir = Path(configured_dir).expanduser().resolve()
     evals_dir.mkdir(parents=True, exist_ok=True)
     candidate_file = evals_dir / "golden_candidates.jsonl"
     with open(candidate_file, "a", encoding="utf-8") as f:
@@ -890,19 +882,14 @@ async def regenerate_message(
     """Regenerate assistant response and archive prior generation."""
     stmt = (
         select(ThreadRecord)
-        .where(
-            ThreadRecord.thread_id == thread_id,
-            ThreadRecord.owner_user_id == current_user.user_id,
-        )
+        .where(ThreadRecord.thread_id == thread_id)
         .options(selectinload(ThreadRecord.messages))
     )
     result = await session.execute(stmt)
     thread = result.scalar_one_or_none()
     if not thread:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Thread '{thread_id}' not found",
-        )
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Thread '{thread_id}' not found")
+    _ensure_thread_access(thread, current_user)
 
     asst_msg = next((m for m in thread.messages if m.message_id == msg_id), None)
     if not asst_msg or asst_msg.role != "assistant":
@@ -953,11 +940,7 @@ async def regenerate_message(
     ]
 
     orchestrator = get_orchestrator()
-    scope = (
-        ACLScope.restricted(allowed_roles={thread.acl_scope}, allowed_groups={thread.acl_scope})
-        if thread.acl_scope and thread.acl_scope != "public"
-        else ACLScope.public()
-    )
+    scope = _thread_acl_scope(thread)
 
     state = await orchestrator.run(
         query=user_query,
@@ -965,6 +948,7 @@ async def regenerate_message(
         thread_id=thread_id,
         thread_history=history,
         owner_user_id=current_user.user_id,
+        is_admin=current_user.is_admin,
         answer_policy="grounded_plus_web",
     )
 

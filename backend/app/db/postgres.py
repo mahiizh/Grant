@@ -25,7 +25,6 @@ from app.domain import (
     Document,
     Provenance,
     SourceTier,
-    TemporalBounds,
 )
 
 logger = logging.getLogger(__name__)
@@ -202,24 +201,27 @@ class DocumentRepository:
             return None
 
     @classmethod
+    def _chunk_ingested_at(cls, record: ChunkRecord) -> datetime:
+        """Restore a chunk's ingestion timestamp from its JSON metadata."""
+        raw = (record.metadata_json or {}).get("ingested_at")
+        return cls._parse_optional_datetime(raw) or datetime.now(UTC)
+
+    @classmethod
     def _chunk_to_record(cls, chunk: Chunk) -> ChunkRecord:
         source_kind = str(chunk.metadata.get("source_kind", "document") or "document")
         url = chunk.metadata.get("url") or (
             chunk.provenance.source_uri if source_kind == "web" else None
         )
+        metadata = dict(chunk.metadata)
+        metadata.setdefault("ingested_at", chunk.ingested_at.isoformat())
         return ChunkRecord(
             chunk_id=chunk.chunk_id,
             doc_id=chunk.doc_id,
             chunk_index=chunk.index,
             text=chunk.text,
             tokens=chunk.tokens,
-            owner_user_id=chunk.owner_user_id,
-            acl_tenant_id=chunk.acl_scope.tenant_id,
-            acl_allowed_roles=list(chunk.acl_scope.allowed_roles),
-            acl_allowed_groups=list(chunk.acl_scope.allowed_groups),
-            acl_is_public=chunk.acl_scope.is_public,
-            valid_from=chunk.temporal.valid_from,
-            valid_to=chunk.temporal.valid_to,
+            owner_user_id=chunk.owner_user_id or chunk.acl_scope.owner_user_id,
+            shared_scope=chunk.acl_scope.shared_scope,
             source_tier=int(chunk.provenance.tier),
             source_uri=chunk.provenance.source_uri,
             source_kind=source_kind,
@@ -227,20 +229,14 @@ class DocumentRepository:
             fetched_at=cls._parse_optional_datetime(chunk.metadata.get("fetched_at")),
             provenance_confidence=chunk.provenance.confidence,
             provenance_verified=chunk.provenance.verified,
-            metadata_json=chunk.metadata,
+            metadata_json=metadata,
         )
 
     @staticmethod
     def _record_to_domain_chunk(record: ChunkRecord) -> Chunk:
         acl = ACLScope(
-            tenant_id=record.acl_tenant_id,
-            allowed_roles=frozenset(record.acl_allowed_roles or []),
-            allowed_groups=frozenset(record.acl_allowed_groups or []),
-            is_public=record.acl_is_public,
-        )
-        temporal = TemporalBounds(
-            valid_from=record.valid_from,
-            valid_to=record.valid_to,
+            owner_user_id=getattr(record, "owner_user_id", None),
+            shared_scope=getattr(record, "shared_scope", None),
         )
         prov = Provenance(
             tier=SourceTier(record.source_tier),
@@ -262,7 +258,7 @@ class DocumentRepository:
             tokens=record.tokens,
             owner_user_id=getattr(record, "owner_user_id", None),
             acl_scope=acl,
-            temporal=temporal,
+            ingested_at=DocumentRepository._chunk_ingested_at(record),
             provenance=prov,
             metadata=metadata,
         )
@@ -270,16 +266,8 @@ class DocumentRepository:
     @staticmethod
     def _record_to_domain_doc(record: DocumentRecord) -> Document:
         acl = ACLScope(
-            tenant_id=record.acl_tenant_id,
-            allowed_roles=frozenset(record.acl_allowed_roles or []),
-            allowed_groups=frozenset(record.acl_allowed_groups or []),
-            is_public=record.acl_is_public,
-        )
-        temporal = TemporalBounds(
-            valid_from=record.valid_from,
-            valid_to=record.valid_to,
-            ingested_at=record.ingested_at,
-            source_version=record.source_version,
+            owner_user_id=getattr(record, "owner_user_id", None),
+            shared_scope=getattr(record, "shared_scope", None),
         )
         prov = Provenance(
             tier=SourceTier(record.source_tier),
@@ -304,9 +292,10 @@ class DocumentRepository:
             chunks=domain_chunks,
             owner_user_id=getattr(record, "owner_user_id", None),
             acl_scope=acl,
-            temporal=temporal,
+            ingested_at=record.ingested_at,
             provenance=prov,
             version=record.version,
+            source_version=record.source_version,
             content_hash=record.content_hash,
             metadata=metadata,
         )
@@ -319,35 +308,17 @@ class DocumentRepository:
         return hashlib.sha256(document.content.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _temporal_key(value: datetime | None) -> str | None:
-        """Normalize a datetime to an aware UTC ISO string for comparison.
-
-        SQLite drops timezone information on round-trip, so comparing raw
-        ``isoformat()`` output would report an unchanged document as changed.
-        """
-        if value is None:
-            return None
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=UTC)
-        return value.astimezone(UTC).isoformat()
-
-    @staticmethod
     def _index_fingerprint(document: Document) -> tuple[Any, ...]:
         """Fields that change downstream index state when they change.
 
-        Chunk text is derived from content, and chunk ACL/temporal payloads are
-        derived from the document scope and bounds, so an unchanged fingerprint
-        means the existing chunks and index records are still valid.
+        Chunk text is derived from content and ACL payloads are derived from the
+        document scope, so an unchanged fingerprint means the existing chunks
+        and index records are still valid.
         """
         return (
             DocumentRepository._effective_content_hash(document),
-            document.owner_user_id,
-            document.acl_scope.tenant_id,
-            tuple(sorted(document.acl_scope.allowed_roles)),
-            tuple(sorted(document.acl_scope.allowed_groups)),
-            document.acl_scope.is_public,
-            DocumentRepository._temporal_key(document.temporal.valid_from),
-            DocumentRepository._temporal_key(document.temporal.valid_to),
+            document.owner_user_id or document.acl_scope.owner_user_id,
+            document.acl_scope.shared_scope,
         )
 
     @classmethod
@@ -358,8 +329,8 @@ class DocumentRepository:
     ) -> DocumentRecord:
         """Atomically persist a document, replace chunks, and stage outbox events.
 
-        Re-saving a document whose content and index-relevant ACL/temporal fields
-        are unchanged is a no-op for chunks and downstream indexing: no
+        Re-saving a document whose content and index-relevant ACL fields are
+        unchanged is a no-op for chunks and downstream indexing: no
         ``DOCUMENT_INGESTED``, ``CHUNK_UPSERTED``, or ``CACHE_INVALIDATED`` events
         are staged, so retries and duplicate ingest jobs cannot flood the outbox
         or re-embed identical chunks.
@@ -382,12 +353,7 @@ class DocumentRepository:
                 existing_doc.content_hash
                 or hashlib.sha256(existing_doc.content.encode("utf-8")).hexdigest(),
                 getattr(existing_doc, "owner_user_id", None),
-                existing_doc.acl_tenant_id,
-                tuple(sorted(existing_doc.acl_allowed_roles or [])),
-                tuple(sorted(existing_doc.acl_allowed_groups or [])),
-                existing_doc.acl_is_public,
-                cls._temporal_key(existing_doc.valid_from),
-                cls._temporal_key(existing_doc.valid_to),
+                getattr(existing_doc, "shared_scope", None),
             )
             if existing_fingerprint == cls._index_fingerprint(document):
                 # Content and index-relevant metadata are unchanged: keep chunks
@@ -395,10 +361,11 @@ class DocumentRepository:
                 # fields such as title, version, and metadata.
                 existing_doc.title = document.title
                 existing_doc.version = document.version
-                existing_doc.owner_user_id = document.owner_user_id
+                existing_doc.owner_user_id = document.owner_user_id or document.acl_scope.owner_user_id
+                existing_doc.shared_scope = document.acl_scope.shared_scope
                 existing_doc.content_hash = cls._effective_content_hash(document)
                 existing_doc.metadata_json = document.metadata
-                existing_doc.source_version = document.temporal.source_version
+                existing_doc.source_version = document.source_version
                 existing_doc.source_tier = int(document.provenance.tier)
                 existing_doc.source_uri = document.provenance.source_uri
                 existing_doc.source_kind = source_kind
@@ -416,15 +383,10 @@ class DocumentRepository:
                 content=document.content,
                 version=document.version,
                 content_hash=cls._effective_content_hash(document),
-                owner_user_id=document.owner_user_id,
-                acl_tenant_id=document.acl_scope.tenant_id,
-                acl_allowed_roles=list(document.acl_scope.allowed_roles),
-                acl_allowed_groups=list(document.acl_scope.allowed_groups),
-                acl_is_public=document.acl_scope.is_public,
-                valid_from=document.temporal.valid_from,
-                valid_to=document.temporal.valid_to,
-                ingested_at=document.temporal.ingested_at,
-                source_version=document.temporal.source_version,
+                owner_user_id=document.owner_user_id or document.acl_scope.owner_user_id,
+                shared_scope=document.acl_scope.shared_scope,
+                ingested_at=document.ingested_at,
+                source_version=document.source_version,
                 source_tier=int(document.provenance.tier),
                 source_uri=document.provenance.source_uri,
                 source_kind=source_kind,
@@ -440,15 +402,10 @@ class DocumentRepository:
             doc_record.title = document.title
             doc_record.content = document.content
             doc_record.version = document.version
-            doc_record.owner_user_id = document.owner_user_id
+            doc_record.owner_user_id = document.owner_user_id or document.acl_scope.owner_user_id
             doc_record.content_hash = cls._effective_content_hash(document)
-            doc_record.acl_tenant_id = document.acl_scope.tenant_id
-            doc_record.acl_allowed_roles = list(document.acl_scope.allowed_roles)
-            doc_record.acl_allowed_groups = list(document.acl_scope.allowed_groups)
-            doc_record.acl_is_public = document.acl_scope.is_public
-            doc_record.valid_from = document.temporal.valid_from
-            doc_record.valid_to = document.temporal.valid_to
-            doc_record.source_version = document.temporal.source_version
+            doc_record.shared_scope = document.acl_scope.shared_scope
+            doc_record.source_version = document.source_version
             doc_record.source_tier = int(document.provenance.tier)
             doc_record.source_uri = document.provenance.source_uri
             doc_record.source_kind = source_kind
@@ -478,7 +435,8 @@ class DocumentRepository:
                 payload={
                     "doc_id": document.doc_id,
                     "reason": "document_content_changed",
-                    "tenant_id": document.acl_scope.tenant_id,
+                    "owner_user_id": document.owner_user_id or document.acl_scope.owner_user_id,
+                    "shared_scope": document.acl_scope.shared_scope,
                 },
             )
 
@@ -488,8 +446,8 @@ class DocumentRepository:
             "title": document.title,
             "version": document.version,
             "chunk_count": len(document.chunks),
-            "owner_user_id": document.owner_user_id,
-            "tenant_id": document.acl_scope.tenant_id,
+            "owner_user_id": document.owner_user_id or document.acl_scope.owner_user_id,
+            "shared_scope": document.acl_scope.shared_scope,
             "source_uri": document.provenance.source_uri,
             "source_kind": source_kind,
             "url": str(url) if url else None,
@@ -511,19 +469,13 @@ class DocumentRepository:
                 "index": chunk.index,
                 "text": chunk.text,
                 "tokens": chunk.tokens,
-                "owner_user_id": chunk.owner_user_id or document.owner_user_id,
-                "acl_scope": {
-                    "tenant_id": chunk.acl_scope.tenant_id,
-                    "allowed_roles": list(chunk.acl_scope.allowed_roles),
-                    "allowed_groups": list(chunk.acl_scope.allowed_groups),
-                    "is_public": chunk.acl_scope.is_public,
-                },
-                "temporal": {
-                    "valid_from": chunk.temporal.valid_from.isoformat(),
-                    "valid_to": chunk.temporal.valid_to.isoformat()
-                    if chunk.temporal.valid_to
-                    else None,
-                },
+                "owner_user_id": (
+                    chunk.owner_user_id
+                    or document.owner_user_id
+                    or chunk.acl_scope.owner_user_id
+                ),
+                "acl_scope": chunk.acl_scope.model_dump(mode="json"),
+                "ingested_at": chunk.ingested_at.isoformat(),
                 "source_tier": int(chunk.provenance.tier),
                 "source_kind": str(chunk.metadata.get("source_kind", "document") or "document"),
                 "url": chunk.metadata.get("url"),

@@ -1,5 +1,4 @@
 import logging
-from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query
@@ -31,14 +30,13 @@ async def compare_retrieval(
     vector_cutoff: float = Query(0.40),
     cross_encoder_cutoff: float = Query(0.0),
     scope: str | None = Query(None),
-    as_of: datetime | None = Query(None),
     current_user: AuthenticatedUser = Depends(get_current_user),
     dense_retriever: DenseRetriever = Depends(get_dense_retriever),
     sparse_retriever: BM25Retriever = Depends(get_sparse_retriever),
     reranker: CrossEncoderReranker = Depends(get_reranker),
 ) -> RetrievalCompareResponse:
     """Compare candidate ranking across vector, sparse, RRF and cross-encoder rerankers."""
-    filter_criteria = current_user.to_retrieval_filter(scope, as_of_time=as_of)
+    filter_criteria = current_user.to_retrieval_filter(scope)
 
     # 1. Fetch dense candidates from Qdrant
     dense_candidates = await dense_retriever.search(

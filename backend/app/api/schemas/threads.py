@@ -68,8 +68,7 @@ class MessageItem(BaseModel):
 class ThreadSummary(BaseModel):
     thread_id: str
     title: str
-    acl_scope: str
-    as_of_date: str | None = None
+    shared_scope: str | None = None
     created_at: datetime
     updated_at: datetime
     message_count: int = 0
@@ -79,8 +78,7 @@ class ThreadSummary(BaseModel):
 class ThreadDetail(BaseModel):
     thread_id: str
     title: str
-    acl_scope: str
-    as_of_date: str | None = None
+    shared_scope: str | None = None
     created_at: datetime
     updated_at: datetime
     messages: list[MessageItem] = []
@@ -88,20 +86,17 @@ class ThreadDetail(BaseModel):
 
 class CreateThreadRequest(BaseModel):
     title: str | None = None
-    acl_scope: str = "data-platform"
-    as_of_date: str | None = None
+    shared_scope: str | None = None
 
 
 class UpdateThreadRequest(BaseModel):
     title: str | None = None
-    acl_scope: str | None = None
-    as_of_date: str | None = None
+    shared_scope: str | None = None
 
 
 class SendMessageRequest(BaseModel):
     content: str = Field(..., min_length=1)
-    acl_scope: str | None = None
-    as_of_date: str | None = None
+    shared_scope: str | None = None
     retrieval_mode: str | None = None  # "hybrid" | "vector" | "graph"
     use_cache: bool = True
     use_rerank: bool = True

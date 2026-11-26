@@ -1,14 +1,18 @@
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.core.acl import ACLScope
 from app.domain.provenance import Provenance
-from app.domain.temporal import TemporalBounds
+
+
+def _ingested_now() -> datetime:
+    return datetime.now(UTC)
 
 
 class Chunk(BaseModel):
-    """Atomic text chunk with embedding coordinates, temporal bounds, and ACL scope."""
+    """Atomic text chunk with ingestion metadata and ACL scope."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -19,7 +23,7 @@ class Chunk(BaseModel):
     tokens: int | None = None
     owner_user_id: str | None = None
     acl_scope: ACLScope = Field(default_factory=ACLScope.public)
-    temporal: TemporalBounds
+    ingested_at: datetime = Field(default_factory=_ingested_now)
     provenance: Provenance
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -35,9 +39,10 @@ class Document(BaseModel):
     chunks: list[Chunk] = Field(default_factory=list)
     owner_user_id: str | None = None
     acl_scope: ACLScope = Field(default_factory=ACLScope.public)
-    temporal: TemporalBounds
+    ingested_at: datetime = Field(default_factory=_ingested_now)
     provenance: Provenance
     version: int = 1
+    source_version: int = 1
     content_hash: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -54,7 +59,7 @@ class Entity(BaseModel):
     canonical_id: str | None = None
     source_chunk_ids: list[str] = Field(default_factory=list)
     acl_scope: ACLScope = Field(default_factory=ACLScope.public)
-    temporal: TemporalBounds
+    ingested_at: datetime = Field(default_factory=_ingested_now)
     provenance: Provenance
     properties: dict[str, Any] = Field(default_factory=dict)
 
@@ -72,7 +77,7 @@ class Relation(BaseModel):
     weight: float = 1.0
     source_chunk_ids: list[str] = Field(default_factory=list)
     acl_scope: ACLScope = Field(default_factory=ACLScope.public)
-    temporal: TemporalBounds
+    ingested_at: datetime = Field(default_factory=_ingested_now)
     provenance: Provenance
 
 

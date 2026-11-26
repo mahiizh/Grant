@@ -3,8 +3,8 @@
 This is the item-6b baseline harness. It ingests the corpus once into the
 isolated eval stores, then runs ``dense``, ``sparse``, ``hybrid``, ``full`` and
 ``graph_forced`` against the same golden split, ACL scope, and retrieval stack.
-Each configuration gets a cold on-disk LLM cache and exact/semantic response
-caching is disabled, so a cache hit cannot return results from another config.
+Each configuration gets a cold on-disk LLM cache and exact response caching
+is disabled, so a cache hit cannot return results from another config.
 ``--retrieval-only`` skips answer generation while retaining multi-turn
 query rewrites.
 """
@@ -22,7 +22,6 @@ from app.evaluation.bootstrap import (
     paired_bootstrap_difference,
     paired_sd,
 )
-from app.evaluation.calibration import load_agreement
 from app.evaluation.datasets import SplitType
 from app.evaluation.runner import BenchmarkReport, diff_metrics
 from app.orchestration.state import RETRIEVAL_CONFIGS, RetrievalConfig
@@ -99,7 +98,6 @@ def _print_comparison(
     categories = sorted(
         {row["category"] for report in reports.values() for row in report.per_question}
     )
-    agreement = load_agreement()
     judge_enabled = any(report.judge_model for report in reports.values())
 
     print()
@@ -116,17 +114,10 @@ def _print_comparison(
         print(f"Git commit(s): {', '.join(sorted(git_shas))}")
     if judge_enabled:
         models = sorted({report.judge_model for report in reports.values() if report.judge_model})
-        if agreement is not None:
-            print(
-                f"Judge: model={', '.join(models)} threshold={agreement.threshold} "
-                f"agreement={agreement.raw_agreement:.3f} "
-                f"kappa={agreement.cohen_kappa:.3f} (n={agreement.n})"
-            )
-        else:
-            print(
-                f"Judge: model={', '.join(models)} — NOT CALIBRATED. "
-                "Run `make calibrate-judge` before trusting judge columns."
-            )
+        print(
+            f"Judge: model={', '.join(models)} "
+            "(uncalibrated; treat judge columns as directional only)"
+        )
     print("=" * 120)
     print("Retrieval quality:")
     print("| category | " + " | ".join(RETRIEVAL_CONFIGS) + " |")
@@ -349,7 +340,10 @@ def _write_reports(
 
 
 async def _run(args: argparse.Namespace) -> int:
-    dataset = await prepare_eval()
+    dataset = await prepare_eval(
+        corpus_dir=getattr(args, "corpus_dir", None),
+        golden_dir=getattr(args, "golden_dir", None),
+    )
     split: SplitType | None = None if args.split == "all" else args.split
 
     reports: dict[RetrievalConfig, BenchmarkReport] = {}
@@ -383,6 +377,16 @@ async def _run(args: argparse.Namespace) -> int:
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Compare dense, sparse, hybrid, full, and graph_forced retrieval configurations."
+    )
+    parser.add_argument(
+        "--corpus-dir",
+        default=None,
+        help="Corpus directory to ingest. Defaults to EVAL_CORPUS_DIR.",
+    )
+    parser.add_argument(
+        "--golden-dir",
+        default=None,
+        help="Directory containing golden *.jsonl files. Defaults to EVAL_GOLDEN_DIR.",
     )
     parser.add_argument(
         "--split",

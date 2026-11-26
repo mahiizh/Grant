@@ -1,8 +1,10 @@
+import argparse
 import asyncio
 import logging
 import sys
 from pathlib import Path
 
+from app.core.config import get_settings
 from app.db.postgres import announce_database_identity, get_session, verify_schema
 from app.indexing.neo4j_indexer import Neo4jIndexer
 from app.indexing.outbox_worker import OutboxWorker
@@ -14,14 +16,24 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 
-async def run_corpus_ingestion(corpus_dir: str = "corpus") -> None:
-    """Ingest all markdown documents in the corpus directory into PostgreSQL and sync stores."""
-    root_path = Path(__file__).resolve().parent.parent.parent.parent
-    c_dir = root_path / corpus_dir
+def resolve_corpus_dir(corpus_dir: str | None = None) -> Path:
+    """Resolve the user-supplied corpus path (CLI argument or ``CORPUS_DIR``)."""
+    configured = corpus_dir or get_settings().CORPUS_DIR
+    if not configured:
+        raise ValueError("No corpus directory supplied. Pass --corpus-dir or set CORPUS_DIR.")
+    path = Path(configured).expanduser().resolve()
+    if not path.is_dir():
+        raise FileNotFoundError(f"Corpus directory not found at: {path}")
+    return path
 
-    if not c_dir.exists():
-        logger.error("Corpus directory not found at: %s", c_dir)
-        sys.exit(1)
+
+async def run_corpus_ingestion(corpus_dir: str | None = None) -> None:
+    """Ingest all markdown documents in a user-supplied corpus directory."""
+    try:
+        c_dir = resolve_corpus_dir(corpus_dir)
+    except (ValueError, FileNotFoundError) as exc:
+        logger.error("%s", exc)
+        sys.exit(2)
 
     await announce_database_identity()
     await verify_schema()
@@ -75,5 +87,17 @@ async def run_corpus_ingestion(corpus_dir: str = "corpus") -> None:
     print("=" * 60)
 
 
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Ingest a user-supplied markdown corpus.")
+    parser.add_argument(
+        "--corpus-dir",
+        default=None,
+        help="Corpus directory. Defaults to CORPUS_DIR.",
+    )
+    args = parser.parse_args(argv)
+    asyncio.run(run_corpus_ingestion(args.corpus_dir))
+    return 0
+
+
 if __name__ == "__main__":
-    asyncio.run(run_corpus_ingestion())
+    sys.exit(main())

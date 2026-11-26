@@ -1,5 +1,4 @@
 import logging
-from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -28,16 +27,6 @@ def _get_driver():
     )
 
 
-def _parse_as_of(as_of: str | None) -> datetime | None:
-    if not as_of:
-        return None
-    try:
-        parsed = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"Invalid as_of timestamp: {as_of}") from exc
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
-
-
 def _with_source_kind(
     predicate: str,
     params: dict[str, Any],
@@ -57,13 +46,12 @@ def _with_source_kind(
 @router.get("", response_model=GraphResponse)
 async def get_graph(
     scope: str | None = Query(None),
-    as_of: str | None = Query(None),
     limit: int = Query(100),
     source_kind: str | None = Query(None, pattern="^(document|web|chat|query|answer)$"),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> GraphResponse:
     """Retrieve ACL-filtered knowledge graph nodes and relationships from Neo4j."""
-    filter_criteria = current_user.to_retrieval_filter(scope, as_of_time=_parse_as_of(as_of))
+    filter_criteria = current_user.to_retrieval_filter(scope)
     node_pred, params = filter_criteria.to_cypher_predicate("n")
     rel_pred, _ = filter_criteria.to_cypher_predicate("r")
     node_pred = _with_source_kind(node_pred, params, "n", source_kind)
@@ -80,7 +68,7 @@ async def get_graph(
             WHERE {node_pred}
             RETURN n.id AS id, n.name AS name, n.entity_type AS type,
                    coalesce(n.aliases, []) AS aliases,
-                   n.valid_from AS valid_from, n.valid_to AS valid_to,
+                   n.ingested_at AS ingested_at,
                    n.source_kind AS source_kind,
                    coalesce(n.source_kinds, []) AS source_kinds,
                    count {{ (n)--() }} AS degree
@@ -102,8 +90,7 @@ async def get_graph(
                         name=node_name,
                         type=r.get("type") or "CONCEPT",
                         aliases=[str(a) for a in (r.get("aliases") or []) if str(a).strip()],
-                        valid_from=r.get("valid_from"),
-                        valid_to=r.get("valid_to"),
+                        ingested_at=r.get("ingested_at"),
                         degree=int(r.get("degree") or 0),
                         source_kind=r.get("source_kind"),
                         source_kinds=[
@@ -119,7 +106,7 @@ async def get_graph(
             MATCH (a:Entity)-[r]->(b:Entity)
             WHERE a.id IN $node_ids AND b.id IN $node_ids AND {rel_pred}
             RETURN a.id AS source, b.id AS target, type(r) AS label,
-                   r.valid_from AS valid_from, r.valid_to AS valid_to
+                   r.ingested_at AS ingested_at
             LIMIT $limit
             """
             res_rels = await session.run(rel_cypher, node_ids=list(node_ids), limit=limit, **params)
@@ -131,8 +118,7 @@ async def get_graph(
                         source=r["source"],
                         target=r["target"],
                         label=r["label"],
-                        valid_from=r.get("valid_from"),
-                        valid_to=r.get("valid_to"),
+                        ingested_at=r.get("ingested_at"),
                     )
                 )
 
@@ -152,12 +138,11 @@ async def get_node_neighbors(
     node_id: str,
     depth: int = Query(1),
     scope: str | None = Query(None),
-    as_of: str | None = Query(None),
     source_kind: str | None = Query(None, pattern="^(document|web|chat|query|answer)$"),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> GraphNeighborsResponse:
     """Expand an ACL-filtered subgraph neighborhood centered on node_id in Neo4j."""
-    filter_criteria = current_user.to_retrieval_filter(scope, as_of_time=_parse_as_of(as_of))
+    filter_criteria = current_user.to_retrieval_filter(scope)
     center_pred, params = filter_criteria.to_cypher_predicate("n")
     neighbor_pred, _ = filter_criteria.to_cypher_predicate("b")
     rel_pred, _ = filter_criteria.to_cypher_predicate("r")
@@ -176,7 +161,7 @@ async def get_node_neighbors(
             WHERE (n.id = $id OR toLower(n.name) = toLower($id)) AND {center_pred}
             RETURN n.id AS id, n.name AS name, n.entity_type AS type,
                    coalesce(n.aliases, []) AS aliases,
-                   n.valid_from AS valid_from, n.valid_to AS valid_to,
+                   n.ingested_at AS ingested_at,
                    n.source_kind AS source_kind,
                    coalesce(n.source_kinds, []) AS source_kinds,
                    count {{ (n)--() }} AS degree
@@ -193,8 +178,7 @@ async def get_node_neighbors(
                     name=center["name"],
                     type=center["type"] or "CONCEPT",
                     aliases=[str(a) for a in (center.get("aliases") or []) if str(a).strip()],
-                    valid_from=center.get("valid_from"),
-                    valid_to=center.get("valid_to"),
+                    ingested_at=center.get("ingested_at"),
                     degree=int(center.get("degree") or 0),
                     source_kind=center.get("source_kind"),
                     source_kinds=[
@@ -211,7 +195,7 @@ async def get_node_neighbors(
             WHERE a.id = $id AND {neighbor_pred} AND {rel_pred}
             RETURN b.id AS id, b.name AS name, b.entity_type AS type,
                    coalesce(b.aliases, []) AS aliases,
-                   b.valid_from AS valid_from, b.valid_to AS valid_to,
+                   b.ingested_at AS ingested_at,
                    b.source_kind AS source_kind,
                    coalesce(b.source_kinds, []) AS source_kinds,
                    count {{ (b)--() }} AS degree,
@@ -231,8 +215,7 @@ async def get_node_neighbors(
                             name=row["name"],
                             type=row["type"] or "CONCEPT",
                             aliases=[str(a) for a in (row.get("aliases") or []) if str(a).strip()],
-                            valid_from=row.get("valid_from"),
-                            valid_to=row.get("valid_to"),
+                            ingested_at=row.get("ingested_at"),
                             degree=int(row.get("degree") or 0),
                             source_kind=row.get("source_kind"),
                             source_kinds=[
@@ -265,12 +248,11 @@ async def get_graph_path(
     from_node: str = Query(..., alias="from"),
     to_node: str = Query(..., alias="to"),
     scope: str | None = Query(None),
-    as_of: str | None = Query(None),
     source_kind: str | None = Query(None, pattern="^(document|web|chat|query|answer)$"),
     current_user: AuthenticatedUser = Depends(get_current_user),
 ) -> GraphPathResponse:
-    """Compute the shortest ACL-permitted bi-temporal path between two nodes in Neo4j."""
-    filter_criteria = current_user.to_retrieval_filter(scope, as_of_time=_parse_as_of(as_of))
+    """Compute the shortest ACL-permitted path between two nodes in Neo4j."""
+    filter_criteria = current_user.to_retrieval_filter(scope)
     node_pred, params = filter_criteria.to_cypher_predicate("n")
     rel_pred, _ = filter_criteria.to_cypher_predicate("r")
     start_pred, _ = filter_criteria.to_cypher_predicate("a")

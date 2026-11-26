@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 
 from app.core.acl import ACLScope
-from app.domain import Chunk, Provenance, TemporalBounds
+from app.domain import Chunk, Provenance
 from app.domain.ids import generate_chunk_id
 from app.ingestion.parse import ParsedDocument
 
@@ -16,15 +16,10 @@ def chunk_parsed_document(
     parsed: ParsedDocument,
     source_uri: str,
     acl_scope: ACLScope | None = None,
-    valid_to: datetime | None = None,
 ) -> list[Chunk]:
     """Structure-aware chunker converting document sections into typed Domain Chunks."""
     scope = acl_scope or ACLScope.public()
-    effective_valid_to = valid_to if valid_to is not None else parsed.valid_to
-    temporal = TemporalBounds(
-        valid_from=parsed.valid_from or datetime.now(UTC),
-        valid_to=effective_valid_to,
-    )
+    ingested_at = datetime.now(UTC)
     prov = Provenance.from_document(
         source_uri=source_uri,
         source_version=1,
@@ -52,7 +47,7 @@ def chunk_parsed_document(
             text=body,
             tokens=estimate_tokens(body),
             acl_scope=scope,
-            temporal=temporal,
+            ingested_at=ingested_at,
             provenance=prov,
             metadata={
                 "heading": section_heading,

@@ -37,15 +37,10 @@ class DocumentRecord(Base):
     content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
 
-    # ACL Scope
-    acl_tenant_id: Mapped[str] = mapped_column(String(64), default="default", index=True)
-    acl_allowed_roles: Mapped[list[str]] = mapped_column(JSON, default=list)
-    acl_allowed_groups: Mapped[list[str]] = mapped_column(JSON, default=list)
-    acl_is_public: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    # ACL Scope: owner-private or shared. NULL/NULL means public.
+    shared_scope: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
 
-    # Temporal Bounds
-    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # Ingestion metadata
     ingested_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False
     )
@@ -87,15 +82,8 @@ class ChunkRecord(Base):
     tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
 
-    # ACL Scope
-    acl_tenant_id: Mapped[str] = mapped_column(String(64), default="default", index=True)
-    acl_allowed_roles: Mapped[list[str]] = mapped_column(JSON, default=list)
-    acl_allowed_groups: Mapped[list[str]] = mapped_column(JSON, default=list)
-    acl_is_public: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
-
-    # Temporal Bounds
-    valid_from: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    valid_to: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # ACL Scope: owner-private or shared. NULL/NULL means public.
+    shared_scope: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
 
     # Provenance
     source_tier: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -143,8 +131,7 @@ class ThreadRecord(Base):
     thread_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     title: Mapped[str] = mapped_column(String(256), nullable=False)
     owner_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
-    acl_scope: Mapped[str] = mapped_column(String(64), default="data-platform", nullable=False)
-    as_of_date: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    shared_scope: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, nullable=False, index=True
     )

@@ -22,26 +22,18 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/evals", tags=["evals"])
 
 
-def _golden_path() -> Path:
+def _golden_path() -> Path | None:
+    """Return the user-configured golden file, never a bundled fallback."""
     configured = get_settings().EVAL_GOLDEN_DIR
-    if configured:
-        return Path(configured) / "questions.jsonl"
-    return (
-        Path(__file__).resolve().parent.parent.parent.parent.parent
-        / "evals"
-        / "golden"
-        / "questions.jsonl"
-    )
-
-
-GOLDEN_PATH = _golden_path()
+    return Path(configured).expanduser().resolve() / "questions.jsonl" if configured else None
 
 
 def _read_golden_questions() -> list[GoldenPair]:
-    if not GOLDEN_PATH.exists():
+    golden_path = _golden_path()
+    if golden_path is None or not golden_path.exists():
         return []
     pairs = []
-    with open(GOLDEN_PATH, encoding="utf-8") as f:
+    with open(golden_path, encoding="utf-8") as f:
         for line in f:
             if not line.strip():
                 continue
@@ -75,6 +67,12 @@ async def add_golden_pair(
     request: AddGoldenPairRequest,
 ) -> GoldenPair:
     """Add a new verified question-answer ground truth pair to the dataset."""
+    golden_path = _golden_path()
+    if golden_path is None:
+        raise HTTPException(
+            status_code=400,
+            detail="EVAL_GOLDEN_DIR must be configured to add golden pairs.",
+        )
     pair_id = f"eval_{request.category}_{uuid.uuid4().hex[:6]}"
     pair_dict = {
         "id": pair_id,
@@ -89,8 +87,8 @@ async def add_golden_pair(
         "split": request.split,
         "depends_on": request.depends_on,
     }
-    GOLDEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with open(GOLDEN_PATH, "a", encoding="utf-8") as f:
+    golden_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(golden_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(pair_dict) + "\n")
 
     return GoldenPair(
@@ -115,11 +113,12 @@ async def run_golden_evaluation(
     started_at = datetime.now(UTC).isoformat()
     run_id = f"run_{uuid.uuid4().hex[:8]}"
 
-    if not GOLDEN_PATH.exists():
+    golden_path = _golden_path()
+    if golden_path is None or not golden_path.exists():
         raise HTTPException(status_code=404, detail="Golden questions file not found.")
 
     split = None if request.split == "all" else request.split
-    dataset = GoldenDataset.load_from_jsonl(GOLDEN_PATH)
+    dataset = GoldenDataset.load_from_jsonl(golden_path)
     if split is not None:
         dataset = dataset.filter_by_split(split)
     if request.sample_size:

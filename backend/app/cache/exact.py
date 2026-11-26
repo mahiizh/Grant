@@ -147,7 +147,8 @@ class ExactCache:
                 "is_abstention": answer.is_abstention,
                 "source_kind": answer.source_kind,
                 "web_sources": list(answer.web_sources or []),
-                "tenant_id": acl_scope.tenant_id,
+                "acl_scope": acl_scope.model_dump(mode="json"),
+                "shared_scope": acl_scope.shared_scope,
                 "owner_user_id": owner_user_id,
             }
 
@@ -176,18 +177,30 @@ class ExactCache:
             logger.error("Error invalidating exact cache for doc %s: %s", doc_id, e)
         return count
 
-    def invalidate_tenant(self, tenant_id: str) -> int:
-        """Purge cached responses for a tenant."""
+    def invalidate_shared_scope(self, shared_scope: str) -> int:
+        """Purge cached responses written under a named shared scope."""
+        return self._invalidate_field("shared_scope", shared_scope)
+
+    def invalidate_owner(self, owner_user_id: str) -> int:
+        """Purge cached responses written for one owner."""
+        return self._invalidate_field("owner_user_id", owner_user_id)
+
+    def _invalidate_field(self, field: str, value: str) -> int:
         if not self.enabled or not self.client:
             return 0
         count = 0
         for k in self.client.scan_iter("exact:*"):
             raw = self.client.get(k)
-            if raw:
-                raw_str = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
-                if f'"tenant_id": "{tenant_id}"' in raw_str:
-                    self.client.delete(k)
-                    count += 1
+            if not raw:
+                continue
+            raw_str = raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+            try:
+                data = json.loads(raw_str)
+            except json.JSONDecodeError:
+                continue
+            if data.get(field) == value:
+                self.client.delete(k)
+                count += 1
         return count
 
     def clear(self) -> None:
