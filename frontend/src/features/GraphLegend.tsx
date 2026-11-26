@@ -9,9 +9,10 @@ export function GraphLegend({ colorBy }: LegendProps) {
   const [collapsed, setCollapsed] = useState(false);
 
   const typeItems = [
+    { label: "Documents [D]", color: "#38BDF8" }, // sky
+    { label: "Entities [E]", color: "#8B5CF6" }, // violet
+    { label: "Queries [Q]", color: "#F472B6" }, // pink
     { label: "Mechanisms [M]", color: "#F59E0B" }, // amber
-    { label: "Databases [D]", color: "#38BDF8" }, // sky
-    { label: "Teams & People [T/P]", color: "#8B5CF6" }, // violet
     { label: "Services [S]", color: "#10B981" }, // emerald
   ];
 

@@ -3,6 +3,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs"
 import { Badge } from "../components/ui/badge";
 import { Button } from "../components/ui/button";
 import { GraphLink, GraphNode } from "../types/graph";
+import { useEntityChunks, useQueryDetail } from "../lib/api/hooks/useGraph";
 import {
   Sparkles,
   ArrowRight,
@@ -11,6 +12,8 @@ import {
   Check,
   X,
   Compass,
+  FileText,
+  MessageSquare,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -34,13 +37,29 @@ export function NodeInspectorPanel({
   const [selectedTarget, setSelectedTarget] = useState("");
   const [copiedCypher, setCopiedCypher] = useState(false);
 
+  // Step 7 detail loads are keyed by the selected node's graph kind. Both hooks
+  // are always called so hook order is stable when the selection changes.
+  const entityId = node?.node_kind === "entity" ? node.id : null;
+  const queryId = node?.node_kind === "query" ? node.id : null;
+  const {
+    data: chunks = [],
+    isLoading: chunksLoading,
+    error: chunksError,
+  } = useEntityChunks(entityId);
+  const {
+    data: queryDetail,
+    isLoading: detailLoading,
+    error: detailError,
+  } = useQueryDetail(queryId);
+
   if (!node) {
     return (
       <div className="h-full flex flex-col items-center justify-center p-6 text-center text-zinc-500 select-none bg-zinc-950">
         <Compass className="h-10 w-10 text-zinc-700 mb-3 animate-pulse" />
         <h3 className="text-sm font-medium text-zinc-300">No Node Selected</h3>
         <p className="text-xs text-zinc-500 mt-1 max-w-xs leading-relaxed">
-          Select a node from the canvas, table, or search to inspect its neighborhood and provenance.
+          Select a document, entity or query from the canvas, table or search to inspect its
+          neighborhood and provenance.
         </p>
       </div>
     );
@@ -60,6 +79,9 @@ export function NodeInspectorPanel({
     person: "graph",
     team: "graph",
     service: "success",
+    document: "vector",
+    query: "warning",
+    entity: "graph",
   };
 
   const handleCopyCypher = () => {
@@ -81,6 +103,9 @@ RETURN n, r, m LIMIT 50;`;
               {node.name}
             </h2>
             <Badge variant={typeVariants[node.type] || "secondary"} className="text-[10px] uppercase font-mono">
+              {node.node_kind}
+            </Badge>
+            <Badge variant="outline" className="text-[10px] font-mono text-zinc-400">
               {node.type}
             </Badge>
           </div>
@@ -112,6 +137,22 @@ RETURN n, r, m LIMIT 50;`;
             >
               Overview
             </TabsTrigger>
+            {node.node_kind === "entity" && (
+              <TabsTrigger
+                value="chunks"
+                className="text-xs data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-amber-400 rounded-none px-0 pb-2"
+              >
+                Chunk Texts ({chunks.length})
+              </TabsTrigger>
+            )}
+            {node.node_kind === "query" && (
+              <TabsTrigger
+                value="answer"
+                className="text-xs data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-amber-400 rounded-none px-0 pb-2"
+              >
+                Answer
+              </TabsTrigger>
+            )}
             <TabsTrigger
               value="relations"
               className="text-xs data-[state=active]:bg-transparent data-[state=active]:border-b-2 data-[state=active]:border-amber-400 data-[state=active]:text-amber-400 rounded-none px-0 pb-2"
@@ -149,7 +190,7 @@ RETURN n, r, m LIMIT 50;`;
               </div>
               <div className="flex justify-between text-[10px] font-mono text-zinc-500">
                 <span>Source: {node.source_kind || "unknown"}</span>
-                <span>Tier {node.tier}</span>
+                <span>Node: {node.node_kind}</span>
               </div>
             </div>
 
@@ -160,18 +201,88 @@ RETURN n, r, m LIMIT 50;`;
               </div>
               <div className="grid grid-cols-2 gap-2 text-center font-mono">
                 <div className="p-2 rounded border border-zinc-800 bg-zinc-900/30">
-                  <div className="text-zinc-400 text-[10px]">Downstream Targets</div>
+                  <div className="text-zinc-400 text-[10px]">Outgoing Edges</div>
                   <div className="text-base font-semibold text-zinc-100 tabular-nums">{outgoing.length}</div>
                 </div>
                 <div className="p-2 rounded border border-zinc-800 bg-zinc-900/30">
-                  <div className="text-zinc-400 text-[10px]">Upstream Callers</div>
+                  <div className="text-zinc-400 text-[10px]">Incoming Edges</div>
                   <div className="text-base font-semibold text-zinc-100 tabular-nums">{incoming.length}</div>
                 </div>
               </div>
             </div>
           </TabsContent>
 
-          {/* Tab 2: Relations */}
+          {/* Entity click: chunk texts from Postgres mentions → Qdrant payloads */}
+          <TabsContent value="chunks" className="space-y-3 m-0">
+            <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase text-zinc-500">
+              <FileText className="h-3 w-3" /> Chunks mentioning this entity
+            </div>
+            {chunksLoading && <p className="text-zinc-500">Loading chunk texts…</p>}
+            {chunksError && (
+              <p className="text-rose-400">Failed to load chunk texts: {String(chunksError)}</p>
+            )}
+            {!chunksLoading && !chunksError && chunks.length === 0 && (
+              <p className="text-zinc-500">No permitted chunks mention this entity.</p>
+            )}
+            {chunks.map((chunk) => (
+              <div
+                key={chunk.chunk_id}
+                className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40 space-y-2"
+              >
+                <div className="flex items-center justify-between gap-2 font-mono text-[10px]">
+                  <span className="text-sky-400 truncate">{chunk.title || chunk.doc_id || "Untitled"}</span>
+                  <span className="text-zinc-500 shrink-0">×{chunk.mention_count}</span>
+                </div>
+                <p className="text-zinc-300 leading-relaxed whitespace-pre-wrap">{chunk.text}</p>
+                <div className="font-mono text-[10px] text-zinc-500 flex flex-wrap gap-2">
+                  <span>{chunk.chunk_id}</span>
+                  <span>·</span>
+                  <span>{chunk.source_kind || "unknown source"}</span>
+                </div>
+              </div>
+            ))}
+          </TabsContent>
+
+          {/* Query click: answer, source and answer path */}
+          <TabsContent value="answer" className="space-y-3 m-0">
+            <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase text-zinc-500">
+              <MessageSquare className="h-3 w-3" /> Stored answer
+            </div>
+            {detailLoading && <p className="text-zinc-500">Loading answer…</p>}
+            {detailError && (
+              <p className="text-rose-400">Failed to load answer: {String(detailError)}</p>
+            )}
+            {queryDetail && (
+              <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40 space-y-3">
+                <p className="text-zinc-200 leading-relaxed whitespace-pre-wrap">
+                  {queryDetail.answer}
+                </p>
+                <div className="flex items-center justify-between py-1 border-t border-zinc-800/60">
+                  <span className="text-zinc-400">Source</span>
+                  <Badge variant="outline" className="font-mono text-[10px] text-amber-400">
+                    {queryDetail.source}
+                  </Badge>
+                </div>
+                <div className="flex items-center justify-between py-1 border-t border-zinc-800/60">
+                  <span className="text-zinc-400">Path</span>
+                  <span className="font-mono text-[10px] text-zinc-200">
+                    {queryDetail.path.length ? queryDetail.path.join(" → ") : "—"}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between py-1 border-t border-zinc-800/60">
+                  <span className="text-zinc-400">Top score</span>
+                  <span className="font-mono text-[10px] text-zinc-200 tabular-nums">
+                    {queryDetail.top_score.toFixed(3)}
+                  </span>
+                </div>
+              </div>
+            )}
+            {!detailLoading && !detailError && !queryDetail && (
+              <p className="text-zinc-500">No answer is stored for this query.</p>
+            )}
+          </TabsContent>
+
+          {/* Tab: Relations */}
           <TabsContent value="relations" className="space-y-4 m-0">
             {outgoing.length > 0 && (
               <div className="space-y-1.5">
@@ -191,6 +302,7 @@ RETURN n, r, m LIMIT 50;`;
                         <div className="flex items-center gap-1.5 min-w-0">
                           <span className="text-[10px] font-mono text-amber-400 font-semibold">
                             {l.relation}
+                            {l.count != null ? ` (${l.count})` : ""}
                           </span>
                           <span className="text-zinc-500">→</span>
                           <span className="text-zinc-200 group-hover:text-amber-300 font-medium truncate">
@@ -227,6 +339,7 @@ RETURN n, r, m LIMIT 50;`;
                           <span className="text-zinc-500">→</span>
                           <span className="text-[10px] font-mono text-zinc-400">
                             {l.relation}
+                            {l.count != null ? ` (${l.count})` : ""}
                           </span>
                         </div>
                         <ArrowRight className="h-3 w-3 text-zinc-500 group-hover:text-zinc-300 shrink-0" />
@@ -238,7 +351,7 @@ RETURN n, r, m LIMIT 50;`;
             )}
           </TabsContent>
 
-          {/* Tab 3: Provenance */}
+          {/* Tab: Provenance */}
           <TabsContent value="provenance" className="space-y-3 m-0">
             <div className="p-3 rounded-lg border border-zinc-800 bg-zinc-900/40 space-y-2.5">
               <div className="flex items-center justify-between">
@@ -268,8 +381,8 @@ RETURN n, r, m LIMIT 50;`;
               </div>
 
               <div className="flex items-center justify-between py-1 border-t border-zinc-800/60">
-                <span className="text-zinc-400">Extraction Method</span>
-                <span className="font-mono text-zinc-200">GraphRAG LLM Triplet Parser</span>
+                <span className="text-zinc-400">Node Kind</span>
+                <span className="font-mono text-zinc-200">{node.node_kind}</span>
               </div>
             </div>
           </TabsContent>
@@ -278,37 +391,39 @@ RETURN n, r, m LIMIT 50;`;
 
       {/* Bottom Actions Bar */}
       <div className="p-4 border-t border-zinc-800/80 bg-zinc-900/40 space-y-3 shrink-0">
-        {/* Find Path To selector */}
-        <div className="flex items-center gap-2">
-          <select
-            value={selectedTarget}
-            onChange={(e) => setSelectedTarget(e.target.value)}
-            className="flex-1 h-7 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] font-mono text-zinc-300 px-2 focus:outline-none"
-          >
-            <option value="">Find path to entity...</option>
-            {nodes
-              .filter((n) => n.id !== node.id)
-              .map((n) => (
-                <option key={n.id} value={n.id}>
-                  {n.name} ({n.type})
-                </option>
-              ))}
-          </select>
+        {/* Entity-only reasoning path controls */}
+        {node.node_kind === "entity" && (
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedTarget}
+              onChange={(e) => setSelectedTarget(e.target.value)}
+              className="flex-1 h-7 rounded-md bg-zinc-900 border border-zinc-800 text-[11px] font-mono text-zinc-300 px-2 focus:outline-none"
+            >
+              <option value="">Find path to entity...</option>
+              {nodes
+                .filter((n) => n.node_kind === "entity" && n.id !== node.id)
+                .map((n) => (
+                  <option key={n.id} value={n.id}>
+                    {n.name} ({n.type})
+                  </option>
+                ))}
+            </select>
 
-          <Button
-            size="sm"
-            disabled={!selectedTarget}
-            onClick={() => {
-              if (selectedTarget) {
-                onFindPath(node.id, selectedTarget);
-              }
-            }}
-            className="h-7 text-xs bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium px-2.5 cursor-pointer disabled:opacity-40"
-          >
-            <Sparkles className="h-3 w-3 mr-1" />
-            Path
-          </Button>
-        </div>
+            <Button
+              size="sm"
+              disabled={!selectedTarget}
+              onClick={() => {
+                if (selectedTarget) {
+                  onFindPath(node.id, selectedTarget);
+                }
+              }}
+              className="h-7 text-xs bg-amber-500 hover:bg-amber-400 text-zinc-950 font-medium px-2.5 cursor-pointer disabled:opacity-40"
+            >
+              <Sparkles className="h-3 w-3 mr-1" />
+              Path
+            </Button>
+          </div>
+        )}
 
         {/* Query & Filter buttons */}
         <div className="flex items-center gap-2">

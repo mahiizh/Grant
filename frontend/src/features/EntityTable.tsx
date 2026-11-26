@@ -28,7 +28,15 @@ export function EntityTable({ nodes, onSelectNode, selectedNodeId }: EntityTable
     person: "graph",
     team: "graph",
     service: "success",
+    document: "vector",
+    query: "warning",
+    entity: "graph",
   };
+
+  const availableTypes = useMemo(
+    () => ["all", ...Array.from(new Set(nodes.map((n) => n.type)))],
+    [nodes]
+  );
 
   const processedNodes = useMemo(() => {
     return nodes
@@ -81,14 +89,14 @@ export function EntityTable({ nodes, onSelectNode, selectedNodeId }: EntityTable
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search entities..."
+              placeholder="Search nodes..."
               className="bg-zinc-900 border border-zinc-800 rounded-md pl-8 pr-3 py-1 text-xs text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-zinc-700 w-48 font-sans"
             />
           </div>
 
           {/* Type Filter Pills */}
           <div className="flex items-center gap-1 bg-zinc-900 border border-zinc-800 rounded-md p-0.5">
-            {["all", "mechanism", "database", "service", "team", "person"].map((t) => (
+            {availableTypes.map((t) => (
               <button
                 key={t}
                 onClick={() => setSelectedType(t)}
@@ -118,7 +126,7 @@ export function EntityTable({ nodes, onSelectNode, selectedNodeId }: EntityTable
         </div>
 
         <span className="text-[11px] font-mono text-zinc-500 tabular-nums">
-          {processedNodes.length} entities (virtualized)
+          {processedNodes.length} nodes (virtualized)
         </span>
       </div>
 
@@ -154,7 +162,7 @@ export function EntityTable({ nodes, onSelectNode, selectedNodeId }: EntityTable
         <div ref={parentRef} className="flex-1 overflow-y-auto">
           {processedNodes.length === 0 ? (
             <div className="text-center py-8 text-zinc-500 font-mono text-xs">
-              No matching entities found in knowledge graph.
+              No matching nodes found in knowledge graph.
             </div>
           ) : (
             <div

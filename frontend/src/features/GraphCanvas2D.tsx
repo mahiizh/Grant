@@ -23,6 +23,9 @@ const TYPE_COLORS: Record<string, string> = {
   person: "#8B5CF6",
   team: "#8B5CF6",
   service: "#10B981",
+  document: "#38BDF8",
+  query: "#F472B6",
+  entity: "#8B5CF6",
 };
 
 const TIER_COLORS: Record<number, string> = {
@@ -37,6 +40,9 @@ const GLYPH_MAP: Record<string, string> = {
   person: "P",
   team: "T",
   service: "S",
+  document: "D",
+  query: "Q",
+  entity: "E",
 };
 
 export function GraphCanvas2D({

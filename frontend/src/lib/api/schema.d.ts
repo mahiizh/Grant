@@ -101,7 +101,7 @@ export interface paths {
         };
         /**
          * Get Graph
-         * @description Retrieve ACL-filtered knowledge graph nodes and relationships from Neo4j.
+         * @description Retrieve the ACL-filtered Document/Entity/Query graph from Neo4j.
          */
         get: operations["get_graph_api_v1_graph_get"];
         put?: never;
@@ -121,9 +121,57 @@ export interface paths {
         };
         /**
          * Get Node Neighbors
-         * @description Expand an ACL-filtered subgraph neighborhood centered on node_id in Neo4j.
+         * @description Expand the ACL-filtered one-hop neighborhood of any visible graph node.
          */
         get: operations["get_node_neighbors_api_v1_graph_nodes__node_id__neighbors_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/graph/entities/{entity_id}/chunks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Entity Chunks
+         * @description Return chunk texts for an entity via Postgres mentions and Qdrant payloads.
+         *
+         *     Every Qdrant payload is rechecked against the caller's ACL before its text
+         *     is returned, so an entity shared across owners cannot leak another owner's
+         *     chunk content through the graph UI.
+         */
+        get: operations["get_entity_chunks_api_v1_graph_entities__entity_id__chunks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/graph/queries/{query_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Query Detail
+         * @description Return a Query node's stored answer, source and path to the UI.
+         *
+         *     Query/Answer rows carry an owner_user_id; only that owner (or an admin) may
+         *     read them. ``scope`` is validated so a caller cannot widen the boundary by
+         *     naming a shared scope they do not hold.
+         */
+        get: operations["get_query_detail_api_v1_graph_queries__query_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -141,7 +189,7 @@ export interface paths {
         };
         /**
          * Get Graph Path
-         * @description Compute the shortest ACL-permitted path between two nodes in Neo4j.
+         * @description Compute the shortest ACL-permitted path between two entities in Neo4j.
          */
         get: operations["get_graph_path_api_v1_graph_path_get"];
         put?: never;
@@ -167,7 +215,7 @@ export interface paths {
         put?: never;
         /**
          * Upload Document
-         * @description Upload document for parsing, chunking, outbox staging, and automatic indexing.
+         * @description Persist the upload and enqueue a job; the worker does all heavy work.
          */
         post: operations["upload_document_api_v1_documents_post"];
         delete?: never;
@@ -185,7 +233,7 @@ export interface paths {
         };
         /**
          * Get Document Status
-         * @description Get current ingestion pipeline progress for document.
+         * @description Get current ingestion job progress for a document or job id.
          */
         get: operations["get_document_status_api_v1_documents__document_id__status_get"];
         put?: never;
@@ -812,6 +860,8 @@ export interface components {
         DocumentStatusResponse: {
             /** Id */
             id: string;
+            /** Job Id */
+            job_id?: string | null;
             /** Status */
             status: string;
             /** Active Step */
@@ -848,16 +898,22 @@ export interface components {
              * @default unknown
              */
             extraction_status: string;
+            /** Error */
+            error?: string | null;
+            /** Ingest Ms */
+            ingest_ms?: number | null;
         };
         /** DocumentUploadResponse */
         DocumentUploadResponse: {
             /** Document Id */
             document_id: string;
+            /** Job Id */
+            job_id: string;
             /** Title */
             title: string;
             /**
              * Status
-             * @default ingesting
+             * @default queued
              */
             status: string;
             /**
@@ -994,6 +1050,36 @@ export interface components {
              */
             complexity: string;
         };
+        /**
+         * GraphChunkItem
+         * @description One chunk text from Qdrant for a Postgres entity mention.
+         */
+        GraphChunkItem: {
+            /** Chunk Id */
+            chunk_id: string;
+            /** Doc Id */
+            doc_id?: string | null;
+            /** Text */
+            text: string;
+            /** Source Kind */
+            source_kind?: string | null;
+            /** Title */
+            title?: string | null;
+            /** Url */
+            url?: string | null;
+            /**
+             * Mention Count
+             * @default 0
+             */
+            mention_count: number;
+        };
+        /** GraphEntityChunksResponse */
+        GraphEntityChunksResponse: {
+            /** Entity Id */
+            entity_id: string;
+            /** Chunks */
+            chunks: components["schemas"]["GraphChunkItem"][];
+        };
         /** GraphLink */
         GraphLink: {
             /** Source */
@@ -1007,6 +1093,8 @@ export interface components {
             label: string;
             /** Tier */
             tier?: number | null;
+            /** Count */
+            count?: number | null;
             /** Ingested At */
             ingested_at?: string | null;
         };
@@ -1029,6 +1117,11 @@ export interface components {
             name: string;
             /** Type */
             type: string;
+            /**
+             * Node Kind
+             * @default entity
+             */
+            node_kind: string;
             /** Aliases */
             aliases?: string[];
             /** Ingested At */
@@ -1042,6 +1135,8 @@ export interface components {
             source_kind?: string | null;
             /** Source Kinds */
             source_kinds?: string[];
+            /** Description */
+            description?: string | null;
         };
         /** GraphPathResponse */
         GraphPathResponse: {
@@ -1060,6 +1155,33 @@ export interface components {
             hops: number;
             /** Links */
             links?: components["schemas"]["GraphLink"][];
+        };
+        /**
+         * GraphQueryDetailResponse
+         * @description Answer label and provenance for a Query node in the connected graph.
+         */
+        GraphQueryDetailResponse: {
+            /** Query Id */
+            query_id: string;
+            /** Query */
+            query: string;
+            /** Rewritten Query */
+            rewritten_query?: string | null;
+            /** Answer */
+            answer: string;
+            /** Source */
+            source: string;
+            /** Path */
+            path?: string[];
+            /**
+             * Top Score
+             * @default 0
+             */
+            top_score: number;
+            /** Answer Policy */
+            answer_policy?: string | null;
+            /** Created At */
+            created_at?: string | null;
         };
         /** GraphResponse */
         GraphResponse: {
@@ -1129,6 +1251,22 @@ export interface components {
              * @enum {string}
              */
             source_kind: "docs" | "web" | "unverified";
+            /**
+             * Source
+             * @default docs
+             */
+            source: string;
+            /** Answer Path */
+            answer_path?: string[];
+            /**
+             * Top Score
+             * @default 0
+             */
+            top_score: number;
+            /** Stage Timings Ms */
+            stage_timings_ms?: {
+                [key: string]: number;
+            };
             /** Web Sources */
             web_sources?: {
                 [key: string]: unknown;
@@ -1199,6 +1337,22 @@ export interface components {
              * @enum {string}
              */
             source_kind: "docs" | "web" | "unverified";
+            /**
+             * Source
+             * @default docs
+             */
+            source: string;
+            /** Answer Path */
+            answer_path?: string[];
+            /**
+             * Top Score
+             * @default 0
+             */
+            top_score: number;
+            /** Stage Timings Ms */
+            stage_timings_ms?: {
+                [key: string]: number;
+            };
             /** Web Sources */
             web_sources?: {
                 [key: string]: unknown;
@@ -1266,6 +1420,11 @@ export interface components {
              * @enum {string}
              */
             answer_policy: "grounded_only" | "grounded_plus_web";
+            /**
+             * Force Web
+             * @default false
+             */
+            force_web: boolean;
         };
         /**
          * QueryResponse
@@ -1296,6 +1455,19 @@ export interface components {
              * @enum {string}
              */
             source_kind: "docs" | "web" | "unverified";
+            /**
+             * Source
+             * @default docs
+             * @enum {string}
+             */
+            source: "docs" | "web" | "model" | "abstain";
+            /** Answer Path */
+            answer_path?: string[];
+            /**
+             * Top Score
+             * @default 0
+             */
+            top_score: number;
             /** Web Sources */
             web_sources?: {
                 [key: string]: unknown;
@@ -1304,6 +1476,10 @@ export interface components {
             query_id?: string | null;
             /** Answer Id */
             answer_id?: string | null;
+            /** Stage Timings Ms */
+            stage_timings_ms?: {
+                [key: string]: number;
+            };
         };
         /** ReadinessResponse */
         ReadinessResponse: {
@@ -1745,6 +1921,7 @@ export interface operations {
                 scope?: string | null;
                 limit?: number;
                 source_kind?: string | null;
+                min_cooccurrence?: number;
             };
             header?: {
                 "X-Dev-User"?: string | null;
@@ -1780,6 +1957,7 @@ export interface operations {
                 depth?: number;
                 scope?: string | null;
                 source_kind?: string | null;
+                min_cooccurrence?: number;
             };
             header?: {
                 "X-Dev-User"?: string | null;
@@ -1798,6 +1976,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["GraphNeighborsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_entity_chunks_api_v1_graph_entities__entity_id__chunks_get: {
+        parameters: {
+            query?: {
+                scope?: string | null;
+                limit?: number;
+            };
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
+            path: {
+                entity_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GraphEntityChunksResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_query_detail_api_v1_graph_queries__query_id__get: {
+        parameters: {
+            query?: {
+                scope?: string | null;
+            };
+            header?: {
+                "X-Dev-User"?: string | null;
+            };
+            path: {
+                query_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GraphQueryDetailResponse"];
                 };
             };
             /** @description Validation Error */

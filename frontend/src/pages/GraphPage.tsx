@@ -37,6 +37,7 @@ export function GraphPage() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [zoomTrigger, setZoomTrigger] = useState(0);
   const [sourceKind, setSourceKind] = useState("");
+  const [minCooccurrence, setMinCooccurrence] = useState(0);
   const [tableCollapsed, setTableCollapsed] = useState(false);
 
   // Active reasoning path state
@@ -46,6 +47,7 @@ export function GraphPage() {
   // API Hook for graph data
   const { data: graphResponse } = useGraph({
     sourceKind: sourceKind || undefined,
+    minCooccurrence,
   });
 
   const { nodes, links } = useMemo<{ nodes: GraphNode[]; links: GraphLink[] }>(() => {
@@ -54,8 +56,11 @@ export function GraphPage() {
       nodes: graphResponse.nodes.map((n) => ({
         id: n.id,
         name: n.name,
-        type: n.type as GraphNode["type"],
-        description: n.name,
+        type: (n.node_kind === "entity" ? n.type.toLowerCase() : n.node_kind) as GraphNode["type"],
+        node_kind: (n.node_kind === "query" || n.node_kind === "document"
+          ? n.node_kind
+          : "entity") as GraphNode["node_kind"],
+        description: n.description ?? n.name,
         source_kind: n.source_kind ?? null,
         source_kinds: n.source_kinds ?? [],
         degree: n.degree ?? 0,
@@ -67,9 +72,19 @@ export function GraphPage() {
         target: l.target,
         relation: l.label,
         tier: (l.tier as GraphLink["tier"]) ?? 1,
+        count: l.count ?? null,
       })),
     };
   }, [graphResponse]);
+
+  const nodeCounts = useMemo(
+    () => ({
+      documents: nodes.filter((n) => n.node_kind === "document").length,
+      entities: nodes.filter((n) => n.node_kind === "entity").length,
+      queries: nodes.filter((n) => n.node_kind === "query").length,
+    }),
+    [nodes]
+  );
 
   // Auto-select node if URL param provided
   useEffect(() => {
@@ -195,11 +210,28 @@ export function GraphPage() {
               aria-label="Filter graph by source kind"
             >
               <option value="">All</option>
-              <option value="document">Docs</option>
+              <option value="document">Upload</option>
               <option value="web">Web</option>
               <option value="chat">Chat</option>
               <option value="query">Query</option>
               <option value="answer">Answer</option>
+            </select>
+          </div>
+
+          {/* Minimum co-occurrence count (Postgres mention aggregates) */}
+          <div className="hidden lg:flex items-center gap-1.5 text-xs text-zinc-400 border-l border-zinc-800/80 pl-3">
+            <span className="text-[10px] font-mono text-zinc-500 uppercase">Min co-occur:</span>
+            <select
+              value={minCooccurrence}
+              onChange={(event) => setMinCooccurrence(Number(event.target.value))}
+              className="h-6 rounded-md border border-zinc-800 bg-zinc-900 px-1.5 text-[10px] font-mono text-zinc-300 outline-none hover:bg-zinc-800 focus:border-amber-500/40"
+              aria-label="Filter graph edges by minimum co-occurrence count"
+            >
+              {[0, 1, 2, 3, 5, 10].map((value) => (
+                <option key={value} value={value}>
+                  {value}
+                </option>
+              ))}
             </select>
           </div>
         </div>
@@ -207,7 +239,8 @@ export function GraphPage() {
         {/* Muted Tabular Stats Bar & Actions */}
         <div className="flex items-center gap-3">
           <span className="hidden lg:inline text-xs font-mono text-zinc-400 tabular-nums">
-            {nodes.length} entities · {links.length} relations
+            {nodeCounts.documents} docs · {nodeCounts.entities} entities ·{" "}
+            {nodeCounts.queries} queries · {links.length} edges
           </span>
 
           <Button
@@ -228,6 +261,7 @@ export function GraphPage() {
               setHighlightedPathNodes(new Set());
               setSelectedNodeId(null);
               setSourceKind("");
+              setMinCooccurrence(0);
               setZoomTrigger((prev) => prev + 1);
               toast.info("Knowledge graph view reset");
             }}

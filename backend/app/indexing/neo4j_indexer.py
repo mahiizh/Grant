@@ -426,6 +426,7 @@ class Neo4jIndexer:
             q.rewritten_query = $rewritten_query,
             q.answer_policy = $answer_policy,
             q.thread_id = $thread_id,
+            q.source_kind = 'chat',
             q.owner_user_id = $acl_owner,
             q.shared_scope = $acl_shared,
             q.is_public = $acl_public,

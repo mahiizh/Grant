@@ -155,7 +155,7 @@
           "graph"
         ],
         "summary": "Get Graph",
-        "description": "Retrieve ACL-filtered knowledge graph nodes and relationships from Neo4j.",
+        "description": "Retrieve the ACL-filtered Document/Entity/Query graph from Neo4j.",
         "operationId": "get_graph_api_v1_graph_get",
         "parameters": [
           {
@@ -199,6 +199,17 @@
                 }
               ],
               "title": "Source Kind"
+            }
+          },
+          {
+            "name": "min_cooccurrence",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Min Cooccurrence"
             }
           },
           {
@@ -248,7 +259,7 @@
           "graph"
         ],
         "summary": "Get Node Neighbors",
-        "description": "Expand an ACL-filtered subgraph neighborhood centered on node_id in Neo4j.",
+        "description": "Expand the ACL-filtered one-hop neighborhood of any visible graph node.",
         "operationId": "get_node_neighbors_api_v1_graph_nodes__node_id__neighbors_get",
         "parameters": [
           {
@@ -304,6 +315,17 @@
             }
           },
           {
+            "name": "min_cooccurrence",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Min Cooccurrence"
+            }
+          },
+          {
             "name": "X-Dev-User",
             "in": "header",
             "required": false,
@@ -344,13 +366,175 @@
         }
       }
     },
+    "/graph/entities/{entity_id}/chunks": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Get Entity Chunks",
+        "description": "Return chunk texts for an entity via Postgres mentions and Qdrant payloads.\n\nEvery Qdrant payload is rechecked against the caller's ACL before its text\nis returned, so an entity shared across owners cannot leak another owner's\nchunk content through the graph UI.",
+        "operationId": "get_entity_chunks_api_v1_graph_entities__entity_id__chunks_get",
+        "parameters": [
+          {
+            "name": "entity_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Entity Id"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "X-Dev-User",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-User"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphEntityChunksResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/graph/queries/{query_id}": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Get Query Detail",
+        "description": "Return a Query node's stored answer, source and path to the UI.\n\nQuery/Answer rows carry an owner_user_id; only that owner (or an admin) may\nread them. ``scope`` is validated so a caller cannot widen the boundary by\nnaming a shared scope they do not hold.",
+        "operationId": "get_query_detail_api_v1_graph_queries__query_id__get",
+        "parameters": [
+          {
+            "name": "query_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Query Id"
+            }
+          },
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          },
+          {
+            "name": "X-Dev-User",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Dev-User"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GraphQueryDetailResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/graph/path": {
       "get": {
         "tags": [
           "graph"
         ],
         "summary": "Get Graph Path",
-        "description": "Compute the shortest ACL-permitted path between two nodes in Neo4j.",
+        "description": "Compute the shortest ACL-permitted path between two entities in Neo4j.",
         "operationId": "get_graph_path_api_v1_graph_path_get",
         "parameters": [
           {
@@ -499,7 +683,7 @@
           "documents"
         ],
         "summary": "Upload Document",
-        "description": "Upload document for parsing, chunking, outbox staging, and automatic indexing.",
+        "description": "Persist the upload and enqueue a job; the worker does all heavy work.",
         "operationId": "upload_document_api_v1_documents_post",
         "parameters": [
           {
@@ -559,7 +743,7 @@
           "documents"
         ],
         "summary": "Get Document Status",
-        "description": "Get current ingestion pipeline progress for document.",
+        "description": "Get current ingestion job progress for a document or job id.",
         "operationId": "get_document_status_api_v1_documents__document_id__status_get",
         "parameters": [
           {
@@ -2323,6 +2507,17 @@
             "type": "string",
             "title": "Id"
           },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
           "status": {
             "type": "string",
             "title": "Status"
@@ -2364,6 +2559,28 @@
             "type": "string",
             "title": "Extraction Status",
             "default": "unknown"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "ingest_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ingest Ms"
           }
         },
         "type": "object",
@@ -2381,6 +2598,10 @@
             "type": "string",
             "title": "Document Id"
           },
+          "job_id": {
+            "type": "string",
+            "title": "Job Id"
+          },
           "title": {
             "type": "string",
             "title": "Title"
@@ -2388,7 +2609,7 @@
           "status": {
             "type": "string",
             "title": "Status",
-            "default": "ingesting"
+            "default": "queued"
           },
           "message": {
             "type": "string",
@@ -2399,6 +2620,7 @@
         "type": "object",
         "required": [
           "document_id",
+          "job_id",
           "title"
         ],
         "title": "DocumentUploadResponse"
@@ -2698,6 +2920,95 @@
         ],
         "title": "GoldenPair"
       },
+      "GraphChunkItem": {
+        "properties": {
+          "chunk_id": {
+            "type": "string",
+            "title": "Chunk Id"
+          },
+          "doc_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doc Id"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "source_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Kind"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "mention_count": {
+            "type": "integer",
+            "title": "Mention Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "chunk_id",
+          "text"
+        ],
+        "title": "GraphChunkItem",
+        "description": "One chunk text from Qdrant for a Postgres entity mention."
+      },
+      "GraphEntityChunksResponse": {
+        "properties": {
+          "entity_id": {
+            "type": "string",
+            "title": "Entity Id"
+          },
+          "chunks": {
+            "items": {
+              "$ref": "#/components/schemas/GraphChunkItem"
+            },
+            "type": "array",
+            "title": "Chunks"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entity_id",
+          "chunks"
+        ],
+        "title": "GraphEntityChunksResponse"
+      },
       "GraphLink": {
         "properties": {
           "source": {
@@ -2723,6 +3034,17 @@
               }
             ],
             "title": "Tier"
+          },
+          "count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count"
           },
           "ingested_at": {
             "anyOf": [
@@ -2791,6 +3113,11 @@
             "type": "string",
             "title": "Type"
           },
+          "node_kind": {
+            "type": "string",
+            "title": "Node Kind",
+            "default": "entity"
+          },
           "aliases": {
             "items": {
               "type": "string"
@@ -2831,6 +3158,17 @@
             },
             "type": "array",
             "title": "Source Kinds"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
           }
         },
         "type": "object",
@@ -2882,6 +3220,80 @@
           "found"
         ],
         "title": "GraphPathResponse"
+      },
+      "GraphQueryDetailResponse": {
+        "properties": {
+          "query_id": {
+            "type": "string",
+            "title": "Query Id"
+          },
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "rewritten_query": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rewritten Query"
+          },
+          "answer": {
+            "type": "string",
+            "title": "Answer"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source"
+          },
+          "path": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Path"
+          },
+          "top_score": {
+            "type": "number",
+            "title": "Top Score",
+            "default": 0.0
+          },
+          "answer_policy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Answer Policy"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query_id",
+          "query",
+          "answer",
+          "source"
+        ],
+        "title": "GraphQueryDetailResponse",
+        "description": "Answer label and provenance for a Query node in the connected graph."
       },
       "GraphResponse": {
         "properties": {
@@ -3078,6 +3490,30 @@
             ],
             "title": "Source Kind",
             "default": "docs"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "docs"
+          },
+          "answer_path": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Answer Path"
+          },
+          "top_score": {
+            "type": "number",
+            "title": "Top Score",
+            "default": 0.0
+          },
+          "stage_timings_ms": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Stage Timings Ms"
           },
           "web_sources": {
             "items": {
@@ -3292,6 +3728,30 @@
             ],
             "title": "Source Kind",
             "default": "docs"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": "docs"
+          },
+          "answer_path": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Answer Path"
+          },
+          "top_score": {
+            "type": "number",
+            "title": "Top Score",
+            "default": 0.0
+          },
+          "stage_timings_ms": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Stage Timings Ms"
           },
           "web_sources": {
             "items": {
@@ -3508,6 +3968,11 @@
             ],
             "title": "Answer Policy",
             "default": "grounded_plus_web"
+          },
+          "force_web": {
+            "type": "boolean",
+            "title": "Force Web",
+            "default": false
           }
         },
         "type": "object",
@@ -3578,6 +4043,29 @@
             "title": "Source Kind",
             "default": "docs"
           },
+          "source": {
+            "type": "string",
+            "enum": [
+              "docs",
+              "web",
+              "model",
+              "abstain"
+            ],
+            "title": "Source",
+            "default": "docs"
+          },
+          "answer_path": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Answer Path"
+          },
+          "top_score": {
+            "type": "number",
+            "title": "Top Score",
+            "default": 0.0
+          },
           "web_sources": {
             "items": {
               "additionalProperties": true,
@@ -3607,6 +4095,13 @@
               }
             ],
             "title": "Answer Id"
+          },
+          "stage_timings_ms": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Stage Timings Ms"
           }
         },
         "type": "object",

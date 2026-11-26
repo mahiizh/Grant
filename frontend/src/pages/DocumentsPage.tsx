@@ -125,7 +125,11 @@ export function DocumentsPage() {
       toast.success(`Successfully indexed ${inFlightJob.fileName} in Qdrant & Neo4j!`);
     } else if (jobStatus.status === "failed") {
       setInFlightJob(null);
-      toast.error(jobStatus.error || `Worker failed to ingest ${inFlightJob.fileName}`);
+      toast.error(
+        `Worker failed to ingest ${inFlightJob.fileName} (step: ${
+          jobStatus?.active_step || "unknown"
+        })`
+      );
     }
   }, [inFlightJob, jobStatus, refetch]);
 

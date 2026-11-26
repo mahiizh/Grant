@@ -126,8 +126,11 @@ export function AskPage() {
       nodes: graphResponse.nodes.map((n) => ({
         id: n.id,
         name: n.name,
-        type: n.type as GraphNode["type"],
-        description: n.name,
+        type: (n.node_kind === "entity" ? n.type.toLowerCase() : n.node_kind) as GraphNode["type"],
+        node_kind: (n.node_kind === "query" || n.node_kind === "document"
+          ? n.node_kind
+          : "entity") as GraphNode["node_kind"],
+        description: n.description ?? n.name,
         source_kind: n.source_kind ?? null,
         source_kinds: n.source_kinds ?? [],
         degree: n.degree ?? 0,
@@ -139,6 +142,7 @@ export function AskPage() {
         target: l.target,
         relation: l.label,
         tier: (l.tier as GraphLink["tier"]) ?? 1,
+        count: l.count ?? null,
       })),
     };
   }, [graphResponse]);
