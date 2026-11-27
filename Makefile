@@ -1,4 +1,4 @@
-.PHONY: help dev migrate test test-unit test-gate eval eval-compare calibrate-judge lint format typecheck check up down logs ps clean frontend-dev frontend-build
+.PHONY: help dev migrate test test-unit eval eval-compare calibrate-judge lint format typecheck check up down logs ps clean frontend-dev frontend-build
 
 # Keep Compose and the backend on the same env file. Fall back to .env.example
 # so `make up` still works before the first `cp .env.example .env`.
@@ -11,9 +11,8 @@ help:
 	@echo "  make frontend-dev   - Run React Vite development server (port 3000)"
 	@echo "  make frontend-build - Build production frontend bundle"
 	@echo "  make test           - Run all unit and CI eval gate tests"
-	@echo "  make test-gate      - Run CI evaluation gate against golden dataset"
 	@echo "  make eval           - Clean-ingest into an isolated DB/collection and score the golden test split"
-	@echo "  make eval-compare   - Run dense/sparse/hybrid/full on the same split and print one comparison table"
+	@echo "  make eval-compare   - Run dense/sparse/hybrid/full/graph_forced on the same split and print one comparison table"
 	@echo "  make lint           - Run Ruff linter"
 	@echo "  make format         - Run Ruff code formatter"
 	@echo "  make typecheck      - Run Mypy static type checker"
@@ -37,9 +36,6 @@ frontend-build:
 test:
 	uv run --directory backend pytest -v
 
-test-gate:
-	uv run --directory backend pytest tests/eval_gate/test_eval_gate.py -v
-
 test-unit:
 	uv run --directory backend pytest tests/unit -v
 
@@ -59,7 +55,7 @@ reconcile: migrate
 	uv run --directory backend python -m app.indexing.reconciler $(if $(REPAIR),--repair,)
 
 # Isolated evaluation: dedicated PostgreSQL DB + Qdrant collection, clean ingest,
-# then the golden test split. Extra flags: SPLIT=dev|test|all CONFIG=dense|sparse|hybrid|full
+# then the golden test split. Extra flags: SPLIT=dev|test|all CONFIG=dense|sparse|hybrid|full|graph_forced
 # BUDGET_USD=0.50 CONCURRENCY=2 JSON_REPORT=path JUDGE=1 JUDGE_MODEL=... JUDGE_THRESHOLD=0.5
 eval:
 	uv run --directory backend python -m app.tools.eval_cli \
@@ -73,7 +69,7 @@ eval:
 		$(if $(JUDGE_THRESHOLD),--judge-threshold $(JUDGE_THRESHOLD),) \
 		$(if $(JSON_REPORT),--json-report $(JSON_REPORT),)
 
-# Honest baseline: same corpus, prompt, model, and split; four retrieval configs
+# Honest baseline: same corpus, prompt, model, and split; five retrieval configs
 # with a cold per-config LLM cache. Extra flags: SPLIT=... BUDGET_USD=... JSON_DIR=...
 # JUDGE=1 JUDGE_MODEL=... JUDGE_THRESHOLD=0.5
 eval-compare:

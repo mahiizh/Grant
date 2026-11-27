@@ -101,10 +101,6 @@ class Settings(BaseSettings):
     # cosine score for the gate (including when reranking times out).
     EVIDENCE_MIN_RERANK_SCORE: float = 0.0
     EVIDENCE_MIN_DENSE_COSINE: float = 0.55
-    ACQUISITION_ENABLED: bool = False
-    MAX_ACQUISITION_CALLS: int = 3
-    MIN_TRUST_TO_CITE: float = 0.7
-
     # Answer policy and web grounding. The chat API defaults to grounded_plus_web;
     # the eval runner explicitly defaults to grounded_only.
     ANSWER_POLICY: Literal["grounded_only", "grounded_plus_web"] = "grounded_plus_web"
@@ -210,7 +206,6 @@ class Settings(BaseSettings):
     EVAL_JUDGE_THRESHOLD: float = 0.5
 
     # Observability
-    OTEL_EXPORTER_OTLP_ENDPOINT: str = "http://localhost:4318"
     LANGFUSE_PUBLIC_KEY: str | None = None
     LANGFUSE_SECRET_KEY: str | None = None
     LANGFUSE_HOST: str = "https://cloud.langfuse.com"
