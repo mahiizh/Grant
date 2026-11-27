@@ -154,7 +154,6 @@ async def announce_database_identity(engine: AsyncEngine | None = None) -> dict[
     print(server_line)
     logger.info("%s | %s", url_line, server_line)
     return info
-    return info
 
 
 async def verify_schema(engine: AsyncEngine | None = None) -> None:

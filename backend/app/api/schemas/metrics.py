@@ -1,14 +1,6 @@
 from pydantic import BaseModel
 
 
-class GuardrailsMetricsResponse(BaseModel):
-    prompt_injection_attempts: int
-    pii_redactions: int
-    faithfulness_gate_rejections: int
-    hallucination_eval_score: float
-    pass_rate: float
-
-
 class OverviewMetricsResponse(BaseModel):
     docs_indexed: int
     chunks_indexed: int

@@ -18,12 +18,6 @@ def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     return max(0.0, min(1.0, dot))
 
 
-def text_to_embedding(text: str, dim: int = 384) -> list[float]:
-    """Helper to compute normalized dense embedding using FastEmbed."""
-    emb = get_embedding_service()
-    return emb.embed_query_dense(text)
-
-
 class DenseRetriever:
     """Production Dense retriever querying Qdrant with FastEmbed BGE-small embeddings."""
 
@@ -43,7 +37,7 @@ class DenseRetriever:
         top_k: int = 10,
         filter_criteria: RetrievalFilter | None = None,
     ) -> list[tuple[str, float, dict[str, Any]]]:
-        """Query Qdrant dense vector index with ACL/temporal payload filtering."""
+        """Query Qdrant dense vector index with owner/shared ACL payload filtering."""
         dense_vec = await self.embedding_service.aembed_query_dense(query)
         query_filter = filter_criteria.to_qdrant_filter() if filter_criteria is not None else None
 

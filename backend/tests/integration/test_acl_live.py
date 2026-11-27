@@ -4,7 +4,7 @@ These tests create their own caller-owned documents in the isolated test stores;
 they never depend on a bundled demo corpus or on the developer's dev database.
 """
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from typing import Any
 
 import pytest
@@ -22,11 +22,15 @@ from app.graph.retrievers import GraphRetriever
 from app.indexing.neo4j_indexer import Neo4jIndexer
 from app.indexing.outbox_worker import OutboxWorker
 from app.ingestion.pipeline import IngestionPipeline
+from app.api.routes.query import get_orchestrator, set_orchestrator
+from app.domain import Evidence
 from app.main import app
+from app.orchestration.workflow import RAGOrchestrator
 from app.retrieval.dense import DenseRetriever
 from app.retrieval.filters import RetrievalFilter
-from app.retrieval.reranker import get_reranker
+from app.retrieval.hybrid import HybridRetriever
 from app.retrieval.sparse import BM25Retriever
+from tests.fakes.fake_gateway import FakeModelGateway
 
 PRIVATE_SOURCE = "live_acl_private"
 SHARED_SOURCE = "live_acl_shared"
@@ -55,10 +59,22 @@ The analytics runbook uses PostgreSQL and Redis. Zara Okafor reviews it.
 
 
 class _FakeReranker:
-    """Constant scorer so compare tests exercise ACL plumbing, not the model."""
+    """Constant scorer so hybrid tests exercise ACL plumbing, not the model."""
 
     def predict_pairs(self, pairs: list[tuple[str, str]]) -> list[float]:
         return [1.0 for _ in pairs]
+
+    def rerank_evidence(
+        self,
+        query: str,
+        candidates: Sequence[Evidence],
+        top_k: int | None = None,
+    ) -> list[Evidence]:
+        scored = [
+            item.model_copy(update={"score": 1.0, "retrieval_method": "rerank"})
+            for item in candidates
+        ]
+        return scored[:top_k] if top_k is not None else scored
 
 
 def _filter(username: str, scope: str | None = None) -> RetrievalFilter:
@@ -248,37 +264,47 @@ async def test_neo4j_cypher_acl_does_not_leak(acl_corpus: dict[str, str]) -> Non
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_retrieval_compare_endpoint_does_not_leak(acl_corpus: dict[str, str]) -> None:
-    """`/retrieval/compare` must apply the same owner/shared ACL to every branch."""
-    app.dependency_overrides[get_reranker] = _FakeReranker
+async def test_query_hybrid_endpoint_does_not_leak(acl_corpus: dict[str, str]) -> None:
+    """`/query` hybrid retrieval must apply the same owner/shared ACL as the stores."""
+    previous_orchestrator = get_orchestrator()
+    orchestrator = RAGOrchestrator(
+        hybrid_retriever=HybridRetriever(
+            dense_retriever=DenseRetriever(),
+            bm25_retriever=BM25Retriever(),
+            reranker=_FakeReranker(),
+        ),
+        model_gateway=FakeModelGateway(),
+        cache_enabled=False,
+    )
+    set_orchestrator(orchestrator)
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            forbidden = await client.get(
-                "/api/v1/retrieval/compare",
-                params={"query": QUERY, "scope": "shared-analytics"},
+            forbidden = await client.post(
+                "/api/v1/query",
+                json={"query": QUERY, "scope": "shared-analytics"},
                 headers={"X-Dev-User": "bob"},
             )
             assert forbidden.status_code == 403
 
-            bob_resp = await client.get(
-                "/api/v1/retrieval/compare",
-                params={"query": QUERY},
+            bob_resp = await client.post(
+                "/api/v1/query",
+                json={"query": QUERY, "answer_policy": "grounded_only"},
                 headers={"X-Dev-User": "bob"},
             )
             assert bob_resp.status_code == 200
-            bob_doc_ids = {c["doc_title"] for c in bob_resp.json()["candidates"]}
+            bob_doc_ids = {c["doc_id"] for c in bob_resp.json()["evidence"]}
             assert PRIVATE_DOC_ID not in bob_doc_ids
 
-            alice_resp = await client.get(
-                "/api/v1/retrieval/compare",
-                params={"query": QUERY},
+            alice_resp = await client.post(
+                "/api/v1/query",
+                json={"query": QUERY, "answer_policy": "grounded_only"},
                 headers={"X-Dev-User": "alice"},
             )
             assert alice_resp.status_code == 200
-            alice_doc_ids = {c["doc_title"] for c in alice_resp.json()["candidates"]}
+            alice_doc_ids = {c["doc_id"] for c in alice_resp.json()["evidence"]}
             assert PRIVATE_DOC_ID in alice_doc_ids
     finally:
-        app.dependency_overrides.pop(get_reranker, None)
+        set_orchestrator(previous_orchestrator)
 
 
 @pytest.mark.integration

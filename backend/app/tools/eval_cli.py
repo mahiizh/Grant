@@ -473,7 +473,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--no-cache",
         action="store_true",
-        help="Disable exact and semantic response caches for the whole run.",
+        help="Disable the exact response cache for the whole run.",
     )
     parser.add_argument(
         "--retrieval-only",

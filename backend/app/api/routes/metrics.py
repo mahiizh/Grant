@@ -1,30 +1,13 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter
 from sqlalchemy import func, select
 
-from app.api.schemas.metrics import GuardrailsMetricsResponse, OverviewMetricsResponse
+from app.api.schemas.metrics import OverviewMetricsResponse
 from app.db.models import ChunkRecord, DocumentRecord, MessageRecord
 from app.db.postgres import get_session
 from app.indexing.neo4j_indexer import Neo4jIndexer
 from app.indexing.qdrant_indexer import QdrantIndexer
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
-
-
-@router.get("/guardrails", response_model=GuardrailsMetricsResponse)
-async def get_guardrail_metrics() -> GuardrailsMetricsResponse:
-    """Security and safety metrics for prompt injection, redaction, and hallucination gates.
-
-    The pipeline does not persist guardrail counters or judge scores, so there is
-    no honest value to report. Returning fixed numbers made the dashboard look
-    healthy without measuring anything.
-    """
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail=(
-            "Guardrail telemetry is not implemented: no persisted counters for injection "
-            "attempts, redactions, gate rejections, or judge scores."
-        ),
-    )
 
 
 def _percentile(values: list[float], fraction: float) -> int | None:

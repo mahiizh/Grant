@@ -276,7 +276,7 @@ class RAGOrchestrator:
         def cache_node(state: RAGState) -> dict[str, Any]:
             spans = list(state.get("spans", []))
 
-            # A comparison run can disable exact and semantic caching entirely:
+            # A comparison run can disable the exact cache entirely:
             # a hit would return an answer produced by a different config.
             # Forced-web probes must also bypass cached doc answers.
             if not self.cache_enabled or state.get("force_web", False):

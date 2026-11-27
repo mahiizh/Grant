@@ -13,16 +13,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.routes import (
-    cache,
     documents,
-    evals,
     graph,
     health,
     metrics,
     query,
-    retrieval,
     threads,
-    traces,
 )
 from app.api.routes import (
     settings as settings_routes,
@@ -90,10 +86,6 @@ def create_app() -> FastAPI:
         query.router,
         graph.router,
         documents.router,
-        traces.router,
-        retrieval.router,
-        cache.router,
-        evals.router,
         metrics.router,
         settings_routes.router,
         threads.router,
