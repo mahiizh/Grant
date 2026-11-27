@@ -25,9 +25,10 @@ help:
 	@echo "  make clean          - Remove temporary and cache files"
 
 # `make dev` intentionally targets the developer stores, so opt in to writes here.
+# The launcher runs the API and ingestion worker as separate processes.
 # Isolated test/eval runs do not load this env file.
 dev: migrate
-	uv run --env-file dev-writes.env --directory backend uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+	uv run --env-file dev-writes.env --directory backend python -m app.dev
 
 frontend-dev:
 	cd frontend && npm run dev
@@ -46,6 +47,9 @@ test-int:
 
 worker:
 	uv run --directory backend python -m app.indexing.outbox_worker
+
+worker-ingest:
+	uv run --env-file dev-writes.env --directory backend python -m app.workers.ingestion_worker
 
 migrate:
 	uv run --directory backend alembic upgrade head
