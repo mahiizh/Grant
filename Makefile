@@ -25,9 +25,9 @@ help:
 	@echo "  make clean          - Remove temporary and cache files"
 
 # `make dev` intentionally targets the developer stores, so opt in to writes here.
-# Isolated test/eval runs use a separate shell environment instead.
+# Isolated test/eval runs do not load this env file.
 dev: migrate
-	GRAPHRAG_ALLOW_DEV_WRITES=1 uv run --directory backend uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+	uv run --env-file dev-writes.env --directory backend uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 frontend-dev:
 	cd frontend && npm run dev
