@@ -4,7 +4,7 @@ import { UnrealBloomPass } from "three-stdlib";
 import * as THREE from "three";
 import { GraphLink, GraphNode } from "../types/graph";
 
-export interface GraphCanvas3DProps {
+interface GraphCanvas3DProps {
   nodes: GraphNode[];
   links: GraphLink[];
   colorBy: "type" | "tier";

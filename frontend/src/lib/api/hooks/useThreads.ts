@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { API_BASE_URL } from "../client";
 import { toast } from "sonner";
 
-export interface CitationItem {
+interface CitationItem {
   chunk_id: string;
   doc_id: string;
   text: string;
@@ -11,14 +11,14 @@ export interface CitationItem {
   path?: string[] | null;
 }
 
-export interface WebSourceItem {
+interface WebSourceItem {
   url?: string | null;
   title?: string | null;
 }
 
-export type AnswerSourceKind = "docs" | "web" | "unverified";
+type AnswerSourceKind = "docs" | "web" | "unverified";
 
-export interface PipelineStageItem {
+interface PipelineStageItem {
   id: string;
   label: string;
   status: "completed" | "in_progress" | "pending" | "failed" | "running";
@@ -26,7 +26,7 @@ export interface PipelineStageItem {
   detail?: string;
 }
 
-export interface MessageGeneration {
+interface MessageGeneration {
   generation_id: string;
   content: string;
   rewritten_query?: string | null;

@@ -1,6 +1,6 @@
 import { Badge } from "../components/ui/badge";
 
-export type AnswerSourceKind = "docs" | "web" | "unverified";
+type AnswerSourceKind = "docs" | "web" | "unverified";
 
 export interface AnswerWebSource {
   url?: string | null;

@@ -1,4 +1,4 @@
-export type NodeType =
+type NodeType =
   | "mechanism"
   | "database"
   | "person"
@@ -8,7 +8,7 @@ export type NodeType =
   | "query"
   | "entity";
 
-export type NodeKind = "document" | "entity" | "query";
+type NodeKind = "document" | "entity" | "query";
 
 export interface GraphNode {
   id: string;
@@ -32,11 +32,6 @@ export interface GraphLink {
   tier: 1 | 2 | 3;
   /** Aggregated mention / co-occurrence count from the graph edge. */
   count?: number | null;
-}
-
-export interface GraphData {
-  nodes: GraphNode[];
-  links: GraphLink[];
 }
 
 export interface GraphChunkText {
