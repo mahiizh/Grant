@@ -24,8 +24,10 @@ help:
 	@echo "  make ps             - Show status of infrastructure containers"
 	@echo "  make clean          - Remove temporary and cache files"
 
+# `make dev` intentionally targets the developer stores, so opt in to writes here.
+# Isolated test/eval runs use a separate shell environment instead.
 dev: migrate
-	uv run --directory backend uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+	GRAPHRAG_ALLOW_DEV_WRITES=1 uv run --directory backend uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 frontend-dev:
 	cd frontend && npm run dev
