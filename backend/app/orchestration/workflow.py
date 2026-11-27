@@ -1,9 +1,11 @@
+import asyncio
 import hashlib
 import inspect
 import logging
 import re
 import time
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 from langgraph.graph import END, StateGraph
@@ -160,6 +162,7 @@ class RAGOrchestrator:
         web_ingestor: WebIngestor | None = None,
         query_history: QueryHistory | None = None,
         record_history: bool = False,
+        defer_cache_history: bool = False,
     ) -> None:
         self.hybrid_retriever = hybrid_retriever or HybridRetriever()
         self.graph_retriever = graph_retriever or GraphRetriever()
@@ -175,6 +178,10 @@ class RAGOrchestrator:
         # History is write-only now: it records traces for graph sync, never
         # answers. Reuse comes from the exact cache or fresh retrieval.
         self.record_history = record_history or query_history is not None
+        # Cache hits can record query/answer history in the background so the
+        # cache-hit SLA does not include graph/Postgres persistence work.
+        self.defer_cache_history = defer_cache_history
+        self._history_tasks: set[asyncio.Task[None]] = set()
         self.graph = self._build_graph()
 
     @property
@@ -769,8 +776,14 @@ class RAGOrchestrator:
                     mock_ans = "I do not have sufficient information to answer this question."
 
             gen_start = time.perf_counter()
+            token_sink = state.get("token_sink")
             with telemetry.get_tracer().start_as_current_span("llm.completion") as llm_span:
-                resp = await self.gateway.complete(prompt=prompt, mock_response=mock_ans)
+                if token_sink is not None:
+                    resp = await self.gateway.stream_complete(
+                        prompt=prompt, mock_response=mock_ans, on_token=token_sink
+                    )
+                else:
+                    resp = await self.gateway.complete(prompt=prompt, mock_response=mock_ans)
                 telemetry.record_llm_usage(llm_span, resp)
             gen_dur = round((time.perf_counter() - gen_start) * 1000.0, 2)
             record_stage("llm", gen_dur)
@@ -965,6 +978,7 @@ class RAGOrchestrator:
         owner_user_id: str | None = None,
         is_admin: bool = False,
         answer_policy: AnswerPolicy | None = None,
+        token_sink: Callable[[str], None] | None = None,
     ) -> RAGState:
         """Run the workflow, collect stage timings, and persist answer metadata."""
         _timings, token = start_stage_timings()
@@ -982,39 +996,51 @@ class RAGOrchestrator:
                 owner_user_id=owner_user_id,
                 is_admin=is_admin,
                 answer_policy=answer_policy,
+                token_sink=token_sink,
             )
             # Snapshot before history persistence so the stored timings describe
-            # the answer path itself; the response snapshot also includes the
-            # persist stage.
+            # the answer path itself. Synchronous persistence is included in the
+            # response snapshot; deferred cache-hit persistence is not.
             persisted_timings = timing_snapshot()
             if self.record_history and not retrieval_only:
-                try:
-                    metadata = build_answer_metadata(
-                        final_state, stage_timings_ms=persisted_timings
-                    )
-                    async with timed_stage("persist"):
-                        query_id, answer_id = await self.query_history.record(
-                            session=None,
-                            raw_query=query,
-                            rewritten_query=str(final_state.get("rewritten_query") or query),
-                            answer=str(final_state.get("answer") or ""),
-                            evidence=list(final_state.get("evidence", [])),
-                            source_kind=str(final_state.get("source_kind", "docs")),
-                            web_sources=list(final_state.get("web_sources", []) or []),
-                            answer_policy=policy,
-                            acl_scope=acl_scope or ACLScope.public(),
-                            owner_user_id=owner_user_id,
-                            thread_id=thread_id,
-                            source=str(metadata["source"]),
-                            answer_path=list(metadata["answer_path"]),
-                            top_score=float(metadata["top_score"]),
-                            stage_timings_ms=dict(metadata["stage_timings_ms"]),
-                            is_abstention=bool(final_state.get("is_abstention", False)),
-                        )
-                    final_state["query_id"] = query_id
-                    final_state["answer_id"] = answer_id
-                except Exception as exc:
-                    logger.warning("Failed recording query/answer history: %s", exc)
+                metadata = build_answer_metadata(final_state, stage_timings_ms=persisted_timings)
+                record_kwargs: dict[str, Any] = {
+                    "session": None,
+                    "raw_query": query,
+                    "rewritten_query": str(final_state.get("rewritten_query") or query),
+                    "answer": str(final_state.get("answer") or ""),
+                    "evidence": list(final_state.get("evidence", [])),
+                    "source_kind": str(final_state.get("source_kind", "docs")),
+                    "web_sources": list(final_state.get("web_sources", []) or []),
+                    "answer_policy": policy,
+                    "acl_scope": acl_scope or ACLScope.public(),
+                    "owner_user_id": owner_user_id,
+                    "thread_id": thread_id,
+                    "source": str(metadata["source"]),
+                    "answer_path": list(metadata["answer_path"]),
+                    "top_score": float(metadata["top_score"]),
+                    "stage_timings_ms": dict(metadata["stage_timings_ms"]),
+                    "is_abstention": bool(final_state.get("is_abstention", False)),
+                }
+                if self.defer_cache_history and final_state.get("is_cached", False):
+
+                    async def record_cached_history() -> None:
+                        try:
+                            await self.query_history.record(**record_kwargs)
+                        except Exception as exc:
+                            logger.warning("Failed recording cached history: %s", exc)
+
+                    task = asyncio.create_task(record_cached_history())
+                    self._history_tasks.add(task)
+                    task.add_done_callback(self._history_tasks.discard)
+                else:
+                    try:
+                        async with timed_stage("persist"):
+                            query_id, answer_id = await self.query_history.record(**record_kwargs)
+                        final_state["query_id"] = query_id
+                        final_state["answer_id"] = answer_id
+                    except Exception as exc:
+                        logger.warning("Failed recording query/answer history: %s", exc)
         finally:
             snapshot = timing_snapshot()
             end_stage_timings(token)
@@ -1033,6 +1059,7 @@ class RAGOrchestrator:
         owner_user_id: str | None = None,
         is_admin: bool = False,
         answer_policy: AnswerPolicy | None = None,
+        token_sink: Callable[[str], None] | None = None,
     ) -> RAGState:
         """Execute the compiled LangGraph workflow end-to-end."""
         start_time = time.perf_counter()
@@ -1076,6 +1103,7 @@ class RAGOrchestrator:
             "start_time": start_time,
             "metadata": {},
             "spans": [],
+            "token_sink": token_sink,
         }
 
         config = {"configurable": {"thread_id": thread_key}}

@@ -4,8 +4,10 @@ import json
 import os
 import random
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 # Ensure LiteLLM uses local bundled cost map to prevent remote network timeouts in sandboxed/offline environments
 os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
@@ -328,6 +330,180 @@ class ModelGateway:
             raise RuntimeError(
                 f"LiteLLM completion processing failed for {selected_model}: {e}"
             ) from e
+
+    @staticmethod
+    def _emit_tokens(content: str, on_token: Callable[[str], None] | None) -> None:
+        """Emit cached/mock/fake completions in token-sized pieces."""
+        if on_token is None or not content:
+            return
+        for match in re.finditer(r"\S+\s*|\s+", content):
+            on_token(match.group(0))
+
+    async def stream_complete(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        model: str | None = None,
+        max_tokens: int = 800,
+        temperature: float = 0.1,
+        mock_response: str | None = None,
+        on_token: Callable[[str], None] | None = None,
+    ) -> ModelResponse:
+        """Complete via LiteLLM streaming, forwarding each delta to ``on_token``.
+
+        Cache/mock/test paths still emit tokens so SSE callers see the same event
+        sequence, but only the live provider path produces real incremental
+        tokens. When ``on_token`` is absent this is equivalent to ``complete``.
+        """
+        if on_token is None:
+            return await self.complete(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                mock_response=mock_response,
+            )
+
+        settings = get_settings()
+        selected_model = model or self.default_model
+
+        # Deterministic fakes override ``complete``; reuse their answer and
+        # split it into tokens so SSE tests exercise the same event path.
+        if type(self).complete is not ModelGateway.complete:
+            response = await self.complete(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                mock_response=mock_response,
+            )
+            self._emit_tokens(response.content, on_token)
+            return response
+
+        if mock_response is not None or (
+            settings.APP_ENV == "test" and not settings.GEMINI_API_KEY
+        ):
+            response = await self.complete(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                model=model,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                mock_response=mock_response,
+            )
+            self._emit_tokens(response.content, on_token)
+            return response
+
+        cache_key = self._cache_key(selected_model, prompt, system_prompt, max_tokens, temperature)
+        cached = self._read_cache(cache_key)
+        if cached is not None:
+            self._cache_hits += 1
+            self._emit_tokens(cached.content, on_token)
+            return cached
+
+        if not settings.GEMINI_API_KEY:
+            raise RuntimeError(
+                "GEMINI_API_KEY environment variable is required in live mode. Please set it in .env"
+            )
+
+        messages: list[dict[str, str]] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
+        api_key = settings.GEMINI_API_KEY
+        if api_key:
+            os.environ["GEMINI_API_KEY"] = api_key
+
+        try:
+            prompt_tokens = int(litellm.token_counter(model=selected_model, messages=messages))
+        except Exception:
+            prompt_tokens = max(25, len(prompt.split()))
+
+        pricing = MODEL_PRICING.get(selected_model, {"input": 0.000000075, "output": 0.0000003})
+        estimated_cost = prompt_tokens * pricing["input"] + max_tokens * pricing["output"]
+        self._enforce_budgets(round(estimated_cost, 6))
+
+        content_parts: list[str] = []
+        raw_usage: Any = None
+        last_exc: Exception | None = None
+        max_attempts = max(1, settings.LITELLM_MAX_ATTEMPTS)
+        for attempt in range(max_attempts):
+            content_parts = []
+            try:
+                stream = await litellm.acompletion(
+                    model=selected_model,
+                    messages=messages,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    api_key=api_key,
+                    api_base=settings.LITELLM_API_BASE,
+                    timeout=settings.LITELLM_TIMEOUT_SECONDS,
+                    num_retries=1,
+                    stream=True,
+                )
+                async for chunk in stream:
+                    choices = getattr(chunk, "choices", None) or []
+                    if choices:
+                        delta = getattr(choices[0], "delta", None)
+                        piece = getattr(delta, "content", None) if delta is not None else None
+                        if piece:
+                            content_parts.append(piece)
+                            on_token(piece)
+                    chunk_usage = getattr(chunk, "usage", None)
+                    if chunk_usage is not None:
+                        raw_usage = chunk_usage
+                break
+            except Exception as e:
+                last_exc = e
+                if _is_retryable(e) and attempt < max_attempts - 1:
+                    delay = min(2.0, 0.25 * (2**attempt))
+                    provider_delay = _retry_after_seconds(e)
+                    if provider_delay is not None:
+                        delay = max(delay, min(provider_delay + 0.5, 5.0))
+                    delay += random.uniform(0.0, min(delay * 0.25, 0.5))
+                    await asyncio.sleep(delay)
+                    continue
+                raise RuntimeError(f"LiteLLM stream failed for {selected_model}: {e}") from e
+
+        if not content_parts and last_exc is not None:
+            raise RuntimeError(f"LiteLLM stream failed for {selected_model}: {last_exc}")
+
+        content = "".join(content_parts)
+        prompt_tokens = getattr(raw_usage, "prompt_tokens", prompt_tokens) or prompt_tokens
+        try:
+            completion_tokens = int(litellm.token_counter(model=selected_model, text=content))
+        except Exception:
+            completion_tokens = max(1, len(content.split()))
+        total_tokens = getattr(raw_usage, "total_tokens", prompt_tokens + completion_tokens) or (
+            prompt_tokens + completion_tokens
+        )
+
+        try:
+            cost = float(
+                litellm.completion_cost(model=selected_model, prompt=messages, completion=content)
+            )
+        except Exception:
+            cost = (prompt_tokens * 0.000000075) + (completion_tokens * 0.0000003)
+        cost_usd = round(cost, 6)
+        self._enforce_budgets(cost_usd)
+
+        self._total_spent_usd += cost_usd
+        self._total_calls += 1
+        response = ModelResponse(
+            content=content,
+            model=selected_model,
+            usage=ModelUsage(
+                prompt_tokens=int(prompt_tokens),
+                completion_tokens=int(completion_tokens),
+                total_tokens=int(total_tokens),
+                cost_usd=cost_usd,
+            ),
+        )
+        self._write_cache(cache_key, response)
+        return response
 
     @property
     def total_spent_usd(self) -> float:

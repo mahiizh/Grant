@@ -266,6 +266,7 @@ export interface StreamMessageCallbacks {
   onToken?: (token: string) => void;
   onCitations?: (citations: CitationItem[]) => void;
   onDone?: (message: MessageItem) => void;
+  onTtft?: (milliseconds: number) => void;
   onError?: (err: Error) => void;
 }
 
@@ -328,8 +329,14 @@ export async function streamSendMessage(
             callbacks.onToken(parsed.token);
           } else if (eventType === "citations" && callbacks.onCitations) {
             callbacks.onCitations(parsed);
-          } else if (eventType === "done" && callbacks.onDone) {
-            callbacks.onDone(parsed);
+          } else if (eventType === "done") {
+            if (typeof parsed.ttft_ms === "number" && callbacks.onTtft) {
+              callbacks.onTtft(parsed.ttft_ms);
+            }
+            callbacks.onDone?.(parsed);
+          } else if (eventType === "error") {
+            callbacks.onError?.(new Error(parsed.detail || "Stream failed"));
+            return;
           }
         } catch {
           // ignore partial JSON parse errors

@@ -2,6 +2,7 @@ import asyncio
 import contextlib
 import json
 import logging
+import time
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
-from app.api.routes.query import get_orchestrator
+from app.api.routes.query import _sse, get_orchestrator
 from app.api.schemas.threads import (
     AddToGoldenRequest,
     CitationItem,
@@ -479,27 +480,62 @@ async def send_message(
     )
 
     if wants_sse:
+        started = time.perf_counter()
+        token_queue: asyncio.Queue[str | None] = asyncio.Queue()
+        first_token_at: float | None = None
+        ttft_ms: float | None = None
+
+        def token_sink(token: str) -> None:
+            nonlocal first_token_at, ttft_ms
+            if not token:
+                return
+            if first_token_at is None:
+                first_token_at = time.perf_counter()
+                ttft_ms = round((first_token_at - started) * 1000.0, 2)
+            token_queue.put_nowait(token)
 
         async def event_generator():
-            # 1. Yield condense stage
-            yield f"event: stage\ndata: {json.dumps({'id': 'condense', 'label': 'Condensing query', 'status': 'in_progress'})}\n\n"
+            yield _sse(
+                "stage",
+                {"id": "condense", "label": "Condensing query", "status": "in_progress"},
+            )
             await asyncio.sleep(0.02)
 
-            try:
-                state = await run_with_ask_budget(
-                    orchestrator.run(
-                        query=req.content,
-                        acl_scope=scope,
-                        thread_id=thread_id,
-                        thread_history=history,
-                        owner_user_id=current_user.user_id,
-                        is_admin=current_user.is_admin,
-                        answer_policy=req.answer_policy,
+            async def run_and_signal() -> dict[str, Any]:
+                try:
+                    return await run_with_ask_budget(
+                        orchestrator.run(
+                            query=req.content,
+                            acl_scope=scope,
+                            thread_id=thread_id,
+                            thread_history=history,
+                            owner_user_id=current_user.user_id,
+                            is_admin=current_user.is_admin,
+                            answer_policy=req.answer_policy,
+                            token_sink=token_sink,
+                        )
                     )
-                )
+                finally:
+                    token_queue.put_nowait(None)
+
+            task = asyncio.create_task(run_and_signal())
+            try:
+                while True:
+                    token = await token_queue.get()
+                    if token is None:
+                        break
+                    yield _sse("token", {"token": token})
+                state = await task
             except AskBudgetExceededError as exc:
-                yield f"event: error\ndata: {json.dumps({'detail': str(exc)})}\n\n"
+                yield _sse("error", {"detail": str(exc)})
                 return
+            except Exception as exc:
+                logger.exception("Thread stream failed")
+                yield _sse("error", {"detail": str(exc)})
+                return
+            finally:
+                if not task.done():
+                    task.cancel()
 
             rewritten = state.get("rewritten_query", req.content)
             route = state.get("route", "vector")
@@ -571,17 +607,9 @@ async def send_message(
             yield f"event: stage\ndata: {json.dumps(stages[1])}\n\n"
             yield f"event: stage\ndata: {json.dumps(stages[2])}\n\n"
             yield f"event: stage\ndata: {json.dumps(stages[3])}\n\n"
-
-            # Stream words
-            words = answer.split(" ")
-            for w in words:
-                yield f"event: token\ndata: {json.dumps({'token': w + ' '})}\n\n"
-                await asyncio.sleep(0.01)
-
             yield f"event: stage\ndata: {json.dumps(stages[4])}\n\n"
             yield f"event: citations\ndata: {json.dumps(citations)}\n\n"
 
-            # Persist assistant message in DB
             asst_msg_id = f"msg-{uuid.uuid4().hex[:8]}"
             async with get_session() as persist_session:
                 asst_record = MessageRecord(
@@ -646,9 +674,10 @@ async def send_message(
                 "web_sources": web_sources,
                 "query_id": query_id,
                 "answer_id": answer_id,
+                "ttft_ms": ttft_ms,
                 "created_at": datetime.now(UTC).isoformat(),
             }
-            yield f"event: done\ndata: {json.dumps(final_msg)}\n\n"
+            yield _sse("done", final_msg)
 
         return StreamingResponse(event_generator(), media_type="text/event-stream")
 

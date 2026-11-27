@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from typing import Any, Literal, TypedDict
 
 from app.core.acl import ACLScope
@@ -63,3 +64,5 @@ class RAGState(TypedDict, total=False):
     start_time: float
     metadata: dict[str, Any]
     spans: list[dict[str, Any]]
+    # SSE callers install a sink to receive real generation deltas.
+    token_sink: Callable[[str], None] | None

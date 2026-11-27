@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 from typing import Any, cast
 
@@ -302,6 +303,47 @@ async def test_orchestrator_cache_hit_execution() -> None:
     assert state["is_cached"]
     assert state["answer"] == "Precomputed cached answer [chunk_storage_01]"
     assert state["cost_usd"] == 0.0
+
+
+@pytest.mark.anyio
+@pytest.mark.anyio
+async def test_deferred_cache_history_still_records_metadata() -> None:
+    orchestrator = build_test_orchestrator()
+    recorded: list[dict[str, Any]] = []
+
+    class RecordingHistory:
+        async def record(self, **kwargs: Any) -> tuple[str, str]:
+            recorded.append(kwargs)
+            return "qry-cached", "ans-cached"
+
+    orchestrator._query_history = cast(Any, RecordingHistory())
+    orchestrator.record_history = True
+    orchestrator.defer_cache_history = True
+
+    from app.domain import Answer, Evidence
+
+    query = "Deferred cache history query"
+    ev = Evidence(
+        chunk_id="chunk_storage_01",
+        doc_id="doc_rfc_001",
+        text="Cached answer text",
+        score=1.0,
+        retrieval_method="hybrid",
+        provenance=Provenance.from_document("corpus/rfc_001.md"),
+    )
+    ans = Answer(query=query, answer="Cached answer [chunk_storage_01]", evidence=[ev])
+    orchestrator.exact_cache.set(query, ans, ACLScope.public())
+
+    state = await orchestrator.run(query=query)
+    assert state["is_cached"]
+    assert state.get("query_id") is None
+
+    pending = list(orchestrator._history_tasks)
+    assert pending
+    await asyncio.gather(*pending)
+    assert len(recorded) == 1
+    assert recorded[0]["source"] == "docs"
+    assert "stage_timings_ms" in recorded[0]
 
 
 @pytest.mark.anyio
