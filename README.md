@@ -94,8 +94,8 @@ The stores stay the same; what changes is who owns the truth and how changes flo
 &#91;embedded content: revised architecture · query path and ingestion path\]
 
 - **Removed:** the standalone lexical service (BM25 now lives in Qdrant) and the separate OTel + Langfuse instrumentation (one OTel pipeline exports to Langfuse).
-- **Added:** an outbox in Postgres, an entity-resolution stage, LiteLLM as the only door to models, and temporal + ACL filters inside graph queries.
-- **Optional extras:** self-hosted Langfuse (with ClickHouse), FalkorDB comparison, multi-tenant summaries.
+- **Added:** an outbox in Postgres, an entity-resolution stage, LiteLLM as the only door to models, and owner/shared-scope ACL filters inside graph queries.
+- **Tracing:** OpenTelemetry spans exported directly to Langfuse Cloud over OTLP; no local collector or self-hosted Langfuse
 
 ## Knowledge acquisition: your agent + Gemini
 
